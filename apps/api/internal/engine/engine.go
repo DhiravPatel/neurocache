@@ -11,6 +11,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
@@ -23,6 +24,7 @@ type Engine struct {
 	LLM      *semcache.Store
 	Memory   *memory.Store
 	Scorer   eviction.Scorer
+	Metrics  *metrics.Metrics
 
 	StartedAt time.Time
 	CmdCount  atomic.Uint64
@@ -38,6 +40,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		LLM:       semcache.New(cfg.EmbeddingDim, "llm"),
 		Memory:    memory.New(cfg.EmbeddingDim),
 		Scorer:    eviction.NewScorer(cfg.Eviction),
+		Metrics:   metrics.New(),
 		StartedAt: time.Now(),
 		stopCh:    make(chan struct{}),
 	}
@@ -47,7 +50,10 @@ func (e *Engine) Start() {
 	go e.evictLoop()
 }
 
-func (e *Engine) Stop() { close(e.stopCh) }
+func (e *Engine) Stop() {
+	close(e.stopCh)
+	e.Metrics.Stop()
+}
 
 // evictLoop runs every few seconds and trims the store when it exceeds the
 // configured memory cap. In a real system this would be event-driven on SET,

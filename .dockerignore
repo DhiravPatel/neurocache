@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.turbo
+**/bin
+**/data
+.git
+.github
+.vscode
+.idea
+*.log
+apps/api/internal/webui/dist/*
+!apps/api/internal/webui/dist/index.html

@@ -1,8 +1,7 @@
 services:
   - type: web
-    name: neurocache-api
+    name: neurocache
     runtime: docker
-    rootDir: apps/api
     dockerfilePath: ./Dockerfile
     plan: starter
     region: oregon
@@ -29,4 +28,4 @@ services:
       - key: NEUROCACHE_DATA_DIR
         value: /data
       - key: NEUROCACHE_CORS_ORIGINS
-        sync: false
+        value: "*"

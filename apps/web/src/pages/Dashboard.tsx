@@ -25,7 +25,8 @@ export default function Dashboard() {
   if (error) {
     return (
       <div className="card p-6 text-sm text-rose-400">
-        Engine unreachable at <span className="font-mono">{import.meta.env.VITE_API_URL ?? "localhost:8080"}</span>
+        Engine unreachable at{" "}
+        <span className="font-mono">{import.meta.env.VITE_API_URL || location.origin}</span>
         <div className="mt-2 text-slate-400">{error.message}</div>
       </div>
     );

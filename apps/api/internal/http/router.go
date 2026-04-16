@@ -15,6 +15,12 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/info", h.info)
 
+	// Metrics / analytics
+	mux.HandleFunc("GET /api/metrics/summary", h.metricsSummary)
+	mux.HandleFunc("GET /api/metrics/timeline", h.metricsTimeline)
+	mux.HandleFunc("GET /api/metrics/hot-keys", h.metricsHotKeys)
+	mux.HandleFunc("GET /api/metrics/breakdown", h.metricsBreakdown)
+
 	// KV
 	mux.HandleFunc("POST /api/kv", h.kvSet)
 	mux.HandleFunc("GET /api/kv", h.kvList)

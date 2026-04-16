@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, Database, Brain, Zap, Sparkles, Terminal } from "lucide-react";
+import { Activity, Database, Brain, Zap, Sparkles, Terminal, BarChart3 } from "lucide-react";
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
 import { api } from "../lib/api";
 
 const navItems = [
   { to: "/",            label: "Dashboard",  icon: Activity  },
+  { to: "/analytics",   label: "Analytics",  icon: BarChart3 },
   { to: "/kv",          label: "Key-Value",  icon: Database  },
   { to: "/semantic",    label: "Semantic",   icon: Sparkles  },
   { to: "/llm",         label: "LLM Cache",  icon: Zap       },
@@ -46,7 +47,7 @@ export default function Layout() {
           ))}
         </nav>
         <div className="mt-auto border-t border-border p-4 text-[11px] text-slate-500">
-          v0.1.0 · {import.meta.env.VITE_API_URL ?? "localhost:8080"}
+          v0.1.0 · {import.meta.env.VITE_API_URL || "same origin"}
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">

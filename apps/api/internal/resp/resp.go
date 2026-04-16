@@ -83,8 +83,10 @@ func (s *Server) handle(c net.Conn) {
 		if len(parts) == 0 {
 			continue
 		}
+		start := time.Now()
 		s.eng.CmdCount.Add(1)
 		s.execute(parts, bw)
+		s.eng.Metrics.RecordCommand(strings.ToUpper(parts[0]), time.Since(start))
 		_ = bw.Flush()
 	}
 }
@@ -122,6 +124,7 @@ func (s *Server) execute(parts []string, w *bufio.Writer) {
 			return
 		}
 		v, ok := s.eng.KV.Get(args[0])
+		s.eng.Metrics.RecordKVHit(args[0], ok)
 		if !ok {
 			writeNil(w)
 			return
@@ -185,6 +188,7 @@ func (s *Server) execute(parts []string, w *bufio.Writer) {
 			return
 		}
 		v, _, ok := s.eng.Semantic.Get(args[0], float32(s.eng.Cfg.SemThreshold))
+		s.eng.Metrics.RecordSemantic(ok)
 		if !ok {
 			writeNil(w)
 			return
@@ -205,6 +209,7 @@ func (s *Server) execute(parts []string, w *bufio.Writer) {
 			return
 		}
 		v, _, ok := s.eng.LLM.Get(args[0], 0.88)
+		s.eng.Metrics.RecordLLM(ok)
 		if !ok {
 			writeNil(w)
 			return

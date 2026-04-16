@@ -14,6 +14,12 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 )
 
+// record increments the atomic command counter and emits a metrics sample.
+func (h *handlers) record(cmd string, start time.Time) {
+	h.eng.CmdCount.Add(1)
+	h.eng.Metrics.RecordCommand(cmd, time.Since(start))
+}
+
 type handlers struct {
 	eng *engine.Engine
 	cfg config.Config
@@ -64,6 +70,7 @@ type kvSetReq struct {
 }
 
 func (h *handlers) kvSet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req kvSetReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
@@ -73,15 +80,17 @@ func (h *handlers) kvSet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "key required")
 		return
 	}
-	h.eng.CmdCount.Add(1)
 	h.eng.KV.Set(req.Key, req.Value, time.Duration(req.TTL)*time.Second)
+	h.record("SET", start)
 	writeJSON(w, 200, map[string]any{"ok": true, "key": req.Key})
 }
 
 func (h *handlers) kvGet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	key := r.PathValue("key")
-	h.eng.CmdCount.Add(1)
 	v, ok := h.eng.KV.Get(key)
+	h.eng.Metrics.RecordKVHit(key, ok)
+	h.record("GET", start)
 	if !ok {
 		writeJSON(w, 404, map[string]any{"key": key, "value": nil, "hit": false})
 		return
@@ -90,9 +99,10 @@ func (h *handlers) kvGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) kvDel(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	key := r.PathValue("key")
-	h.eng.CmdCount.Add(1)
 	n := h.eng.KV.Del(key)
+	h.record("DEL", start)
 	writeJSON(w, 200, map[string]any{"deleted": n})
 }
 
@@ -124,14 +134,15 @@ type incrReq struct {
 }
 
 func (h *handlers) kvIncr(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	key := r.PathValue("key")
 	req := incrReq{By: 1}
 	_ = readJSON(r, &req)
 	if req.By == 0 {
 		req.By = 1
 	}
-	h.eng.CmdCount.Add(1)
 	v, err := h.eng.KV.Incr(key, req.By)
+	h.record("INCR", start)
 	if err != nil {
 		writeErr(w, 400, "value is not an integer")
 		return
@@ -144,14 +155,15 @@ type expireReq struct {
 }
 
 func (h *handlers) kvExpire(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	key := r.PathValue("key")
 	var req expireReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
 		return
 	}
-	h.eng.CmdCount.Add(1)
 	ok := h.eng.KV.Expire(key, time.Duration(req.TTL)*time.Second)
+	h.record("EXPIRE", start)
 	writeJSON(w, 200, map[string]any{"ok": ok})
 }
 
@@ -163,6 +175,7 @@ type semSetReq struct {
 }
 
 func (h *handlers) semanticSet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req semSetReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
@@ -172,12 +185,13 @@ func (h *handlers) semanticSet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "key required")
 		return
 	}
-	h.eng.CmdCount.Add(1)
 	id := h.eng.Semantic.Set(req.Key, req.Value)
+	h.record("SEMANTIC_SET", start)
 	writeJSON(w, 200, map[string]any{"ok": true, "id": id})
 }
 
 func (h *handlers) semanticGet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	q := r.URL.Query().Get("q")
 	if q == "" {
 		writeErr(w, 400, "q required")
@@ -187,8 +201,9 @@ func (h *handlers) semanticGet(w http.ResponseWriter, r *http.Request) {
 	if t, err := strconv.ParseFloat(r.URL.Query().Get("threshold"), 64); err == nil {
 		threshold = t
 	}
-	h.eng.CmdCount.Add(1)
 	v, score, ok := h.eng.Semantic.Get(q, float32(threshold))
+	h.eng.Metrics.RecordSemantic(ok)
+	h.record("SEMANTIC_GET", start)
 	writeJSON(w, 200, map[string]any{
 		"query": q,
 		"hit":   ok,
@@ -205,6 +220,7 @@ type llmSetReq struct {
 }
 
 func (h *handlers) llmSet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req llmSetReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
@@ -214,12 +230,13 @@ func (h *handlers) llmSet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "prompt required")
 		return
 	}
-	h.eng.CmdCount.Add(1)
 	h.eng.LLM.Set(req.Prompt, req.Response)
+	h.record("CACHE_LLM", start)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (h *handlers) llmGet(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	q := r.URL.Query().Get("prompt")
 	if q == "" {
 		writeErr(w, 400, "prompt required")
@@ -229,8 +246,9 @@ func (h *handlers) llmGet(w http.ResponseWriter, r *http.Request) {
 	if t, err := strconv.ParseFloat(r.URL.Query().Get("threshold"), 64); err == nil {
 		threshold = t
 	}
-	h.eng.CmdCount.Add(1)
 	v, score, ok := h.eng.LLM.Get(q, float32(threshold))
+	h.eng.Metrics.RecordLLM(ok)
+	h.record("CACHE_LLM_GET", start)
 	writeJSON(w, 200, map[string]any{
 		"prompt":   q,
 		"hit":      ok,
@@ -251,6 +269,7 @@ type memAddReq struct {
 }
 
 func (h *handlers) memoryAdd(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	user := r.PathValue("user")
 	var req memAddReq
 	if err := readJSON(r, &req); err != nil {
@@ -261,15 +280,16 @@ func (h *handlers) memoryAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "text required")
 		return
 	}
-	h.eng.CmdCount.Add(1)
 	e := h.eng.Memory.Add(user, req.Text, req.Meta)
+	h.record("MEMORY_ADD", start)
 	writeJSON(w, 200, e)
 }
 
 func (h *handlers) memoryQueryOrList(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	user := r.PathValue("user")
 	q := r.URL.Query().Get("q")
-	h.eng.CmdCount.Add(1)
+	defer h.record("MEMORY_QUERY", start)
 	if q == "" {
 		writeJSON(w, 200, map[string]any{"user": user, "entries": h.eng.Memory.List(user)})
 		return
@@ -292,10 +312,11 @@ func (h *handlers) memoryQueryOrList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) memoryDel(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	user := r.PathValue("user")
 	id := r.PathValue("id")
-	h.eng.CmdCount.Add(1)
 	ok := h.eng.Memory.Delete(user, id)
+	h.record("MEMORY_DEL", start)
 	writeJSON(w, 200, map[string]any{"deleted": ok})
 }
 
@@ -314,13 +335,15 @@ type execReq struct {
 // exec is a convenience endpoint so the web playground can send
 // Redis-style commands like {"command":"SET","args":["k","v"]}.
 func (h *handlers) exec(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req execReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
 		return
 	}
-	h.eng.CmdCount.Add(1)
-	result, err := h.dispatch(strings.ToUpper(req.Command), req.Args)
+	cmd := strings.ToUpper(req.Command)
+	result, err := h.dispatch(cmd, req.Args)
+	h.record(cmd, start)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return

@@ -1,4 +1,7 @@
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+// When embedded in the Go binary, the dashboard is served from the same
+// origin as the API — so default to a relative base. In dev (Vite on 5173),
+// set VITE_API_URL=http://localhost:8080 in apps/web/.env to override.
+const BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -36,6 +39,39 @@ export type MemoryEntry = {
 };
 
 export type MemoryHit = { entry: MemoryEntry; score: number };
+
+export type TimelineSample = {
+  t: string;
+  commands: number;
+  sem_hits: number;
+  sem_misses: number;
+  llm_hits: number;
+  llm_misses: number;
+  kv_hits: number;
+  kv_misses: number;
+  p50_ms: number;
+  p95_ms: number;
+};
+
+export type HotKey = { key: string; hits: number; last_seen_unix: number };
+
+export type CommandCount = { command: string; count: number };
+
+export type MetricsSummary = {
+  commands: number;
+  sem_hits: number;
+  sem_misses: number;
+  sem_hit_rate: number;
+  llm_hits: number;
+  llm_misses: number;
+  llm_hit_rate: number;
+  kv_hits: number;
+  kv_misses: number;
+  estimated_savings_usd: number;
+  tokens_per_hit: number;
+  usd_per_million_tokens: number;
+  command_breakdown: CommandCount[];
+};
 
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
@@ -109,4 +145,13 @@ export const api = {
     }),
 
   flushAll: () => req("/api/flushall", { method: "POST" }),
+
+  // Metrics / analytics
+  metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),
+  metricsTimeline: () =>
+    req<{ samples: TimelineSample[] }>("/api/metrics/timeline"),
+  metricsHotKeys: (k = 10) =>
+    req<{ keys: HotKey[] }>(`/api/metrics/hot-keys?k=${k}`),
+  metricsBreakdown: () =>
+    req<{ commands: CommandCount[] }>("/api/metrics/breakdown"),
 };

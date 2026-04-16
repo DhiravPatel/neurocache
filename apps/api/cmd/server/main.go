@@ -14,6 +14,7 @@ import (
 	httpapi "github.com/dhiravpatel/neurocache/apps/api/internal/http"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/logger"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/resp"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/webui"
 )
 
 func main() {
@@ -25,9 +26,11 @@ func main() {
 	eng.Start()
 	defer eng.Stop()
 
+	apiHandler := httpapi.NewRouter(eng, cfg, log)
+	// Serve embedded dashboard; delegate /api/* to the API router.
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           httpapi.NewRouter(eng, cfg, log),
+		Handler:           webui.Handler(apiHandler, "/api/"),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

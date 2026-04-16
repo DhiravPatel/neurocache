@@ -36,6 +36,7 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			return nil, errors.New("GET key")
 		}
 		v, ok := h.eng.KV.Get(args[0])
+		h.eng.Metrics.RecordKVHit(args[0], ok)
 		if !ok {
 			return nil, nil
 		}
@@ -116,6 +117,7 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			return nil, errors.New("SEMANTIC_GET query")
 		}
 		v, score, ok := h.eng.Semantic.Get(args[0], float32(h.cfg.SemThreshold))
+		h.eng.Metrics.RecordSemantic(ok)
 		if !ok {
 			return map[string]any{"hit": false, "score": score}, nil
 		}
@@ -133,6 +135,7 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			return nil, errors.New("CACHE_LLM_GET prompt")
 		}
 		v, score, ok := h.eng.LLM.Get(args[0], 0.88)
+		h.eng.Metrics.RecordLLM(ok)
 		if !ok {
 			return map[string]any{"hit": false, "score": score}, nil
 		}
