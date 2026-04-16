@@ -1,0 +1,6 @@
+bin/
+data/
+*.md
+.git
+.gitignore
+node_modules

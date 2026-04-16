@@ -571,21 +571,3 @@ The memory store is a per-namespace collection of text entries, each with its em
 | `MEMORY_QUERY` | < 10ms | top-k semantic recall |
 
 ---
-
-## Contributing
-
-Contributions are welcome. Please open an issue first for larger changes so we can align on scope.
-
-```bash
-# Fork → clone → branch
-pnpm install
-pnpm dev
-pnpm lint && pnpm test
-# → open PR
-```
-
----
-
-## License
-
-MIT

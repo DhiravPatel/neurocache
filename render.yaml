@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: neurocache-api
+    runtime: docker
+    rootDir: apps/api
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/health
+    disk:
+      name: neurocache-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NEUROCACHE_HTTP_PORT
+        value: "8080"
+      - key: NEUROCACHE_RESP_PORT
+        value: "6379"
+      - key: NEUROCACHE_MAX_MEMORY
+        value: 512mb
+      - key: NEUROCACHE_EVICTION_POLICY
+        value: ai-smart
+      - key: NEUROCACHE_SEMANTIC_THRESHOLD
+        value: "0.75"
+      - key: NEUROCACHE_LOG_LEVEL
+        value: info
+      - key: NEUROCACHE_LOG_FORMAT
+        value: json
+      - key: NEUROCACHE_DATA_DIR
+        value: /data
+      - key: NEUROCACHE_CORS_ORIGINS
+        sync: false
