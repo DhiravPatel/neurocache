@@ -39,7 +39,7 @@ export function Code({
       )}
     >
       {lang ? (
-        <div className="flex items-center justify-between border-b border-code-border bg-black/5 px-3 py-1.5 text-[11px] uppercase tracking-wider text-slate-500 dark:bg-white/5">
+        <div className="flex items-center justify-between border-b border-white/10 bg-white/5 px-4 py-2 text-[11px] uppercase tracking-wider text-white/40">
           <span>{lang}</span>
         </div>
       ) : null}
@@ -58,7 +58,7 @@ export function Code({
       </pre>
       <button
         onClick={onCopy}
-        className="absolute right-2 top-2 rounded-md border border-code-border bg-code/90 p-1.5 text-slate-500 opacity-0 transition-opacity hover:text-slate-200 group-hover:opacity-100"
+        className="absolute right-2 top-2 rounded-md border border-white/10 bg-white/10 p-1.5 text-white/40 opacity-0 transition-all hover:bg-white/20 hover:text-white group-hover:opacity-100"
         aria-label="Copy to clipboard"
       >
         {copied ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
@@ -67,10 +67,17 @@ export function Code({
   );
 }
 
-/** Inline code tag — kept simple, themed via the slate / primary tokens. */
+/** Inline code tag used outside of prose context (e.g. feature cards). */
 export function C({ children }: { children: React.ReactNode }) {
   return (
-    <code className="rounded bg-bg px-1.5 py-0.5 font-mono text-[0.85em] text-primary">
+    <code
+      className="rounded-[5px] px-1.5 py-0.5 font-mono text-[0.85em] font-medium"
+      style={{
+        backgroundColor: "rgb(var(--inline-code-bg))",
+        color: "rgb(var(--inline-code-text))",
+        border: "1px solid rgb(var(--inline-code-border))",
+      }}
+    >
       {children}
     </code>
   );

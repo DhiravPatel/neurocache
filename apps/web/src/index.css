@@ -25,19 +25,26 @@
     --slate-600: 148 163 184;
     --slate-700: 203 213 225;
 
-    /* VS Code Light+ inspired token palette */
-    --code-bg:      250 250 250;
-    --code-border:  226 232 240;
-    --tok-plain:     36  41  47;
-    --tok-comment:   16 124  16;
-    --tok-keyword:    0  16 192;
-    --tok-string:   163  21  21;
-    --tok-number:     9 134  88;
-    --tok-function: 121  94  38;
-    --tok-type:      38 127 153;
-    --tok-variable:   0  16 128;
-    --tok-property:   0  16 128;
-    --tok-operator:  36  41  47;
+    /* Code blocks — dark bg even in light mode (like GitHub / Stripe docs).
+       Using a dark code surface guarantees strong contrast regardless of
+       the page theme and keeps the reading experience consistent. */
+    --code-bg:       28  33  40;
+    --code-border:   52  59  66;
+    --tok-plain:    230 237 243;
+    --tok-comment:  139 148 158;
+    --tok-keyword:  255 123 114;
+    --tok-string:   165 214 255;
+    --tok-number:   121 192 255;
+    --tok-function: 210 168 255;
+    --tok-type:      63 185 80;
+    --tok-variable: 230 237 243;
+    --tok-property: 121 192 255;
+    --tok-operator: 230 237 243;
+
+    /* Inline <code> — high contrast on light pages */
+    --inline-code-bg:    243 244 246;
+    --inline-code-text:  192  38  91;
+    --inline-code-border: 229 231 235;
   }
 
   .dark {
@@ -55,19 +62,24 @@
     --slate-600:  71  85 105;
     --slate-700:  51  65  85;
 
-    /* VS Code Dark+ inspired token palette */
-    --code-bg:       30  30  30;
-    --code-border:   45  45  48;
-    --tok-plain:    212 212 212;
-    --tok-comment:  106 153  85;
-    --tok-keyword:   86 156 214;
-    --tok-string:   206 145 120;
-    --tok-number:   181 206 168;
-    --tok-function: 220 220 170;
-    --tok-type:      78 201 176;
-    --tok-variable: 156 220 254;
-    --tok-property: 156 220 254;
-    --tok-operator: 212 212 212;
+    /* Code blocks — GitHub Dark Dimmed inspired */
+    --code-bg:       22  27  34;
+    --code-border:   48  54  61;
+    --tok-plain:    230 237 243;
+    --tok-comment:  139 148 158;
+    --tok-keyword:  255 123 114;
+    --tok-string:   165 214 255;
+    --tok-number:   121 192 255;
+    --tok-function: 210 168 255;
+    --tok-type:      63 185 80;
+    --tok-variable: 230 237 243;
+    --tok-property: 121 192 255;
+    --tok-operator: 230 237 243;
+
+    /* Inline <code> — visible on dark pages */
+    --inline-code-bg:    38  44  56;
+    --inline-code-text: 255 123 114;
+    --inline-code-border: 56  62  74;
   }
 
   html, body, #root { height: 100%; }

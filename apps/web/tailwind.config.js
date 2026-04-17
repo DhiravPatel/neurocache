@@ -81,25 +81,46 @@ export default {
         "pulse-ring": "pulse-ring 2s cubic-bezier(0.4,0,0.6,1) infinite",
         "shimmer":    "shimmer 2.5s linear infinite",
       },
-      typography: ({ theme }) => ({
+      typography: () => ({
         DEFAULT: {
           css: {
-            "--tw-prose-body":          theme("colors.slate.300"),
-            "--tw-prose-headings":      theme("colors.slate.100"),
-            "--tw-prose-lead":          theme("colors.slate.300"),
-            "--tw-prose-links":         theme("colors.accent"),
-            "--tw-prose-bold":          theme("colors.slate.100"),
-            "--tw-prose-counters":      theme("colors.slate.400"),
-            "--tw-prose-bullets":       theme("colors.slate.600"),
-            "--tw-prose-hr":            theme("colors.border"),
-            "--tw-prose-quotes":        theme("colors.slate.200"),
-            "--tw-prose-quote-borders": theme("colors.primary"),
-            "--tw-prose-captions":      theme("colors.slate.500"),
-            "--tw-prose-code":          theme("colors.primary"),
-            "--tw-prose-pre-code":      theme("colors.slate.200"),
+            // Use raw rgb(var(…)) — NOT theme() — because the typography
+            // plugin injects values as literal CSS. The Tailwind theme()
+            // helper returns `rgb(var(--x) / <alpha-value>)` which only
+            // works inside utility classes, not raw CSS properties.
+            "--tw-prose-body":          "rgb(var(--slate-300))",
+            "--tw-prose-headings":      "rgb(var(--slate-100))",
+            "--tw-prose-lead":          "rgb(var(--slate-300))",
+            "--tw-prose-links":         "rgb(var(--accent))",
+            "--tw-prose-bold":          "rgb(var(--slate-100))",
+            "--tw-prose-counters":      "rgb(var(--slate-400))",
+            "--tw-prose-bullets":       "rgb(var(--slate-600))",
+            "--tw-prose-hr":            "rgb(var(--border))",
+            "--tw-prose-quotes":        "rgb(var(--slate-200))",
+            "--tw-prose-quote-borders": "rgb(var(--primary))",
+            "--tw-prose-captions":      "rgb(var(--slate-500))",
+            "--tw-prose-code":          "rgb(var(--inline-code-text))",
+            "--tw-prose-pre-code":      "rgb(var(--tok-plain))",
             "--tw-prose-pre-bg":        "rgb(var(--code-bg))",
-            "--tw-prose-th-borders":    theme("colors.border"),
-            "--tw-prose-td-borders":    theme("colors.border"),
+            "--tw-prose-th-borders":    "rgb(var(--border))",
+            "--tw-prose-td-borders":    "rgb(var(--border))",
+            // Inline <code> — pill-shaped, high contrast in both themes.
+            "code": {
+              backgroundColor: "rgb(var(--inline-code-bg))",
+              color: "rgb(var(--inline-code-text))",
+              padding: "3px 6px",
+              borderRadius: "5px",
+              border: "1px solid rgb(var(--inline-code-border))",
+              fontWeight: "500",
+              fontSize: "0.875em",
+            },
+            // Don't double-style <pre><code> (already handled by Code.tsx).
+            "pre code": {
+              backgroundColor: "transparent",
+              padding: "0",
+              border: "none",
+              fontWeight: "normal",
+            },
           },
         },
       }),
