@@ -6,6 +6,7 @@ import {
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
 import { api } from "../lib/api";
+import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
   { to: "/dashboard",            label: "Dashboard",  icon: Activity,  end: true },
@@ -51,10 +52,10 @@ export default function Layout() {
                 end={end}
                 className={({ isActive }) =>
                   clsx(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-all",
                     isActive
-                      ? "bg-primary/15 text-white"
-                      : "text-slate-400 hover:text-slate-100 hover:bg-white/5",
+                      ? "bg-primary font-semibold text-white shadow-sm shadow-primary/30 ring-1 ring-primary/40"
+                      : "text-slate-400 hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5",
                   )
                 }
               >
@@ -70,21 +71,22 @@ export default function Layout() {
           <div className="space-y-0.5">
             <Link
               to="/docs"
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5"
             >
               <BookOpen size={16} /> Docs
             </Link>
             <Link
               to="/"
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5"
             >
               <ExternalLink size={16} /> Landing
             </Link>
           </div>
         </nav>
 
-        <div className="border-t border-border p-4 text-[11px] text-slate-500">
-          v0.1.0 · {import.meta.env.VITE_API_URL || "same origin"}
+        <div className="flex items-center justify-between gap-2 border-t border-border p-4 text-[11px] text-slate-500">
+          <span>v0.1.0 · {import.meta.env.VITE_API_URL || "same origin"}</span>
+          <ThemeToggle />
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">

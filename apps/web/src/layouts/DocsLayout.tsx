@@ -56,8 +56,8 @@ export default function DocsLayout() {
                       clsx(
                         "block rounded-md px-2 py-1 text-sm transition-colors",
                         isActive
-                          ? "bg-primary/15 text-white"
-                          : "text-slate-400 hover:bg-white/5 hover:text-slate-100",
+                          ? "bg-primary/10 font-semibold text-primary"
+                          : "text-slate-400 hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5",
                       )
                     }
                   >

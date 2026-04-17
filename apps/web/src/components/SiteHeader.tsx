@@ -1,6 +1,7 @@
 import { Link, NavLink } from "react-router-dom";
 import { Github, Book, LayoutDashboard } from "lucide-react";
 import clsx from "clsx";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function SiteHeader() {
   return (
@@ -15,6 +16,7 @@ export function SiteHeader() {
           <HeaderLink to="/dashboard">Dashboard</HeaderLink>
         </nav>
         <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
           <a
             href="https://github.com/dhiravpatel/neurocache"
             target="_blank"
