@@ -20,9 +20,14 @@ import (
 func main() {
 	cfg := config.Load()
 	log := logger.New(cfg.LogLevel, cfg.LogFormat)
-	log.Info("neurocache starting", "version", "0.1.0", "http_port", cfg.HTTPPort, "resp_port", cfg.RESPPort)
+	log.Info("neurocache starting", "version", "0.3.0", "http_port", cfg.HTTPPort, "resp_port", cfg.RESPPort)
 
 	eng := engine.New(cfg, log)
+	// Persistence must be loaded before accepting connections so that
+	// AOF replay and RDB restore observe a quiescent engine.
+	if err := eng.EnablePersistence(httpapi.NewReplayer(eng, cfg, log)); err != nil {
+		log.Error("persistence init failed", "err", err)
+	}
 	eng.Start()
 	defer eng.Stop()
 

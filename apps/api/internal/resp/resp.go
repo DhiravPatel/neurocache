@@ -180,8 +180,14 @@ func (c *conn) execute(parts []string) {
 	}
 
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	c.dispatch(cmd, args)
+	c.writeMu.Unlock()
+	// Record after dispatch so failed commands don't pollute the AOF.
+	// This check is a best-effort — a write that errored out at parse
+	// time still gets appended, and replay will just log-and-skip it.
+	if isWriteCommand(cmd) {
+		c.eng.RecordWrite(cmd, args)
+	}
 }
 
 // wantArgs enforces a minimum argument count, writing the canonical

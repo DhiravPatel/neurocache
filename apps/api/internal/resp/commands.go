@@ -1038,6 +1038,188 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.tx.Unwatch()
 		writeSimple(c.bw, "OK")
 
+	// ─── bitmaps ───────────────────────────────────────────────────
+	case "SETBIT":
+		if !c.wantArgs(cmd, args, 3) {
+			return
+		}
+		off, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			writeError(c.bw, "bit offset is not an integer")
+			return
+		}
+		v, err := strconv.Atoi(args[2])
+		if err != nil {
+			writeError(c.bw, "bit is not an integer")
+			return
+		}
+		prev, err := c.eng.KV.SetBit(args[0], off, v)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(prev))
+	case "GETBIT":
+		if !c.wantArgs(cmd, args, 2) {
+			return
+		}
+		off, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			writeError(c.bw, "bit offset is not an integer")
+			return
+		}
+		v, err := c.eng.KV.GetBit(args[0], off)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(v))
+	case "BITCOUNT":
+		if !c.wantArgs(cmd, args, 1) {
+			return
+		}
+		hasRange := len(args) >= 3
+		start, end := 0, -1
+		if hasRange {
+			start, _ = strconv.Atoi(args[1])
+			end, _ = strconv.Atoi(args[2])
+		}
+		n, err := c.eng.KV.BitCount(args[0], start, end, hasRange)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+	case "BITPOS":
+		if !c.wantArgs(cmd, args, 2) {
+			return
+		}
+		bit, err := strconv.Atoi(args[1])
+		if err != nil {
+			writeError(c.bw, "bit must be 0 or 1")
+			return
+		}
+		start, end := 0, -1
+		hasEnd := false
+		if len(args) >= 3 {
+			start, _ = strconv.Atoi(args[2])
+		}
+		if len(args) >= 4 {
+			end, _ = strconv.Atoi(args[3])
+			hasEnd = true
+		}
+		n, err := c.eng.KV.BitPos(args[0], bit, start, end, hasEnd)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+	case "BITOP":
+		if !c.wantArgs(cmd, args, 3) {
+			return
+		}
+		n, err := c.eng.KV.BitOp(args[0], args[1], args[2:])
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+
+	// ─── HyperLogLog ───────────────────────────────────────────────
+	case "PFADD":
+		if !c.wantArgs(cmd, args, 1) {
+			return
+		}
+		var members []string
+		if len(args) >= 2 {
+			members = args[1:]
+		}
+		n, err := c.eng.KV.PFAdd(args[0], members...)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+	case "PFCOUNT":
+		if !c.wantArgs(cmd, args, 1) {
+			return
+		}
+		n, err := c.eng.KV.PFCount(args...)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, n)
+	case "PFMERGE":
+		if !c.wantArgs(cmd, args, 1) {
+			return
+		}
+		if err := c.eng.KV.PFMerge(args[0], args[1:]...); err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeSimple(c.bw, "OK")
+
+	// ─── streams ───────────────────────────────────────────────────
+	case "XADD":
+		c.xaddCmd(args)
+	case "XLEN":
+		if !c.wantArgs(cmd, args, 1) {
+			return
+		}
+		n, err := c.eng.KV.XLen(args[0])
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+	case "XRANGE":
+		c.xrangeCmd(args, false)
+	case "XREVRANGE":
+		c.xrangeCmd(args, true)
+	case "XDEL":
+		if !c.wantArgs(cmd, args, 2) {
+			return
+		}
+		n, err := c.eng.KV.XDel(args[0], args[1:]...)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		writeInt(c.bw, int64(n))
+	case "XTRIM":
+		c.xtrimCmd(args)
+	case "XREAD":
+		c.xreadCmd(args)
+
+	// ─── geo ───────────────────────────────────────────────────────
+	case "GEOADD":
+		c.geoaddCmd(args)
+	case "GEOPOS":
+		c.geoposCmd(args)
+	case "GEODIST":
+		c.geodistCmd(args)
+	case "GEOSEARCH":
+		c.geosearchCmd(args)
+	case "GEOHASH":
+		c.geohashCmd(args)
+
+	// ─── persistence ───────────────────────────────────────────────
+	case "SAVE", "BGSAVE":
+		if err := c.eng.SaveRDB(); err != nil {
+			writeError(c.bw, err.Error())
+			return
+		}
+		writeSimple(c.bw, "OK")
+	case "BGREWRITEAOF":
+		if err := c.eng.RewriteAOF(); err != nil {
+			writeError(c.bw, err.Error())
+			return
+		}
+		writeSimple(c.bw, "Background append only file rewriting started")
+	case "LASTSAVE":
+		writeInt(c.bw, time.Now().Unix())
+
 	// ─── AI-native ─────────────────────────────────────────────────
 	case "SEMANTIC_SET":
 		if !c.wantArgs(cmd, args, 2) {
@@ -1466,6 +1648,336 @@ func (c *conn) pubsubCmd(args []string) {
 }
 
 // ─── EXEC ──────────────────────────────────────────────────────────────
+
+// ─── stream helpers ────────────────────────────────────────────────────
+
+func (c *conn) xaddCmd(args []string) {
+	if !c.wantArgs("XADD", args, 4) {
+		return
+	}
+	// Optional MAXLEN ~N prefix
+	maxLen := 0
+	i := 1
+	if strings.EqualFold(args[i], "MAXLEN") {
+		if i+1 >= len(args) {
+			writeError(c.bw, "syntax error")
+			return
+		}
+		offset := i + 1
+		if args[offset] == "~" || args[offset] == "=" {
+			offset++
+		}
+		if offset >= len(args) {
+			writeError(c.bw, "syntax error")
+			return
+		}
+		n, err := strconv.Atoi(args[offset])
+		if err != nil {
+			writeError(c.bw, "invalid MAXLEN")
+			return
+		}
+		maxLen = n
+		i = offset + 1
+	}
+	if i >= len(args) {
+		writeError(c.bw, "syntax error")
+		return
+	}
+	id := args[i]
+	fields := args[i+1:]
+	if len(fields) == 0 || len(fields)%2 != 0 {
+		writeError(c.bw, "wrong number of arguments for 'xadd'")
+		return
+	}
+	assigned, err := c.eng.KV.XAdd(args[0], id, fields, maxLen)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeBulk(c.bw, assigned)
+}
+
+func (c *conn) xrangeCmd(args []string, reverse bool) {
+	if !c.wantArgs("XRANGE", args, 3) {
+		return
+	}
+	count := 0
+	for i := 3; i < len(args); i++ {
+		if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+			count, _ = strconv.Atoi(args[i+1])
+			i++
+		}
+	}
+	start, end := args[1], args[2]
+	if reverse {
+		start, end = args[1], args[2] // caller gives start>end for XREVRANGE; we handle in store
+	}
+	entries, err := c.eng.KV.XRange(args[0], start, end, count, reverse)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeStreamEntries(c.bw, entries)
+}
+
+func (c *conn) xtrimCmd(args []string) {
+	if !c.wantArgs("XTRIM", args, 3) {
+		return
+	}
+	if !strings.EqualFold(args[1], "MAXLEN") {
+		writeError(c.bw, "XTRIM requires MAXLEN strategy")
+		return
+	}
+	// accept optional "~" approximate marker
+	idx := 2
+	if args[idx] == "~" || args[idx] == "=" {
+		idx++
+	}
+	if idx >= len(args) {
+		writeError(c.bw, "syntax error")
+		return
+	}
+	n, err := strconv.Atoi(args[idx])
+	if err != nil {
+		writeError(c.bw, "invalid MAXLEN")
+		return
+	}
+	removed, err := c.eng.KV.XTrim(args[0], n)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeInt(c.bw, int64(removed))
+}
+
+func (c *conn) xreadCmd(args []string) {
+	// XREAD [COUNT n] [BLOCK ms] STREAMS key [key ...] id [id ...]
+	if len(args) < 3 {
+		writeError(c.bw, "wrong number of arguments for 'xread'")
+		return
+	}
+	count := 0
+	block := time.Duration(-1)
+	i := 0
+	for ; i < len(args); i++ {
+		switch strings.ToUpper(args[i]) {
+		case "COUNT":
+			if i+1 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			count, _ = strconv.Atoi(args[i+1])
+			i++
+		case "BLOCK":
+			if i+1 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			ms, _ := strconv.Atoi(args[i+1])
+			block = time.Duration(ms) * time.Millisecond
+			i++
+		case "STREAMS":
+			i++
+			goto streams
+		}
+	}
+streams:
+	rest := args[i:]
+	if len(rest) == 0 || len(rest)%2 != 0 {
+		writeError(c.bw, "Unbalanced XREAD STREAMS keys and IDs")
+		return
+	}
+	n := len(rest) / 2
+	keys := rest[:n]
+	ids := rest[n:]
+
+	// Non-blocking pass.
+	out, err := c.eng.KV.XRead(keys, ids, count)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	if len(out) > 0 || block < 0 {
+		writeXReadResult(c.bw, keys, out)
+		return
+	}
+	// Simple poll-based block: sleep in short slices until the deadline
+	// or data arrives. Replace with per-stream waiters if throughput
+	// becomes a bottleneck.
+	deadline := time.Now().Add(block)
+	for time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		out, err = c.eng.KV.XRead(keys, ids, count)
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		if len(out) > 0 {
+			writeXReadResult(c.bw, keys, out)
+			return
+		}
+	}
+	writeNilArray(c.bw)
+}
+
+func writeStreamEntries(w *bufio.Writer, entries []store.StreamEntry) {
+	fmt.Fprintf(w, "*%d\r\n", len(entries))
+	for _, e := range entries {
+		// each entry is [id, [field, value, ...]]
+		fmt.Fprintf(w, "*2\r\n")
+		writeBulk(w, e.ID.String())
+		writeArray(w, e.Fields)
+	}
+}
+
+func writeXReadResult(w *bufio.Writer, keys []string, out map[string][]store.StreamEntry) {
+	present := 0
+	for _, k := range keys {
+		if _, ok := out[k]; ok {
+			present++
+		}
+	}
+	fmt.Fprintf(w, "*%d\r\n", present)
+	for _, k := range keys {
+		es, ok := out[k]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(w, "*2\r\n")
+		writeBulk(w, k)
+		writeStreamEntries(w, es)
+	}
+}
+
+// ─── geo helpers ───────────────────────────────────────────────────────
+
+func (c *conn) geoaddCmd(args []string) {
+	if len(args) < 4 || (len(args)-1)%3 != 0 {
+		writeError(c.bw, "wrong number of arguments for 'geoadd'")
+		return
+	}
+	entries := make([]store.GeoAddEntry, 0, (len(args)-1)/3)
+	for i := 1; i+2 < len(args); i += 3 {
+		lon, err := strconv.ParseFloat(args[i], 64)
+		if err != nil {
+			writeError(c.bw, "invalid longitude")
+			return
+		}
+		lat, err := strconv.ParseFloat(args[i+1], 64)
+		if err != nil {
+			writeError(c.bw, "invalid latitude")
+			return
+		}
+		entries = append(entries, store.GeoAddEntry{Lon: lon, Lat: lat, Member: args[i+2]})
+	}
+	n, err := c.eng.KV.GeoAdd(args[0], entries...)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeInt(c.bw, int64(n))
+}
+
+func (c *conn) geoposCmd(args []string) {
+	if !c.wantArgs("GEOPOS", args, 2) {
+		return
+	}
+	pts, err := c.eng.KV.GeoPos(args[0], args[1:]...)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	fmt.Fprintf(c.bw, "*%d\r\n", len(pts))
+	for _, p := range pts {
+		if p == nil {
+			writeNilArray(c.bw)
+			continue
+		}
+		writeArray(c.bw, []string{
+			strconv.FormatFloat(p.Lon, 'f', 10, 64),
+			strconv.FormatFloat(p.Lat, 'f', 10, 64),
+		})
+	}
+}
+
+func (c *conn) geodistCmd(args []string) {
+	if !c.wantArgs("GEODIST", args, 3) {
+		return
+	}
+	unit := "m"
+	if len(args) >= 4 {
+		unit = strings.ToLower(args[3])
+	}
+	d, ok, err := c.eng.KV.GeoDist(args[0], args[1], args[2], unit)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	if !ok {
+		writeNil(c.bw)
+		return
+	}
+	writeBulk(c.bw, strconv.FormatFloat(d, 'f', 4, 64))
+}
+
+func (c *conn) geosearchCmd(args []string) {
+	// GEOSEARCH key FROMLONLAT lon lat BYRADIUS radius unit [COUNT n] [ASC|DESC]
+	if !c.wantArgs("GEOSEARCH", args, 7) {
+		return
+	}
+	var lon, lat, radius float64
+	unit := "m"
+	count := 0
+	for i := 1; i < len(args); i++ {
+		switch strings.ToUpper(args[i]) {
+		case "FROMLONLAT":
+			if i+2 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			lon, _ = strconv.ParseFloat(args[i+1], 64)
+			lat, _ = strconv.ParseFloat(args[i+2], 64)
+			i += 2
+		case "BYRADIUS":
+			if i+2 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			radius, _ = strconv.ParseFloat(args[i+1], 64)
+			unit = strings.ToLower(args[i+2])
+			i += 2
+		case "COUNT":
+			if i+1 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			count, _ = strconv.Atoi(args[i+1])
+			i++
+		}
+	}
+	out, err := c.eng.KV.GeoSearch(args[0], lat, lon, radius, unit, count)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	names := make([]string, len(out))
+	for i, r := range out {
+		names[i] = r.Member
+	}
+	writeArray(c.bw, names)
+}
+
+func (c *conn) geohashCmd(args []string) {
+	if !c.wantArgs("GEOHASH", args, 2) {
+		return
+	}
+	out, err := c.eng.KV.GeoHash(args[0], args[1:]...)
+	if err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeArray(c.bw, out)
+}
 
 // execCmd replays the queued commands after checking WATCHed keys.
 // Each queued command is dispatched through the normal path so any side

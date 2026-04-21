@@ -350,7 +350,32 @@ func (h *handlers) exec(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	if isWriteCommand(cmd) {
+		h.eng.RecordWrite(cmd, req.Args)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "result": result})
+}
+
+// isWriteCommand duplicates the resp package's write set. Duplicated to
+// avoid an import cycle (resp -> engine -> http -> resp would otherwise
+// be tempting if we put this in resp).
+func isWriteCommand(cmd string) bool {
+	switch cmd {
+	case "SET", "SETNX", "SETEX", "PSETEX", "GETSET", "APPEND", "SETRANGE",
+		"MSET", "MSETNX", "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
+		"DEL", "UNLINK", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST",
+		"RENAME", "RENAMENX", "FLUSHDB", "FLUSHALL",
+		"LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LPOP", "RPOP", "LSET", "LREM",
+		"LTRIM", "LINSERT", "RPOPLPUSH",
+		"HSET", "HMSET", "HSETNX", "HDEL", "HINCRBY", "HINCRBYFLOAT",
+		"SADD", "SREM", "SPOP", "SMOVE", "SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE",
+		"ZADD", "ZREM", "ZINCRBY", "ZPOPMIN", "ZPOPMAX",
+		"SETBIT", "BITOP", "PFADD", "PFMERGE",
+		"XADD", "XDEL", "XTRIM", "GEOADD",
+		"SEMANTIC_SET", "CACHE_LLM", "MEMORY_ADD":
+		return true
+	}
+	return false
 }
 
 func nullable[T any](v T, ok bool) any {

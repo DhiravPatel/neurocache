@@ -7,18 +7,20 @@ import (
 )
 
 type Config struct {
-	Host          string
-	HTTPPort      string
-	RESPPort      string
-	MaxMemoryMB   int
-	Eviction      string
-	EmbeddingDim  int
-	SemThreshold  float64
-	DataDir       string
-	AOFEnabled    bool
-	LogLevel      string
-	LogFormat     string
-	CORSOrigins   []string
+	Host           string
+	HTTPPort       string
+	RESPPort       string
+	MaxMemoryMB    int
+	Eviction       string
+	EmbeddingDim   int
+	SemThreshold   float64
+	DataDir        string
+	AOFEnabled     bool
+	RDBEnabled     bool
+	RDBIntervalSec int
+	LogLevel       string
+	LogFormat      string
+	CORSOrigins    []string
 }
 
 func Load() Config {
@@ -30,11 +32,13 @@ func Load() Config {
 		Eviction:     env("NEUROCACHE_EVICTION_POLICY", "ai-smart"),
 		EmbeddingDim: envInt("NEUROCACHE_EMBEDDING_DIM", 384),
 		SemThreshold: envFloat("NEUROCACHE_SEMANTIC_THRESHOLD", 0.75),
-		DataDir:      env("NEUROCACHE_DATA_DIR", "./data"),
-		AOFEnabled:   envBool("NEUROCACHE_AOF_ENABLED", false),
-		LogLevel:     env("NEUROCACHE_LOG_LEVEL", "info"),
-		LogFormat:    env("NEUROCACHE_LOG_FORMAT", "text"),
-		CORSOrigins:  splitCSV(env("NEUROCACHE_CORS_ORIGINS", "*")),
+		DataDir:        env("NEUROCACHE_DATA_DIR", "./data"),
+		AOFEnabled:     envBool("NEUROCACHE_AOF_ENABLED", false),
+		RDBEnabled:     envBool("NEUROCACHE_RDB_ENABLED", false),
+		RDBIntervalSec: envInt("NEUROCACHE_RDB_INTERVAL_SEC", 300),
+		LogLevel:       env("NEUROCACHE_LOG_LEVEL", "info"),
+		LogFormat:      env("NEUROCACHE_LOG_FORMAT", "text"),
+		CORSOrigins:    splitCSV(env("NEUROCACHE_CORS_ORIGINS", "*")),
 	}
 }
 

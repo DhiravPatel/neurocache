@@ -1,11 +1,14 @@
-// Package engine wires all subsystems together: typed KV store, semantic
-// cache, LLM cache, memory store, pub/sub broker, eviction loop, and a
-// small per-key version counter used by the WATCH/EXEC machinery.
+// Package engine wires every subsystem — typed KV store, semantic
+// cache, LLM cache, memory store, pub/sub broker, eviction loop, key
+// versioning for WATCH, and persistence (AOF + RDB).
 package engine
 
 import (
+	"bufio"
 	"log/slog"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
@@ -30,13 +34,13 @@ type Engine struct {
 	Metrics  *metrics.Metrics
 	PubSub   *pubsub.Broker
 
+	AOF *persistence.AOF
+	RDB *persistence.RDB
+
 	StartedAt time.Time
 	CmdCount  atomic.Uint64
 	stopCh    chan struct{}
 
-	// versions tracks a monotonic counter per key used by WATCH to detect
-	// races between a client calling WATCH and running EXEC. Bumped on
-	// any mutation via BumpKey / the keyspace notifier.
 	vmu      sync.RWMutex
 	versions map[string]uint64
 }
@@ -56,9 +60,6 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		stopCh:    make(chan struct{}),
 		versions:  map[string]uint64{},
 	}
-	// Wire keyspace notifications: every mutation fans out to pub/sub
-	// (so clients can SUBSCRIBE __keyspace__:key) and bumps the key
-	// version so WATCH can spot concurrent writes.
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
@@ -70,14 +71,82 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	return e
 }
 
-func (e *Engine) Start() { go e.evictLoop() }
+// EnablePersistence opens AOF/RDB handles and restores any prior state.
+//
+// Load-order rule (matches Redis's default): if AOF is enabled, it is
+// the sole source of truth — RDB files are ignored on startup, since
+// replaying AOF on top of an RDB would double-apply non-idempotent
+// commands like XADD. If only RDB is enabled, we load it. The reverse
+// (AOF-only) replays every recorded write.
+//
+// The caller passes a run function that can execute a command against
+// the engine without re-appending it to the AOF; only dispatch knows
+// how to turn "SET k v EX 10" into the right store calls.
+func (e *Engine) EnablePersistence(run func(cmd string, args []string) error) error {
+	if !e.Cfg.AOFEnabled && !e.Cfg.RDBEnabled {
+		return nil
+	}
+	dir := e.Cfg.DataDir
+
+	switch {
+	case e.Cfg.AOFEnabled:
+		aofPath := filepath.Join(dir, "append.aof")
+		if err := persistence.Replay(aofPath, run); err != nil {
+			e.Log.Warn("aof replay failed", "err", err)
+		} else {
+			e.Log.Info("aof replayed", "path", aofPath)
+		}
+		aof, err := persistence.OpenAOF(aofPath, persistence.FsyncEverySec)
+		if err != nil {
+			return err
+		}
+		e.AOF = aof
+	case e.Cfg.RDBEnabled:
+		rdbPath := filepath.Join(dir, "dump.rdb")
+		snap, err := persistence.LoadRDB(rdbPath)
+		if err != nil {
+			e.Log.Warn("rdb load failed", "err", err)
+		} else if snap != nil {
+			e.KV.Restore(convertFromRDB(snap.Keys))
+			e.Log.Info("rdb loaded", "keys", len(snap.Keys), "at", snap.CreatedAt)
+		}
+	}
+
+	// RDB snapshotting is always wired when enabled — it works fine
+	// alongside AOF as a periodic full-state backup. The *load* path
+	// is the only place where the two modes are mutually exclusive.
+	if e.Cfg.RDBEnabled {
+		rdbPath := filepath.Join(dir, "dump.rdb")
+		interval := time.Duration(e.Cfg.RDBIntervalSec) * time.Second
+		rdb, err := persistence.OpenRDB(rdbPath, interval, e.snapshotFn)
+		if err != nil {
+			return err
+		}
+		e.RDB = rdb
+	}
+	return nil
+}
+
+func (e *Engine) Start() {
+	go e.evictLoop()
+	if e.RDB != nil {
+		e.RDB.Start()
+	}
+}
 
 func (e *Engine) Stop() {
 	close(e.stopCh)
 	e.Metrics.Stop()
+	if e.AOF != nil {
+		_ = e.AOF.Close()
+	}
+	if e.RDB != nil {
+		e.RDB.Stop()
+	}
 }
 
-// BumpKey increments the per-key version counter.
+// BumpKey increments the per-key version counter. Called by the store
+// notifier on every mutation.
 func (e *Engine) BumpKey(key string) {
 	if key == "" {
 		return
@@ -94,9 +163,146 @@ func (e *Engine) KeyVersion(key string) uint64 {
 	return e.versions[key]
 }
 
-// evictLoop sweeps when we cross the memory cap. A periodic scan is fine
-// for this scaffold; a production build would make eviction event-driven
-// on SET to keep peak memory tighter.
+// RecordWrite hands a write-path command to the AOF. A no-op if AOF is
+// disabled. Called from dispatch after the command executes successfully.
+func (e *Engine) RecordWrite(cmd string, args []string) {
+	if e.AOF == nil {
+		return
+	}
+	_ = e.AOF.Append(cmd, args)
+}
+
+// RewriteAOF dumps the current keyspace back to the AOF as fresh SET /
+// RPUSH / HSET / ... commands. Keeps the file from growing unbounded.
+func (e *Engine) RewriteAOF() error {
+	if e.AOF == nil {
+		return nil
+	}
+	return e.AOF.Rewrite(func(w *bufio.Writer) error {
+		return writeAOFSnapshot(w, e.KV.Export())
+	})
+}
+
+// SaveRDB writes a snapshot on demand.
+func (e *Engine) SaveRDB() error {
+	if e.RDB == nil {
+		return nil
+	}
+	return e.RDB.SaveNow()
+}
+
+// snapshotFn is the callback the RDB loop invokes. Convert our typed
+// export into the persistence wire format.
+func (e *Engine) snapshotFn() persistence.Snapshot {
+	keys := e.KV.Export()
+	out := make([]persistence.KeySnapshot, 0, len(keys))
+	for _, k := range keys {
+		ks := persistence.KeySnapshot{Key: k.Key, Type: k.Type, ExpireAt: k.ExpireAt, Str: k.Str, List: k.List, Hash: k.Hash, Set: k.Set}
+		for _, zm := range k.ZSet {
+			ks.ZSet = append(ks.ZSet, persistence.ZMember{Member: zm.Member, Score: zm.Score})
+		}
+		for _, se := range k.Stream {
+			ks.Stream = append(ks.Stream, persistence.StreamSnapshotEntry{ID: se.ID, Fields: se.Fields})
+		}
+		out = append(out, ks)
+	}
+	return persistence.Snapshot{Version: 1, CreatedAt: time.Now(), Keys: out}
+}
+
+// convertFromRDB maps the wire format back into the store's type.
+func convertFromRDB(in []persistence.KeySnapshot) []store.ExportEntry {
+	out := make([]store.ExportEntry, 0, len(in))
+	for _, k := range in {
+		ent := store.ExportEntry{Key: k.Key, Type: k.Type, ExpireAt: k.ExpireAt, Str: k.Str, List: k.List, Hash: k.Hash, Set: k.Set}
+		for _, zm := range k.ZSet {
+			ent.ZSet = append(ent.ZSet, store.ExportZMember{Member: zm.Member, Score: zm.Score})
+		}
+		for _, se := range k.Stream {
+			ent.Stream = append(ent.Stream, store.ExportStreamEntry{ID: se.ID, Fields: se.Fields})
+		}
+		out = append(out, ent)
+	}
+	return out
+}
+
+// writeAOFSnapshot serializes the live keyspace as RESP-format commands
+// the engine can replay on startup. This powers BGREWRITEAOF.
+func writeAOFSnapshot(w *bufio.Writer, entries []store.ExportEntry) error {
+	for _, e := range entries {
+		switch e.Type {
+		case "string":
+			if err := writeAOFCmd(w, "SET", e.Key, e.Str); err != nil {
+				return err
+			}
+		case "list":
+			args := append([]string{e.Key}, e.List...)
+			if err := writeAOFCmd(w, "RPUSH", args...); err != nil {
+				return err
+			}
+		case "hash":
+			args := []string{e.Key}
+			for f, v := range e.Hash {
+				args = append(args, f, v)
+			}
+			if err := writeAOFCmd(w, "HSET", args...); err != nil {
+				return err
+			}
+		case "set":
+			args := append([]string{e.Key}, e.Set...)
+			if err := writeAOFCmd(w, "SADD", args...); err != nil {
+				return err
+			}
+		case "zset":
+			args := []string{e.Key}
+			for _, zm := range e.ZSet {
+				args = append(args, strconv.FormatFloat(zm.Score, 'f', -1, 64), zm.Member)
+			}
+			if err := writeAOFCmd(w, "ZADD", args...); err != nil {
+				return err
+			}
+		case "stream":
+			for _, se := range e.Stream {
+				args := append([]string{e.Key, se.ID}, se.Fields...)
+				if err := writeAOFCmd(w, "XADD", args...); err != nil {
+					return err
+				}
+			}
+		}
+		if e.ExpireAt > 0 {
+			ms := strconv.FormatInt(e.ExpireAt, 10)
+			if err := writeAOFCmd(w, "PEXPIREAT", e.Key, ms); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeAOFCmd(w *bufio.Writer, cmd string, args ...string) error {
+	if _, err := w.WriteString("*"); err != nil {
+		return err
+	}
+	if _, err := w.WriteString(strconv.Itoa(1 + len(args))); err != nil {
+		return err
+	}
+	if _, err := w.WriteString("\r\n$"); err != nil {
+		return err
+	}
+	if _, err := w.WriteString(strconv.Itoa(len(cmd))); err != nil {
+		return err
+	}
+	if _, err := w.WriteString("\r\n" + cmd + "\r\n"); err != nil {
+		return err
+	}
+	for _, a := range args {
+		if _, err := w.WriteString("$" + strconv.Itoa(len(a)) + "\r\n" + a + "\r\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evictLoop sweeps when we cross the configured memory cap.
 func (e *Engine) evictLoop() {
 	if e.Scorer == nil {
 		return
@@ -141,8 +347,12 @@ type Info struct {
 		Entries int `json:"entries"`
 		Users   int `json:"users"`
 	} `json:"memory"`
-	Eviction string `json:"eviction"`
-	PubSub   struct {
+	Eviction    string `json:"eviction"`
+	Persistence struct {
+		AOF bool `json:"aof"`
+		RDB bool `json:"rdb"`
+	} `json:"persistence"`
+	PubSub struct {
 		Patterns int `json:"patterns"`
 	} `json:"pubsub"`
 	Runtime struct {
@@ -156,7 +366,7 @@ func (e *Engine) Info() Info {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	i := Info{
-		Version:       "0.2.0",
+		Version:       "0.3.0",
 		UptimeSeconds: time.Since(e.StartedAt).Seconds(),
 		Commands:      e.CmdCount.Load(),
 		Eviction:      e.Cfg.Eviction,
@@ -167,6 +377,8 @@ func (e *Engine) Info() Info {
 	i.LLM = e.LLM.Stats()
 	i.Memory.Entries = e.Memory.Size()
 	i.Memory.Users = e.Memory.Users()
+	i.Persistence.AOF = e.AOF != nil
+	i.Persistence.RDB = e.RDB != nil
 	i.PubSub.Patterns = e.PubSub.NumPat()
 	i.Runtime.Goroutines = runtime.NumGoroutine()
 	i.Runtime.GoVersion = runtime.Version()

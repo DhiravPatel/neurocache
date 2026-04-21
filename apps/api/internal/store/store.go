@@ -25,6 +25,7 @@ const (
 	TypeHash
 	TypeSet
 	TypeZSet
+	TypeStream
 )
 
 func (t ValueType) String() string {
@@ -39,6 +40,8 @@ func (t ValueType) String() string {
 		return "set"
 	case TypeZSet:
 		return "zset"
+	case TypeStream:
+		return "stream"
 	default:
 		return "none"
 	}
@@ -53,11 +56,12 @@ type Entry struct {
 	Key  string
 	Type ValueType
 
-	Str  string
-	List *list.List          // elements are strings
-	Hash map[string]string
-	Set  map[string]struct{}
-	ZSet *ZSet
+	Str    string
+	List   *list.List // elements are strings
+	Hash   map[string]string
+	Set    map[string]struct{}
+	ZSet   *ZSet
+	Stream *Stream
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -353,6 +357,8 @@ func (s *Store) getOrCreate(key string, t ValueType) (*Entry, error) {
 		e.Set = make(map[string]struct{})
 	case TypeZSet:
 		e.ZSet = newZSet()
+	case TypeStream:
+		e.Stream = newStream()
 	}
 	s.data[key] = e
 	return e, nil
@@ -371,6 +377,10 @@ func (s *Store) removeIfEmpty(e *Entry) {
 		empty = len(e.Set) == 0
 	case TypeZSet:
 		empty = e.ZSet == nil || e.ZSet.Len() == 0
+	case TypeStream:
+		// Streams keep the key even at length 0 — they have metadata
+		// (last-ID, consumer groups) that must persist. Match Redis.
+		empty = false
 	}
 	if empty {
 		s.bytes.Add(-int64(e.Bytes))
@@ -409,6 +419,11 @@ func (s *Store) recomputeBytes(e *Entry) {
 			for _, m := range e.ZSet.members() {
 				n += len(m) + 8
 			}
+		}
+	case TypeStream:
+		n = len(e.Key)
+		if e.Stream != nil {
+			n += e.Stream.approxBytes()
 		}
 	}
 	e.Bytes = n

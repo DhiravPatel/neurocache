@@ -2,13 +2,27 @@ package http
 
 import (
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
+
+// NewReplayer returns a function that executes a RESP command against
+// the running engine without writing it back to the AOF. Used by the
+// persistence package during startup replay.
+func NewReplayer(eng *engine.Engine, cfg config.Config, log *slog.Logger) func(string, []string) error {
+	h := &handlers{eng: eng, cfg: cfg, log: log}
+	return func(cmd string, args []string) error {
+		_, err := h.dispatch(cmd, args)
+		return err
+	}
+}
 
 // dispatch runs a Redis-style command from the HTTP /api/exec endpoint.
 // Return types are JSON-friendly (strings, numbers, slices) so the
@@ -653,6 +667,246 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			return h.eng.PubSub.NumPat(), nil
 		}
 		return nil, errors.New("unknown PUBSUB subcommand")
+
+	// ─── bitmaps ───────────────────────────────────────────────────
+	case "SETBIT":
+		if len(args) < 3 {
+			return nil, errors.New("SETBIT key offset 0|1")
+		}
+		off, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		v, err := strconv.Atoi(args[2])
+		if err != nil {
+			return nil, err
+		}
+		return h.eng.KV.SetBit(args[0], off, v)
+	case "GETBIT":
+		if len(args) < 2 {
+			return nil, errors.New("GETBIT key offset")
+		}
+		off, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return h.eng.KV.GetBit(args[0], off)
+	case "BITCOUNT":
+		if len(args) < 1 {
+			return nil, errors.New("BITCOUNT key [start end]")
+		}
+		hasRange := len(args) >= 3
+		start, end := 0, -1
+		if hasRange {
+			start, _ = strconv.Atoi(args[1])
+			end, _ = strconv.Atoi(args[2])
+		}
+		return h.eng.KV.BitCount(args[0], start, end, hasRange)
+	case "BITPOS":
+		if len(args) < 2 {
+			return nil, errors.New("BITPOS key bit [start [end]]")
+		}
+		bit, _ := strconv.Atoi(args[1])
+		start, end := 0, -1
+		hasEnd := false
+		if len(args) >= 3 {
+			start, _ = strconv.Atoi(args[2])
+		}
+		if len(args) >= 4 {
+			end, _ = strconv.Atoi(args[3])
+			hasEnd = true
+		}
+		return h.eng.KV.BitPos(args[0], bit, start, end, hasEnd)
+	case "BITOP":
+		if len(args) < 3 {
+			return nil, errors.New("BITOP op dst key [key ...]")
+		}
+		return h.eng.KV.BitOp(args[0], args[1], args[2:])
+
+	// ─── HyperLogLog ───────────────────────────────────────────────
+	case "PFADD":
+		if len(args) < 1 {
+			return nil, errors.New("PFADD key [element ...]")
+		}
+		var members []string
+		if len(args) >= 2 {
+			members = args[1:]
+		}
+		return h.eng.KV.PFAdd(args[0], members...)
+	case "PFCOUNT":
+		if len(args) < 1 {
+			return nil, errors.New("PFCOUNT key [key ...]")
+		}
+		return h.eng.KV.PFCount(args...)
+	case "PFMERGE":
+		if len(args) < 1 {
+			return nil, errors.New("PFMERGE dst [src ...]")
+		}
+		return "OK", h.eng.KV.PFMerge(args[0], args[1:]...)
+
+	// ─── streams ───────────────────────────────────────────────────
+	case "XADD":
+		// XADD key [MAXLEN [~|=] N] ID field value [field value ...]
+		if len(args) < 4 {
+			return nil, errors.New("XADD key ID field value [field value ...]")
+		}
+		maxLen := 0
+		i := 1
+		if strings.EqualFold(args[i], "MAXLEN") {
+			offset := i + 1
+			if args[offset] == "~" || args[offset] == "=" {
+				offset++
+			}
+			maxLen, _ = strconv.Atoi(args[offset])
+			i = offset + 1
+		}
+		id := args[i]
+		fields := args[i+1:]
+		return h.eng.KV.XAdd(args[0], id, fields, maxLen)
+	case "XLEN":
+		if len(args) < 1 {
+			return nil, errors.New("XLEN key")
+		}
+		return h.eng.KV.XLen(args[0])
+	case "XRANGE":
+		if len(args) < 3 {
+			return nil, errors.New("XRANGE key start end [COUNT n]")
+		}
+		count := 0
+		for i := 3; i < len(args); i++ {
+			if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		}
+		return h.eng.KV.XRange(args[0], args[1], args[2], count, false)
+	case "XREVRANGE":
+		if len(args) < 3 {
+			return nil, errors.New("XREVRANGE key end start [COUNT n]")
+		}
+		count := 0
+		for i := 3; i < len(args); i++ {
+			if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		}
+		return h.eng.KV.XRange(args[0], args[1], args[2], count, true)
+	case "XDEL":
+		if len(args) < 2 {
+			return nil, errors.New("XDEL key id [id ...]")
+		}
+		return h.eng.KV.XDel(args[0], args[1:]...)
+	case "XTRIM":
+		if len(args) < 3 {
+			return nil, errors.New("XTRIM key MAXLEN N")
+		}
+		idx := 2
+		if args[idx] == "~" || args[idx] == "=" {
+			idx++
+		}
+		n, _ := strconv.Atoi(args[idx])
+		return h.eng.KV.XTrim(args[0], n)
+	case "XREAD":
+		// HTTP XREAD is the non-blocking flavour. The dashboard
+		// playground doesn't need BLOCK; real subscribers should use
+		// the RESP port.
+		i := 0
+		count := 0
+		for ; i < len(args); i++ {
+			if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+				continue
+			}
+			if strings.EqualFold(args[i], "STREAMS") {
+				i++
+				break
+			}
+		}
+		rest := args[i:]
+		if len(rest) == 0 || len(rest)%2 != 0 {
+			return nil, errors.New("unbalanced XREAD STREAMS keys and IDs")
+		}
+		n := len(rest) / 2
+		return h.eng.KV.XRead(rest[:n], rest[n:], count)
+
+	// ─── geo ───────────────────────────────────────────────────────
+	case "GEOADD":
+		if len(args) < 4 || (len(args)-1)%3 != 0 {
+			return nil, errors.New("GEOADD key lon lat member [...]")
+		}
+		entries := make([]store.GeoAddEntry, 0, (len(args)-1)/3)
+		for i := 1; i+2 < len(args); i += 3 {
+			lon, _ := strconv.ParseFloat(args[i], 64)
+			lat, _ := strconv.ParseFloat(args[i+1], 64)
+			entries = append(entries, store.GeoAddEntry{Lon: lon, Lat: lat, Member: args[i+2]})
+		}
+		return h.eng.KV.GeoAdd(args[0], entries...)
+	case "GEOPOS":
+		if len(args) < 2 {
+			return nil, errors.New("GEOPOS key member [member ...]")
+		}
+		pts, err := h.eng.KV.GeoPos(args[0], args[1:]...)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(pts))
+		for i, p := range pts {
+			if p == nil {
+				out[i] = nil
+			} else {
+				out[i] = map[string]float64{"lon": p.Lon, "lat": p.Lat}
+			}
+		}
+		return out, nil
+	case "GEODIST":
+		if len(args) < 3 {
+			return nil, errors.New("GEODIST key m1 m2 [unit]")
+		}
+		unit := "m"
+		if len(args) >= 4 {
+			unit = strings.ToLower(args[3])
+		}
+		d, ok, err := h.eng.KV.GeoDist(args[0], args[1], args[2], unit)
+		if err != nil || !ok {
+			return nil, err
+		}
+		return d, nil
+	case "GEOSEARCH":
+		// same syntax as RESP
+		var lon, lat, radius float64
+		unit := "m"
+		count := 0
+		for i := 1; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "FROMLONLAT":
+				lon, _ = strconv.ParseFloat(args[i+1], 64)
+				lat, _ = strconv.ParseFloat(args[i+2], 64)
+				i += 2
+			case "BYRADIUS":
+				radius, _ = strconv.ParseFloat(args[i+1], 64)
+				unit = strings.ToLower(args[i+2])
+				i += 2
+			case "COUNT":
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		}
+		return h.eng.KV.GeoSearch(args[0], lat, lon, radius, unit, count)
+	case "GEOHASH":
+		if len(args) < 2 {
+			return nil, errors.New("GEOHASH key member [member ...]")
+		}
+		return h.eng.KV.GeoHash(args[0], args[1:]...)
+
+	// ─── persistence ───────────────────────────────────────────────
+	case "SAVE", "BGSAVE":
+		return "OK", h.eng.SaveRDB()
+	case "BGREWRITEAOF":
+		return "Background append only file rewriting started", h.eng.RewriteAOF()
+	case "LASTSAVE":
+		return time.Now().Unix(), nil
 
 	// ─── AI-native ─────────────────────────────────────────────────
 	case "SEMANTIC_SET":
