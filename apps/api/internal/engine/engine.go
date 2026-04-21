@@ -1,10 +1,12 @@
-// Package engine wires all subsystems together: KV store, semantic cache,
-// LLM cache, memory store, and the eviction loop.
+// Package engine wires all subsystems together: typed KV store, semantic
+// cache, LLM cache, memory store, pub/sub broker, eviction loop, and a
+// small per-key version counter used by the WATCH/EXEC machinery.
 package engine
 
 import (
 	"log/slog"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
@@ -25,14 +28,21 @@ type Engine struct {
 	Memory   *memory.Store
 	Scorer   eviction.Scorer
 	Metrics  *metrics.Metrics
+	PubSub   *pubsub.Broker
 
 	StartedAt time.Time
 	CmdCount  atomic.Uint64
 	stopCh    chan struct{}
+
+	// versions tracks a monotonic counter per key used by WATCH to detect
+	// races between a client calling WATCH and running EXEC. Bumped on
+	// any mutation via BumpKey / the keyspace notifier.
+	vmu      sync.RWMutex
+	versions map[string]uint64
 }
 
 func New(cfg config.Config, log *slog.Logger) *Engine {
-	return &Engine{
+	e := &Engine{
 		Cfg:       cfg,
 		Log:       log,
 		KV:        store.New(),
@@ -41,23 +51,52 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Memory:    memory.New(cfg.EmbeddingDim),
 		Scorer:    eviction.NewScorer(cfg.Eviction),
 		Metrics:   metrics.New(),
+		PubSub:    pubsub.New(64),
 		StartedAt: time.Now(),
 		stopCh:    make(chan struct{}),
+		versions:  map[string]uint64{},
 	}
+	// Wire keyspace notifications: every mutation fans out to pub/sub
+	// (so clients can SUBSCRIBE __keyspace__:key) and bumps the key
+	// version so WATCH can spot concurrent writes.
+	e.KV.SetNotifier(func(event, key string) {
+		e.BumpKey(key)
+		if key == "" {
+			return
+		}
+		e.PubSub.Publish("__keyspace__:"+key, event)
+		e.PubSub.Publish("__keyevent__:"+event, key)
+	})
+	return e
 }
 
-func (e *Engine) Start() {
-	go e.evictLoop()
-}
+func (e *Engine) Start() { go e.evictLoop() }
 
 func (e *Engine) Stop() {
 	close(e.stopCh)
 	e.Metrics.Stop()
 }
 
-// evictLoop runs every few seconds and trims the store when it exceeds the
-// configured memory cap. In a real system this would be event-driven on SET,
-// but a periodic sweep is plenty for a demo scaffold.
+// BumpKey increments the per-key version counter.
+func (e *Engine) BumpKey(key string) {
+	if key == "" {
+		return
+	}
+	e.vmu.Lock()
+	e.versions[key]++
+	e.vmu.Unlock()
+}
+
+// KeyVersion reads the current version for a key (0 if never seen).
+func (e *Engine) KeyVersion(key string) uint64 {
+	e.vmu.RLock()
+	defer e.vmu.RUnlock()
+	return e.versions[key]
+}
+
+// evictLoop sweeps when we cross the memory cap. A periodic scan is fine
+// for this scaffold; a production build would make eviction event-driven
+// on SET to keep peak memory tighter.
 func (e *Engine) evictLoop() {
 	if e.Scorer == nil {
 		return
@@ -75,7 +114,6 @@ func (e *Engine) evictLoop() {
 				continue
 			}
 			snap := e.KV.Snapshot()
-			// evict ~10% of entries when over cap
 			n := len(snap) / 10
 			if n < 1 {
 				n = 1
@@ -88,7 +126,7 @@ func (e *Engine) evictLoop() {
 	}
 }
 
-// Info returns a snapshot of engine metrics for /api/info and the dashboard.
+// Info is a snapshot of engine metrics for /api/info.
 type Info struct {
 	Version       string  `json:"version"`
 	UptimeSeconds float64 `json:"uptime_seconds"`
@@ -104,7 +142,10 @@ type Info struct {
 		Users   int `json:"users"`
 	} `json:"memory"`
 	Eviction string `json:"eviction"`
-	Runtime  struct {
+	PubSub   struct {
+		Patterns int `json:"patterns"`
+	} `json:"pubsub"`
+	Runtime struct {
 		Goroutines int    `json:"goroutines"`
 		GoVersion  string `json:"go_version"`
 		HeapMB     uint64 `json:"heap_mb"`
@@ -115,7 +156,7 @@ func (e *Engine) Info() Info {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	i := Info{
-		Version:       "0.1.0",
+		Version:       "0.2.0",
 		UptimeSeconds: time.Since(e.StartedAt).Seconds(),
 		Commands:      e.CmdCount.Load(),
 		Eviction:      e.Cfg.Eviction,
@@ -126,6 +167,7 @@ func (e *Engine) Info() Info {
 	i.LLM = e.LLM.Stats()
 	i.Memory.Entries = e.Memory.Size()
 	i.Memory.Users = e.Memory.Users()
+	i.PubSub.Patterns = e.PubSub.NumPat()
 	i.Runtime.Goroutines = runtime.NumGoroutine()
 	i.Runtime.GoVersion = runtime.Version()
 	i.Runtime.HeapMB = m.HeapAlloc / (1024 * 1024)

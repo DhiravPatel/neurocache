@@ -1,7 +1,7 @@
-// Package resp implements a minimal RESP2 parser and encoder plus a TCP
-// server. Handles enough Redis commands for redis-cli to connect and play
-// with NeuroCache: PING, SET, GET, DEL, EXISTS, INCR, KEYS, and the AI
-// commands (SEMANTIC_SET/GET, CACHE_LLM, MEMORY_ADD/QUERY).
+// Package resp implements the RESP2 wire protocol plus the command
+// dispatch every connected client runs against. Each TCP connection gets
+// its own conn struct so transaction state (MULTI/EXEC) and pub/sub
+// subscriptions are naturally scoped to the connection.
 package resp
 
 import (
@@ -11,13 +11,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
-	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/transaction"
 )
 
 type Server struct {
@@ -68,12 +68,42 @@ func (s *Server) Close() {
 	}
 }
 
-func (s *Server) handle(c net.Conn) {
-	defer c.Close()
-	br := bufio.NewReader(c)
-	bw := bufio.NewWriter(c)
+// conn owns all per-connection mutable state.
+type conn struct {
+	nc   net.Conn
+	br   *bufio.Reader
+	bw   *bufio.Writer
+	eng  *engine.Engine
+	log  *slog.Logger
+	tx   *transaction.State
+	subs map[string]*pubsub.Subscription
+	psub map[string]*pubsub.Subscription
+
+	// writeMu serializes writes across the client-reply goroutine and
+	// background pub/sub fan-out, so frames never interleave.
+	writeMu sync.Mutex
+
+	// done closes when the connection is being torn down so background
+	// pub/sub readers can exit cleanly.
+	done chan struct{}
+}
+
+func (s *Server) handle(nc net.Conn) {
+	c := &conn{
+		nc:   nc,
+		br:   bufio.NewReader(nc),
+		bw:   bufio.NewWriter(nc),
+		eng:  s.eng,
+		log:  s.log,
+		tx:   transaction.New(),
+		subs: map[string]*pubsub.Subscription{},
+		psub: map[string]*pubsub.Subscription{},
+		done: make(chan struct{}),
+	}
+	defer c.cleanup()
+
 	for {
-		parts, err := readArray(br)
+		parts, err := readArray(c.br)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.log.Debug("resp client disconnect", "err", err)
@@ -85,161 +115,98 @@ func (s *Server) handle(c net.Conn) {
 		}
 		start := time.Now()
 		s.eng.CmdCount.Add(1)
-		s.execute(parts, bw)
+		c.execute(parts)
 		s.eng.Metrics.RecordCommand(strings.ToUpper(parts[0]), time.Since(start))
-		_ = bw.Flush()
+		c.writeMu.Lock()
+		_ = c.bw.Flush()
+		c.writeMu.Unlock()
 	}
 }
 
-func (s *Server) execute(parts []string, w *bufio.Writer) {
+func (c *conn) cleanup() {
+	close(c.done)
+	for _, sub := range c.subs {
+		sub.Close()
+	}
+	for _, sub := range c.psub {
+		sub.Close()
+	}
+	_ = c.nc.Close()
+}
+
+// allowedDuringSubscribe enumerates commands RESP2 permits while in
+// pub/sub mode. Anything else errors out with the canonical message.
+var allowedDuringSubscribe = map[string]bool{
+	"SUBSCRIBE": true, "UNSUBSCRIBE": true,
+	"PSUBSCRIBE": true, "PUNSUBSCRIBE": true,
+	"PING": true, "QUIT": true,
+}
+
+// execute is the top-level command router. It gates MULTI queueing and
+// subscribed-mode restrictions before handing off to the per-command
+// handler.
+func (c *conn) execute(parts []string) {
 	cmd := strings.ToUpper(parts[0])
 	args := parts[1:]
-	switch cmd {
-	case "PING":
-		writeSimple(w, "PONG")
 
-	case "COMMAND", "HELLO":
-		// Minimal compatibility — enough to stop redis-cli from exiting.
-		writeArray(w, []string{})
-
-	case "SET":
-		if len(args) < 2 {
-			writeError(w, "wrong number of arguments for 'set'")
+	// In subscribed mode almost nothing is allowed.
+	if len(c.subs) > 0 || len(c.psub) > 0 {
+		if !allowedDuringSubscribe[cmd] {
+			c.writeMu.Lock()
+			writeError(c.bw, "Can't execute '"+strings.ToLower(cmd)+"': only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT are allowed in this context")
+			c.writeMu.Unlock()
 			return
 		}
-		ttl := time.Duration(0)
-		for i := 2; i+1 < len(args); i += 2 {
-			if strings.EqualFold(args[i], "EX") {
-				if n, err := strconv.Atoi(args[i+1]); err == nil {
-					ttl = time.Duration(n) * time.Second
-				}
-			}
-		}
-		s.eng.KV.Set(args[0], args[1], ttl)
-		writeSimple(w, "OK")
-
-	case "GET":
-		if len(args) < 1 {
-			writeError(w, "GET requires key")
-			return
-		}
-		v, ok := s.eng.KV.Get(args[0])
-		s.eng.Metrics.RecordKVHit(args[0], ok)
-		if !ok {
-			writeNil(w)
-			return
-		}
-		writeBulk(w, v)
-
-	case "DEL":
-		writeInt(w, int64(s.eng.KV.Del(args...)))
-
-	case "EXISTS":
-		n := 0
-		for _, k := range args {
-			if s.eng.KV.Exists(k) {
-				n++
-			}
-		}
-		writeInt(w, int64(n))
-
-	case "INCR":
-		if len(args) < 1 {
-			writeError(w, "INCR requires key")
-			return
-		}
-		v, err := s.eng.KV.Incr(args[0], 1)
-		if err != nil {
-			writeError(w, err.Error())
-			return
-		}
-		writeInt(w, v)
-
-	case "DECR":
-		if len(args) < 1 {
-			writeError(w, "DECR requires key")
-			return
-		}
-		v, err := s.eng.KV.Incr(args[0], -1)
-		if err != nil {
-			writeError(w, err.Error())
-			return
-		}
-		writeInt(w, v)
-
-	case "KEYS":
-		writeArray(w, s.eng.KV.Keys())
-
-	case "FLUSHDB", "FLUSHALL":
-		s.eng.KV.FlushAll()
-		writeSimple(w, "OK")
-
-	case "SEMANTIC_SET":
-		if len(args) < 2 {
-			writeError(w, "SEMANTIC_SET key value")
-			return
-		}
-		s.eng.Semantic.Set(args[0], args[1])
-		writeSimple(w, "OK")
-
-	case "SEMANTIC_GET":
-		if len(args) < 1 {
-			writeError(w, "SEMANTIC_GET query")
-			return
-		}
-		v, _, ok := s.eng.Semantic.Get(args[0], float32(s.eng.Cfg.SemThreshold))
-		s.eng.Metrics.RecordSemantic(ok)
-		if !ok {
-			writeNil(w)
-			return
-		}
-		writeBulk(w, v)
-
-	case "CACHE_LLM":
-		if len(args) < 2 {
-			writeError(w, "CACHE_LLM prompt response")
-			return
-		}
-		s.eng.LLM.Set(args[0], args[1])
-		writeSimple(w, "OK")
-
-	case "CACHE_LLM_GET":
-		if len(args) < 1 {
-			writeError(w, "CACHE_LLM_GET prompt")
-			return
-		}
-		v, _, ok := s.eng.LLM.Get(args[0], 0.88)
-		s.eng.Metrics.RecordLLM(ok)
-		if !ok {
-			writeNil(w)
-			return
-		}
-		writeBulk(w, v)
-
-	case "MEMORY_ADD":
-		if len(args) < 2 {
-			writeError(w, "MEMORY_ADD user text")
-			return
-		}
-		e := s.eng.Memory.Add(args[0], strings.Join(args[1:], " "), nil)
-		writeBulk(w, e.ID)
-
-	case "MEMORY_QUERY":
-		if len(args) < 2 {
-			writeError(w, "MEMORY_QUERY user query")
-			return
-		}
-		hits := s.eng.Memory.Query(args[0], strings.Join(args[1:], " "), 5, 0.3)
-		writeBulk(w, memory.Synthesize(hits))
-
-	case "INFO":
-		writeBulk(w, fmt.Sprintf("neurocache_version:0.1.0\nuptime:%ds\nkeys:%d",
-			int(time.Since(s.eng.StartedAt).Seconds()), s.eng.KV.Size()))
-
-	case "QUIT":
-		writeSimple(w, "OK")
-
-	default:
-		writeError(w, "unknown command '"+cmd+"'")
 	}
+
+	// Inside a MULTI block, queue everything except the transaction
+	// control commands themselves.
+	if c.tx.InProgress() {
+		switch cmd {
+		case "EXEC", "DISCARD", "MULTI", "WATCH", "UNWATCH":
+			// fall through to the handler
+		default:
+			if err := c.tx.Queue(cmd, args); err != nil {
+				c.writeMu.Lock()
+				writeError(c.bw, err.Error())
+				c.writeMu.Unlock()
+				return
+			}
+			c.writeMu.Lock()
+			writeSimple(c.bw, "QUEUED")
+			c.writeMu.Unlock()
+			return
+		}
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.dispatch(cmd, args)
+}
+
+// wantArgs enforces a minimum argument count, writing the canonical
+// "wrong number of arguments" error and returning false on failure.
+func (c *conn) wantArgs(cmd string, args []string, n int) bool {
+	if len(args) < n {
+		writeError(c.bw, fmt.Sprintf("wrong number of arguments for '%s'", strings.ToLower(cmd)))
+		return false
+	}
+	return true
+}
+
+// writeStoreErr maps store errors (WRONGTYPE etc.) to proper RESP errors.
+func (c *conn) writeStoreErr(err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if strings.HasPrefix(msg, "WRONGTYPE") {
+		writeTypedError(c.bw, "WRONGTYPE", strings.TrimPrefix(msg, "WRONGTYPE "))
+		return
+	}
+	if strings.HasPrefix(msg, "ERR ") {
+		writeTypedError(c.bw, "ERR", strings.TrimPrefix(msg, "ERR "))
+		return
+	}
+	writeError(c.bw, msg)
 }

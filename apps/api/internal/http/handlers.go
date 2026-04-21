@@ -113,10 +113,12 @@ func (h *handlers) kvList(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 	out := make([]map[string]any, 0, limit)
-	for _, k := range h.eng.KV.Keys() {
+	for _, k := range h.eng.KV.Keys("*") {
 		if prefix != "" && !strings.HasPrefix(k, prefix) {
 			continue
 		}
+		// Only surface string keys in the /api/kv browser view —
+		// the dashboard has dedicated pages for lists, hashes, etc.
 		v, ok := h.eng.KV.Get(k)
 		if !ok {
 			continue
