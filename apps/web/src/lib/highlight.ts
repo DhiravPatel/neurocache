@@ -70,7 +70,7 @@ const yamlRules: Rule[] = [
   { re: sticky(`\\b(true|false|null|yes|no|~)\\b`),                                           type: "keyword" },
   { re: sticky(`\\b\\d+(?:\\.\\d+)?\\b`),                                                     type: "number" },
   { re: sticky(`(?<=:\\s)[^\\n#]+`),                                                          type: "string" },   // unquoted scalar after key:
-  { re: sticky(`(-|:|\\||>)`),                                                                type: "operator" }, // alternation form avoids Tailwind misreading [-:|>] as arbitrary property
+  { re: sticky(`(-|:|\\||>)`),                                                                type: "operator" }, // alternation form avoids Tailwind misreading a char-class operator token as an arbitrary property
 ];
 
 const goRules: Rule[] = [
