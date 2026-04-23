@@ -69,7 +69,7 @@ export default function DocsLayout() {
           ))}
         </aside>
         <main className="min-w-0">
-          <div className="prose prose-invert max-w-none">
+          <div className="prose max-w-none dark:prose-invert">
             <Outlet />
           </div>
           <DocsNextPrev />

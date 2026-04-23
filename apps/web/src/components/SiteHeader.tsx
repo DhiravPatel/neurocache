@@ -8,7 +8,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-30 border-b border-border/60 bg-bg/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-6">
         <Link to="/" className="flex items-center gap-2">
-          <div className="h-6 w-6 rounded-md bg-gradient-to-br from-primary to-accent" />
+          <img src="/favicon.svg" alt="NeuroCache" className="h-6 w-6" />
           <span className="text-sm font-semibold tracking-wide">NeuroCache</span>
         </Link>
         <nav className="hidden items-center gap-1 md:flex">
@@ -44,7 +44,9 @@ function HeaderLink({ to, children }: { to: string; children: React.ReactNode })
       className={({ isActive }) =>
         clsx(
           "rounded-md px-3 py-1.5 text-sm transition-colors",
-          isActive ? "bg-white/5 text-slate-100" : "text-slate-400 hover:text-slate-100",
+          isActive
+            ? "bg-slate-700/30 text-slate-100 dark:bg-white/5"
+            : "text-slate-400 hover:text-slate-100",
         )
       }
     >
