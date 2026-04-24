@@ -94,7 +94,8 @@
 /* ─── Reusable component classes ─────────────────────────────────── */
 @layer components {
   .card {
-    @apply rounded-xl border border-border bg-surface/60 backdrop-blur-sm;
+    @apply rounded-xl border border-border bg-surface/90 shadow-sm backdrop-blur-sm
+           dark:bg-surface/60 dark:shadow-none;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm
@@ -105,7 +106,7 @@
            hover:shadow-[0_0_32px_-4px_rgb(var(--primary)/0.85)] hover:bg-primary/95;
   }
   .btn-ghost {
-    @apply btn text-slate-300 hover:bg-slate-100/40 dark:hover:bg-white/5;
+    @apply btn text-slate-300 hover:bg-slate-700/35 hover:text-slate-100 dark:hover:bg-white/5;
   }
   .input {
     @apply w-full rounded-md border border-border bg-bg/60 px-3 py-2 text-sm text-slate-200
