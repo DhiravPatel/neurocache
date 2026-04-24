@@ -14,6 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"net"
+	"strings"
+
 	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/blocking"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
@@ -23,6 +29,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
@@ -44,6 +51,16 @@ type Engine struct {
 	Clients  *introspect.ClientRegistry
 	Scripts  *scripting.Cache
 	Blocker  *blocking.Hub
+
+	Replication *replication.State
+	Backlog     *replication.Backlog
+	Master      *replication.Master
+	ReplClient  *replication.Client
+
+	// replayRunner is the command applier the replica client uses. We
+	// stash it so (a) FollowMaster can restart the client after a role
+	// flip without re-wiring, and (b) tests can swap in a no-op.
+	replayRunner func(cmd string, args []string) error
 
 	AOF *persistence.AOF
 	RDB *persistence.RDB
@@ -96,6 +113,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Scripts:   scripting.NewCache(),
 		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
+
+		Replication: replication.NewState(),
+		Backlog:     replication.NewBacklog(cfg.ReplBacklogSize),
 		stopCh:    make(chan struct{}),
 		versions:  map[string]uint64{},
 	}
@@ -185,6 +205,10 @@ func (e *Engine) Start() {
 	if e.RDB != nil {
 		e.RDB.Start()
 	}
+	e.StartMaster()
+	if host, port, ok := ParseReplicaOf(e.Cfg.ReplicaOf); ok {
+		e.FollowMaster(host, port)
+	}
 }
 
 func (e *Engine) Stop() {
@@ -195,6 +219,12 @@ func (e *Engine) Stop() {
 	}
 	if e.RDB != nil {
 		e.RDB.Stop()
+	}
+	if e.Master != nil {
+		e.Master.Stop()
+	}
+	if e.ReplClient != nil {
+		e.ReplClient.Stop()
 	}
 }
 
@@ -216,13 +246,22 @@ func (e *Engine) KeyVersion(key string) uint64 {
 	return e.versions[key]
 }
 
-// RecordWrite hands a write-path command to the AOF. A no-op if AOF is
-// disabled. Called from dispatch after the command executes successfully.
+// RecordWrite hands a write-path command to the AOF + replication
+// backlog. Called from dispatch after the command executes
+// successfully. Replica-mode nodes skip both paths — the write came
+// from the master's stream, replaying it would loop.
 func (e *Engine) RecordWrite(cmd string, args []string) {
-	if e.AOF == nil {
+	if e.Replication != nil && e.Replication.IsReplica() {
+		// Replicas only apply the write; the master is the source of
+		// truth for durability + fan-out.
 		return
 	}
-	_ = e.AOF.Append(cmd, args)
+	if e.AOF != nil {
+		_ = e.AOF.Append(cmd, args)
+	}
+	if e.Master != nil {
+		e.Master.Propagate(cmd, args)
+	}
 }
 
 // RewriteAOF dumps the current keyspace back to the AOF synchronously.
@@ -298,6 +337,133 @@ func (e *Engine) IsBGRewriteInProgress() bool { return e.bgRewriteBusy.Load() }
 
 // ErrBgBusy is returned when BGSAVE/BGREWRITEAOF is already running.
 var ErrBgBusy = fmt.Errorf("background save already in progress")
+
+// StartMaster lazily wires the master fan-out loop. Called at boot on
+// a master node and by PromoteToMaster after a role flip.
+func (e *Engine) StartMaster() {
+	if e.Master != nil {
+		return
+	}
+	e.Master = replication.NewMaster(e.Replication, e.Backlog)
+	e.Master.Start()
+}
+
+// FollowMaster puts this node into replica mode following host:port.
+// If a client was previously running we stop it first so the restart
+// is clean.
+func (e *Engine) FollowMaster(host, port string) {
+	e.Replication.SetRoleReplica(host, port)
+	if e.ReplClient != nil {
+		e.ReplClient.Stop()
+	}
+	c := replication.NewClient(e.Replication, e.Log, e.replicaApplier())
+	c.ListenPort = e.Cfg.RESPPort
+	c.RDBRestore = e.restoreFromRDBBlob
+	e.ReplClient = c
+	c.Start()
+}
+
+// PromoteToMaster flips this node back into master mode (REPLICAOF NO
+// ONE or FAILOVER on the replica side). Connected replicas stay — they
+// can keep streaming if their replid matches the previous one.
+func (e *Engine) PromoteToMaster() {
+	if e.ReplClient != nil {
+		e.ReplClient.Stop()
+		e.ReplClient = nil
+	}
+	e.Replication.SetRoleMaster()
+	e.StartMaster()
+}
+
+// replicaApplier returns a closure that runs an incoming replication
+// command through the engine while replicaMode is true — so the
+// command mutates local state but doesn't re-append to AOF or backlog.
+func (e *Engine) replicaApplier() replication.Applier {
+	return func(cmd string, args []string) error {
+		if e.replayRunner == nil {
+			return fmt.Errorf("engine: no replay runner installed")
+		}
+		return e.replayRunner(cmd, args)
+	}
+}
+
+// SetReplayRunner is how the bootstrap plugs the HTTP-style dispatcher
+// into the replica apply path. Called once at startup.
+func (e *Engine) SetReplayRunner(run func(cmd string, args []string) error) {
+	e.replayRunner = run
+}
+
+// RDBBlob returns a gzipped-JSON snapshot of the current keyspace,
+// shaped the way our RDB format stores it. Used by the master to send
+// a full-resync payload and by the replica's restore path.
+func (e *Engine) RDBBlob() []byte {
+	snap := e.snapshotFn()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err := json.NewEncoder(gz).Encode(snap); err != nil {
+		return nil
+	}
+	_ = gz.Close()
+	return buf.Bytes()
+}
+
+// restoreFromRDBBlob decodes a gzipped-JSON snapshot and replaces the
+// live keyspace with its contents. Called by the replica client after
+// a full-resync.
+func (e *Engine) restoreFromRDBBlob(blob []byte) error {
+	gz, err := gzip.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	var snap persistence.Snapshot
+	if err := json.NewDecoder(gz).Decode(&snap); err != nil {
+		return err
+	}
+	e.KV.Restore(convertFromRDB(snap.Keys))
+	e.Log.Info("replica applied full-resync snapshot", "keys", len(snap.Keys))
+	return nil
+}
+
+// ConsumeReplicaHeartbeats runs a goroutine that reads REPLCONF ACK
+// frames from a connected replica so WAIT sees up-to-date offsets.
+// Exits when the link closes.
+func (e *Engine) ConsumeReplicaHeartbeats(r *replication.ReplicaLink) {
+	br := r.Reader()
+	for {
+		parts, err := replication.ReadArray(br)
+		if err != nil {
+			e.Replication.RemoveReplica(r)
+			r.Close()
+			return
+		}
+		if len(parts) < 1 {
+			continue
+		}
+		if strings.EqualFold(parts[0], "REPLCONF") {
+			for i := 1; i+1 < len(parts); i += 2 {
+				if strings.EqualFold(parts[i], "ACK") {
+					var off int64
+					_, _ = fmt.Sscanf(parts[i+1], "%d", &off)
+					r.AckOffset.Store(off)
+				}
+			}
+		}
+	}
+}
+
+// ParseReplicaOf converts a "host:port" config string into (host, port)
+// — returns ("", "", false) when the string is empty or malformed.
+func ParseReplicaOf(s string) (string, string, bool) {
+	if s == "" {
+		return "", "", false
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", "", false
+	}
+	return host, port, true
+}
 
 // parseFsyncPolicy maps the config string onto the persistence policy.
 func parseFsyncPolicy(s string) persistence.FsyncPolicy {

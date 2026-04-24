@@ -900,6 +900,43 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 		}
 		return h.eng.KV.GeoHash(args[0], args[1:]...)
 
+	// ─── replication (read-only view) ──────────────────────────────
+	case "ROLE":
+		st := h.eng.Replication
+		out := map[string]any{
+			"role":   st.Role().String(),
+			"offset": st.Offset(),
+		}
+		if st.Role().String() == "slave" {
+			host, port := st.Master()
+			out["master_host"] = host
+			out["master_port"] = port
+			out["link_state"] = st.LinkState().String()
+			out["applied_offset"] = st.MasterOffset()
+		} else {
+			reps := st.Replicas()
+			rows := make([]map[string]any, len(reps))
+			for i, r := range reps {
+				rows[i] = map[string]any{
+					"addr":        r.Conn.RemoteAddr().String(),
+					"listen_port": r.ListenPort,
+					"ack_offset":  r.AckOffset.Load(),
+				}
+			}
+			out["replicas"] = rows
+		}
+		return out, nil
+	case "REPLICAOF", "SLAVEOF":
+		if len(args) < 2 {
+			return nil, errors.New("REPLICAOF host port | NO ONE")
+		}
+		if strings.EqualFold(args[0], "NO") && strings.EqualFold(args[1], "ONE") {
+			h.eng.PromoteToMaster()
+			return "OK", nil
+		}
+		h.eng.FollowMaster(args[0], args[1])
+		return "OK", nil
+
 	// ─── persistence ───────────────────────────────────────────────
 	case "SAVE":
 		return "OK", h.eng.SaveRDB()

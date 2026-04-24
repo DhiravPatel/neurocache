@@ -36,6 +36,11 @@ type Config struct {
 
 	// Scripting
 	ScriptTimeoutMs int // Lua script wall-clock ceiling (5000 = 5s)
+
+	// Replication
+	ReplicaOf       string // "host:port" or "" — follow a master at boot
+	ReplBacklogSize int64  // bytes retained for partial resync (default 1 MiB)
+	ReplTimeoutSec  int    // dial/read timeout on the master link
 }
 
 func Load() Config {
@@ -66,6 +71,10 @@ func Load() Config {
 		ClientIdleMax:    envInt("NEUROCACHE_CLIENT_IDLE_MAX", 0),
 
 		ScriptTimeoutMs: envInt("NEUROCACHE_SCRIPT_TIMEOUT_MS", 5000),
+
+		ReplicaOf:       env("NEUROCACHE_REPLICAOF", ""),
+		ReplBacklogSize: int64(envInt("NEUROCACHE_REPL_BACKLOG_SIZE", 1<<20)),
+		ReplTimeoutSec:  envInt("NEUROCACHE_REPL_TIMEOUT_SEC", 60),
 	}
 }
 

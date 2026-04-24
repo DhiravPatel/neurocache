@@ -19,6 +19,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/transaction"
 )
 
@@ -88,6 +89,14 @@ type conn struct {
 	// info is the registry record for CLIENT LIST/KILL/PAUSE.
 	info *introspect.ClientInfo
 
+	// Replication-handshake scratchpad. These are populated during the
+	// initial REPLCONF frames so PSYNC has the info it needs. Once the
+	// connection is adopted as a replica link the engine writes to it
+	// exclusively — dispatch stops running.
+	replListenPort  string
+	replCapa        []string
+	adoptedByMaster *replication.ReplicaLink
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -117,6 +126,12 @@ func (s *Server) handle(nc net.Conn) {
 	defer c.cleanup()
 
 	for {
+		// If this conn has been adopted as a replica link, the master
+		// fan-out now owns the socket. Park here until the link closes.
+		if c.adoptedByMaster != nil {
+			<-c.adoptedByMaster.StopCh()
+			return
+		}
 		parts, err := readArray(c.br)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -189,8 +204,11 @@ func (c *conn) execute(parts []string) {
 
 	// ACL gate. AUTH itself is always allowed (otherwise unauth'd
 	// clients couldn't ever log in). HELLO + RESET + QUIT are also free.
+	// Replication handshake commands also bypass the gate — replicas
+	// connect before any AUTH can happen and the protocol is internal.
 	switch cmd {
-	case "AUTH", "HELLO", "QUIT", "RESET":
+	case "AUTH", "HELLO", "QUIT", "RESET",
+		"PSYNC", "REPLCONF", "SYNC":
 		// fall through
 	default:
 		if c.user == nil && c.eng.Cfg.ProtectedMode {
