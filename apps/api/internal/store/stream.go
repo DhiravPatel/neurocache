@@ -72,8 +72,12 @@ type Stream struct {
 	mu       sync.Mutex
 	entries  []StreamEntry
 	lastID   StreamID
-	waiters  []chan struct{} // XREAD BLOCK clients
+	waiters  []chan struct{} // XREAD BLOCK clients (legacy poll path)
 	maxWaitN int             // cap so bad clients can't leak memory
+
+	// groups is the consumer-group registry. Lazily initialised by
+	// XGROUP CREATE so streams without consumer groups pay nothing.
+	groups map[string]*ConsumerGroup
 }
 
 func newStream() *Stream { return &Stream{maxWaitN: 1024} }

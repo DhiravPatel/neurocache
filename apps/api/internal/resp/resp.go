@@ -15,7 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/transaction"
 )
@@ -79,6 +81,13 @@ type conn struct {
 	subs map[string]*pubsub.Subscription
 	psub map[string]*pubsub.Subscription
 
+	// auth holds the user this conn is currently acting as. Defaults to
+	// the ACL "default" user; AUTH swaps it.
+	user *acl.User
+
+	// info is the registry record for CLIENT LIST/KILL/PAUSE.
+	info *introspect.ClientInfo
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -98,7 +107,12 @@ func (s *Server) handle(nc net.Conn) {
 		tx:   transaction.New(),
 		subs: map[string]*pubsub.Subscription{},
 		psub: map[string]*pubsub.Subscription{},
+		user: s.eng.ACL.DefaultUser(),
+		info: s.eng.Clients.Register(nc.RemoteAddr().String()),
 		done: make(chan struct{}),
+	}
+	if c.user != nil {
+		c.info.Username = c.user.Name
 	}
 	defer c.cleanup()
 
@@ -113,12 +127,33 @@ func (s *Server) handle(nc net.Conn) {
 		if len(parts) == 0 {
 			continue
 		}
+		// Honour CLIENT PAUSE — the client may sit through the pause
+		// window before its command runs.
+		if rem := s.eng.Clients.PauseRemaining(); rem > 0 {
+			time.Sleep(rem)
+		}
 		start := time.Now()
 		s.eng.CmdCount.Add(1)
+		s.eng.Clients.Touch(c.info, strings.ToUpper(parts[0]))
 		c.execute(parts)
-		s.eng.Metrics.RecordCommand(strings.ToUpper(parts[0]), time.Since(start))
+		dur := time.Since(start)
+		s.eng.Metrics.RecordCommand(strings.ToUpper(parts[0]), dur)
+		s.eng.SlowLog.Maybe(dur, parts, c.info.Addr)
+		s.eng.Latency.Record("command", dur)
 		c.writeMu.Lock()
-		_ = c.bw.Flush()
+		// Honour CLIENT REPLY skip/off: silence the next reply or all replies.
+		switch c.info.ReplyMode {
+		case "skip":
+			_ = c.bw.Flush()
+			// drop the buffered bytes by truncating — implemented by
+			// resetting the writer's underlying buffer.
+			c.bw.Reset(c.nc)
+			c.info.ReplyMode = "on"
+		case "off":
+			c.bw.Reset(c.nc)
+		default:
+			_ = c.bw.Flush()
+		}
 		c.writeMu.Unlock()
 	}
 }
@@ -130,6 +165,9 @@ func (c *conn) cleanup() {
 	}
 	for _, sub := range c.psub {
 		sub.Close()
+	}
+	if c.info != nil {
+		c.eng.Clients.Forget(c.info.ID)
 	}
 	_ = c.nc.Close()
 }
@@ -148,6 +186,30 @@ var allowedDuringSubscribe = map[string]bool{
 func (c *conn) execute(parts []string) {
 	cmd := strings.ToUpper(parts[0])
 	args := parts[1:]
+
+	// ACL gate. AUTH itself is always allowed (otherwise unauth'd
+	// clients couldn't ever log in). HELLO + RESET + QUIT are also free.
+	switch cmd {
+	case "AUTH", "HELLO", "QUIT", "RESET":
+		// fall through
+	default:
+		if c.user == nil && c.eng.Cfg.ProtectedMode {
+			c.writeMu.Lock()
+			writeTypedError(c.bw, "NOAUTH", "Authentication required.")
+			c.writeMu.Unlock()
+			return
+		}
+		if c.user != nil {
+			keys := keysForCommand(cmd, args)
+			channels := channelsForCommand(cmd, args)
+			if err := c.eng.ACL.Allowed(c.user, cmd, keys, channels); err != nil {
+				c.writeMu.Lock()
+				writeTypedError(c.bw, "NOPERM", strings.TrimPrefix(err.Error(), "NOPERM "))
+				c.writeMu.Unlock()
+				return
+			}
+		}
+	}
 
 	// In subscribed mode almost nothing is allowed.
 	if len(c.subs) > 0 || len(c.psub) > 0 {

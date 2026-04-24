@@ -39,6 +39,11 @@ var writeCommands = map[string]bool{
 
 	// streams
 	"XADD": true, "XDEL": true, "XTRIM": true,
+	"XGROUP": true, "XACK": true, "XCLAIM": true, "XAUTOCLAIM": true,
+	"XREADGROUP": true,
+
+	// COPY / RESTORE both produce keys
+	"COPY": true, "RESTORE": true,
 
 	// geo
 	"GEOADD": true,

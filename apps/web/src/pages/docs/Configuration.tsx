@@ -62,7 +62,79 @@ export default function Configuration() {
           <tr>
             <td><code>NEUROCACHE_AOF_ENABLED</code></td>
             <td><code>false</code></td>
-            <td>Append-only file persistence (coming in V2).</td>
+            <td>
+              Append-only file persistence. When enabled, every write is
+              appended to <code>append.aof</code> and replayed on startup.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_AOF_FSYNC</code></td>
+            <td><code>everysec</code></td>
+            <td>
+              AOF fsync cadence: <code>always</code> (slowest, safest),{" "}
+              <code>everysec</code> (balanced), or <code>no</code> (OS-managed).
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_RDB_ENABLED</code></td>
+            <td><code>false</code></td>
+            <td>
+              Periodic gzipped-JSON snapshot written to{" "}
+              <code>dump.rdb</code>. Safe to run alongside AOF.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_RDB_INTERVAL_SEC</code></td>
+            <td><code>300</code></td>
+            <td>Seconds between scheduled RDB snapshots. 0 = manual only.</td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_REQUIREPASS</code></td>
+            <td><em>(unset)</em></td>
+            <td>
+              Legacy password gate — sets the password on the{" "}
+              <code>default</code> user. For richer ACLs, use{" "}
+              <code>NEUROCACHE_ACL_FILE</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_ACL_FILE</code></td>
+            <td><em>(unset)</em></td>
+            <td>
+              Path to a Redis-format <code>users.acl</code> file. Overrides
+              the default of <code>&lt;DATA_DIR&gt;/users.acl</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_PROTECTED_MODE</code></td>
+            <td><code>false</code></td>
+            <td>Reject commands from unauthenticated clients.</td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_SLOWLOG_THRESHOLD_US</code></td>
+            <td><code>10000</code></td>
+            <td>
+              Commands slower than this (microseconds) enter the{" "}
+              <code>SLOWLOG</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_SLOWLOG_MAX_LEN</code></td>
+            <td><code>128</code></td>
+            <td>Ring-buffer capacity for the slow log.</td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_LATENCY_MAX_LEN</code></td>
+            <td><code>160</code></td>
+            <td>Samples kept per event name for <code>LATENCY HISTORY</code>.</td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_SCRIPT_TIMEOUT_MS</code></td>
+            <td><code>5000</code></td>
+            <td>
+              Wall-clock ceiling for <code>EVAL</code> / <code>EVALSHA</code>{" "}
+              scripts.
+            </td>
           </tr>
           <tr>
             <td><code>NEUROCACHE_LOG_LEVEL</code></td>

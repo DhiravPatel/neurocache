@@ -5,6 +5,7 @@ package engine
 
 import (
 	"bufio"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -13,12 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/blocking"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
@@ -33,6 +38,12 @@ type Engine struct {
 	Scorer   eviction.Scorer
 	Metrics  *metrics.Metrics
 	PubSub   *pubsub.Broker
+	ACL      *acl.Manager
+	SlowLog  *introspect.SlowLog
+	Latency  *introspect.LatencyMonitor
+	Clients  *introspect.ClientRegistry
+	Scripts  *scripting.Cache
+	Blocker  *blocking.Hub
 
 	AOF *persistence.AOF
 	RDB *persistence.RDB
@@ -41,11 +52,33 @@ type Engine struct {
 	CmdCount  atomic.Uint64
 	stopCh    chan struct{}
 
+	// lastSave is the unix timestamp of the most recent successful RDB
+	// write (manual or scheduled). Seeded from the on-disk file's mtime
+	// at boot so LASTSAVE survives restarts.
+	lastSave atomic.Int64
+
+	// bgSaveBusy / bgRewriteBusy throttle BGSAVE and BGREWRITEAOF to a
+	// single concurrent operation. Redis also rejects re-entrant calls.
+	bgSaveBusy    atomic.Bool
+	bgRewriteBusy atomic.Bool
+
 	vmu      sync.RWMutex
 	versions map[string]uint64
 }
 
 func New(cfg config.Config, log *slog.Logger) *Engine {
+	aclMgr := acl.NewManager(log)
+	if path := acl.ResolvePath(cfg.ACLFile, cfg.DataDir); path != "" {
+		if err := aclMgr.LoadFile(path); err != nil {
+			log.Warn("acl load failed", "err", err, "path", path)
+		}
+	}
+	if cfg.RequirePass != "" {
+		// Legacy "requirepass" — set the default user's password so
+		// callers can `AUTH <pass>` without a username.
+		aclMgr.SetRequirePass(cfg.RequirePass)
+	}
+
 	e := &Engine{
 		Cfg:       cfg,
 		Log:       log,
@@ -56,6 +89,12 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Scorer:    eviction.NewScorer(cfg.Eviction),
 		Metrics:   metrics.New(),
 		PubSub:    pubsub.New(64),
+		ACL:       aclMgr,
+		SlowLog:   introspect.NewSlowLog(cfg.SlowLogMaxLen, time.Duration(cfg.SlowLogThreshold)*time.Microsecond),
+		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
+		Clients:   introspect.NewClientRegistry(),
+		Scripts:   scripting.NewCache(),
+		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
 		stopCh:    make(chan struct{}),
 		versions:  map[string]uint64{},
@@ -67,6 +106,19 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		}
 		e.PubSub.Publish("__keyspace__:"+key, event)
 		e.PubSub.Publish("__keyevent__:"+event, key)
+		// Wake any blocked clients (BLPOP/BRPOP/BLMOVE/BZPOPMIN/BZPOPMAX
+		// /XREAD BLOCK). The blocker filters by event below — only writes
+		// that produce something a consumer can pop need to fire.
+		switch event {
+		case "lpush", "rpush", "rpoplpush", "lpushx", "rpushx",
+			"zadd", "zincrby",
+			"xadd",
+			"set", "setnx", "setex", "psetex", "incr", "decr",
+			"incrby", "decrby", "incrbyfloat", "append", "setrange":
+			e.Blocker.Notify(key)
+		case "del", "expired", "flushdb":
+			e.Blocker.NotifyAll(key)
+		}
 	})
 	return e
 }
@@ -96,7 +148,7 @@ func (e *Engine) EnablePersistence(run func(cmd string, args []string) error) er
 		} else {
 			e.Log.Info("aof replayed", "path", aofPath)
 		}
-		aof, err := persistence.OpenAOF(aofPath, persistence.FsyncEverySec)
+		aof, err := persistence.OpenAOF(aofPath, parseFsyncPolicy(e.Cfg.AOFFsync))
 		if err != nil {
 			return err
 		}
@@ -109,6 +161,7 @@ func (e *Engine) EnablePersistence(run func(cmd string, args []string) error) er
 		} else if snap != nil {
 			e.KV.Restore(convertFromRDB(snap.Keys))
 			e.Log.Info("rdb loaded", "keys", len(snap.Keys), "at", snap.CreatedAt)
+			e.lastSave.Store(snap.CreatedAt.Unix())
 		}
 	}
 
@@ -172,8 +225,9 @@ func (e *Engine) RecordWrite(cmd string, args []string) {
 	_ = e.AOF.Append(cmd, args)
 }
 
-// RewriteAOF dumps the current keyspace back to the AOF as fresh SET /
-// RPUSH / HSET / ... commands. Keeps the file from growing unbounded.
+// RewriteAOF dumps the current keyspace back to the AOF synchronously.
+// Used by the CLI/replay paths. The RESP-level BGREWRITEAOF command
+// calls BGRewriteAOF to avoid blocking the caller.
 func (e *Engine) RewriteAOF() error {
 	if e.AOF == nil {
 		return nil
@@ -183,12 +237,78 @@ func (e *Engine) RewriteAOF() error {
 	})
 }
 
-// SaveRDB writes a snapshot on demand.
+// BGRewriteAOF kicks off an AOF rewrite on a background goroutine. It
+// returns immediately. Only one rewrite runs at a time — a concurrent
+// request returns ErrBgBusy so clients can retry.
+func (e *Engine) BGRewriteAOF() error {
+	if e.AOF == nil {
+		return nil
+	}
+	if !e.bgRewriteBusy.CompareAndSwap(false, true) {
+		return ErrBgBusy
+	}
+	go func() {
+		defer e.bgRewriteBusy.Store(false)
+		if err := e.RewriteAOF(); err != nil {
+			e.Log.Warn("bgrewriteaof failed", "err", err)
+		}
+	}()
+	return nil
+}
+
+// SaveRDB writes a snapshot synchronously and updates the LASTSAVE
+// timestamp on success.
 func (e *Engine) SaveRDB() error {
 	if e.RDB == nil {
 		return nil
 	}
-	return e.RDB.SaveNow()
+	if err := e.RDB.SaveNow(); err != nil {
+		return err
+	}
+	e.lastSave.Store(time.Now().Unix())
+	return nil
+}
+
+// BGSaveRDB runs an RDB snapshot on a background goroutine. Returns
+// immediately. Concurrent requests return ErrBgBusy.
+func (e *Engine) BGSaveRDB() error {
+	if e.RDB == nil {
+		return nil
+	}
+	if !e.bgSaveBusy.CompareAndSwap(false, true) {
+		return ErrBgBusy
+	}
+	go func() {
+		defer e.bgSaveBusy.Store(false)
+		if err := e.SaveRDB(); err != nil {
+			e.Log.Warn("bgsave failed", "err", err)
+		}
+	}()
+	return nil
+}
+
+// LastSave returns the unix timestamp of the last successful RDB write,
+// 0 if none has happened this process.
+func (e *Engine) LastSave() int64 { return e.lastSave.Load() }
+
+// IsBGSaveInProgress / IsBGRewriteInProgress expose the async flags to
+// INFO and DEBUG handlers.
+func (e *Engine) IsBGSaveInProgress() bool    { return e.bgSaveBusy.Load() }
+func (e *Engine) IsBGRewriteInProgress() bool { return e.bgRewriteBusy.Load() }
+
+// ErrBgBusy is returned when BGSAVE/BGREWRITEAOF is already running.
+var ErrBgBusy = fmt.Errorf("background save already in progress")
+
+// parseFsyncPolicy maps the config string onto the persistence policy.
+func parseFsyncPolicy(s string) persistence.FsyncPolicy {
+	switch s {
+	case "always":
+		return persistence.FsyncAlways
+	case "no":
+		return persistence.FsyncNo
+	default:
+		return persistence.FsyncEverySec
+	}
 }
 
 // snapshotFn is the callback the RDB loop invokes. Convert our typed
@@ -349,8 +469,11 @@ type Info struct {
 	} `json:"memory"`
 	Eviction    string `json:"eviction"`
 	Persistence struct {
-		AOF bool `json:"aof"`
-		RDB bool `json:"rdb"`
+		AOF                 bool  `json:"aof"`
+		RDB                 bool  `json:"rdb"`
+		LastSave            int64 `json:"last_save"`
+		BGSaveInProgress    bool  `json:"bgsave_in_progress"`
+		BGRewriteInProgress bool  `json:"bgrewrite_in_progress"`
 	} `json:"persistence"`
 	PubSub struct {
 		Patterns int `json:"patterns"`
@@ -379,6 +502,9 @@ func (e *Engine) Info() Info {
 	i.Memory.Users = e.Memory.Users()
 	i.Persistence.AOF = e.AOF != nil
 	i.Persistence.RDB = e.RDB != nil
+	i.Persistence.LastSave = e.LastSave()
+	i.Persistence.BGSaveInProgress = e.IsBGSaveInProgress()
+	i.Persistence.BGRewriteInProgress = e.IsBGRewriteInProgress()
 	i.PubSub.Patterns = e.PubSub.NumPat()
 	i.Runtime.Goroutines = runtime.NumGoroutine()
 	i.Runtime.GoVersion = runtime.Version()

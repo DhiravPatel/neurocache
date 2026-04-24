@@ -42,18 +42,68 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeSimple(c.bw, "OK")
 	case "DBSIZE":
 		writeInt(c.bw, int64(c.eng.KV.Size()))
-	case "COMMAND", "HELLO":
+	case "COMMAND":
 		writeArray(c.bw, []string{})
+	case "HELLO":
+		c.helloCmd(args)
 	case "QUIT":
 		writeSimple(c.bw, "OK")
 	case "AUTH":
-		writeSimple(c.bw, "OK") // no auth yet; stub so clients don't choke
+		c.authCmd(args)
+	case "ACL":
+		c.aclCmd(args)
 	case "CLIENT":
-		writeSimple(c.bw, "OK") // CLIENT SETNAME etc. — ignored
+		c.clientCmd(args)
 	case "INFO":
 		writeBulk(c.bw, c.infoString())
 	case "DEBUG":
 		writeSimple(c.bw, "OK")
+	case "RESET":
+		c.resetCmd()
+	case "OBJECT":
+		c.objectCmd(args)
+	case "MEMORY":
+		c.memoryCmd(args)
+	case "SLOWLOG":
+		c.slowlogCmd(args)
+	case "LATENCY":
+		c.latencyCmd(args)
+	case "COPY":
+		c.copyCmd(args)
+	case "DUMP":
+		c.dumpCmd(args)
+	case "RESTORE":
+		c.restoreCmd(args)
+	case "EVAL":
+		c.evalCmd(args)
+	case "EVALSHA":
+		c.evalshaCmd(args)
+	case "SCRIPT":
+		c.scriptCmd(args)
+	case "BLPOP":
+		c.blpopCmd(args, false)
+	case "BRPOP":
+		c.blpopCmd(args, true)
+	case "BLMOVE":
+		c.blmoveCmd(args)
+	case "BZPOPMIN":
+		c.bzpopCmd(args, false)
+	case "BZPOPMAX":
+		c.bzpopCmd(args, true)
+	case "XGROUP":
+		c.xgroupCmd(args)
+	case "XREADGROUP":
+		c.xreadgroupCmd(args)
+	case "XACK":
+		c.xackCmd(args)
+	case "XPENDING":
+		c.xpendingCmd(args)
+	case "XCLAIM":
+		c.xclaimCmd(args)
+	case "XAUTOCLAIM":
+		c.xautoclaimCmd(args)
+	case "XINFO":
+		c.xinfoCmd(args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{
@@ -1205,20 +1255,26 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.geohashCmd(args)
 
 	// ─── persistence ───────────────────────────────────────────────
-	case "SAVE", "BGSAVE":
+	case "SAVE":
 		if err := c.eng.SaveRDB(); err != nil {
 			writeError(c.bw, err.Error())
 			return
 		}
 		writeSimple(c.bw, "OK")
+	case "BGSAVE":
+		if err := c.eng.BGSaveRDB(); err != nil {
+			writeError(c.bw, err.Error())
+			return
+		}
+		writeSimple(c.bw, "Background saving started")
 	case "BGREWRITEAOF":
-		if err := c.eng.RewriteAOF(); err != nil {
+		if err := c.eng.BGRewriteAOF(); err != nil {
 			writeError(c.bw, err.Error())
 			return
 		}
 		writeSimple(c.bw, "Background append only file rewriting started")
 	case "LASTSAVE":
-		writeInt(c.bw, time.Now().Unix())
+		writeInt(c.bw, c.eng.LastSave())
 
 	// ─── AI-native ─────────────────────────────────────────────────
 	case "SEMANTIC_SET":
@@ -1801,23 +1857,43 @@ streams:
 		writeXReadResult(c.bw, keys, out)
 		return
 	}
-	// Simple poll-based block: sleep in short slices until the deadline
-	// or data arrives. Replace with per-stream waiters if throughput
-	// becomes a bottleneck.
-	deadline := time.Now().Add(block)
-	for time.Now().Before(deadline) {
-		time.Sleep(25 * time.Millisecond)
+	// Block until any of the keys gets a new entry. The blocker fires
+	// on every XADD; a wake just means "re-poll" — another consumer may
+	// have raced us, in which case we re-block.
+	deadline := time.Time{}
+	if block > 0 {
+		deadline = time.Now().Add(block)
+	}
+	for {
+		w := c.eng.Blocker.Register(keys...)
 		out, err = c.eng.KV.XRead(keys, ids, count)
 		if err != nil {
+			w.Cancel()
 			c.writeStoreErr(err)
 			return
 		}
 		if len(out) > 0 {
+			w.Cancel()
 			writeXReadResult(c.bw, keys, out)
 			return
 		}
+		var remaining time.Duration
+		if !deadline.IsZero() {
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				w.Cancel()
+				writeNilArray(c.bw)
+				return
+			}
+		}
+		_ = c.bw.Flush()
+		_, woke := w.Wait(remaining)
+		w.Cancel()
+		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
 	}
-	writeNilArray(c.bw)
 }
 
 func writeStreamEntries(w *bufio.Writer, entries []store.StreamEntry) {

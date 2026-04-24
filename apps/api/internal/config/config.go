@@ -16,11 +16,26 @@ type Config struct {
 	SemThreshold   float64
 	DataDir        string
 	AOFEnabled     bool
+	AOFFsync       string // "always" | "everysec" | "no"
 	RDBEnabled     bool
 	RDBIntervalSec int
 	LogLevel       string
 	LogFormat      string
 	CORSOrigins    []string
+
+	// Access control
+	ACLFile        string // path to ACL users file (empty => default users.acl in DataDir)
+	RequirePass    string // legacy "requirepass" — default user password when no ACL file
+	ProtectedMode  bool   // when true, refuse to run commands from unauthenticated clients
+
+	// Introspection limits
+	SlowLogMaxLen    int   // entries kept in the slowlog ring
+	SlowLogThreshold int64 // microseconds; commands slower than this enter the slowlog
+	LatencyMaxLen    int   // events kept per latency event name
+	ClientIdleMax    int   // seconds; 0 disables the CLIENT NO-EVICT idle cap
+
+	// Scripting
+	ScriptTimeoutMs int // Lua script wall-clock ceiling (5000 = 5s)
 }
 
 func Load() Config {
@@ -34,11 +49,23 @@ func Load() Config {
 		SemThreshold: envFloat("NEUROCACHE_SEMANTIC_THRESHOLD", 0.75),
 		DataDir:        env("NEUROCACHE_DATA_DIR", "./data"),
 		AOFEnabled:     envBool("NEUROCACHE_AOF_ENABLED", false),
+		AOFFsync:       strings.ToLower(env("NEUROCACHE_AOF_FSYNC", "everysec")),
 		RDBEnabled:     envBool("NEUROCACHE_RDB_ENABLED", false),
 		RDBIntervalSec: envInt("NEUROCACHE_RDB_INTERVAL_SEC", 300),
 		LogLevel:       env("NEUROCACHE_LOG_LEVEL", "info"),
 		LogFormat:      env("NEUROCACHE_LOG_FORMAT", "text"),
 		CORSOrigins:    splitCSV(env("NEUROCACHE_CORS_ORIGINS", "*")),
+
+		ACLFile:       env("NEUROCACHE_ACL_FILE", ""),
+		RequirePass:   env("NEUROCACHE_REQUIREPASS", ""),
+		ProtectedMode: envBool("NEUROCACHE_PROTECTED_MODE", false),
+
+		SlowLogMaxLen:    envInt("NEUROCACHE_SLOWLOG_MAX_LEN", 128),
+		SlowLogThreshold: int64(envInt("NEUROCACHE_SLOWLOG_THRESHOLD_US", 10000)),
+		LatencyMaxLen:    envInt("NEUROCACHE_LATENCY_MAX_LEN", 160),
+		ClientIdleMax:    envInt("NEUROCACHE_CLIENT_IDLE_MAX", 0),
+
+		ScriptTimeoutMs: envInt("NEUROCACHE_SCRIPT_TIMEOUT_MS", 5000),
 	}
 }
 

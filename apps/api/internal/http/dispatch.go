@@ -901,12 +901,181 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 		return h.eng.KV.GeoHash(args[0], args[1:]...)
 
 	// ─── persistence ───────────────────────────────────────────────
-	case "SAVE", "BGSAVE":
+	case "SAVE":
 		return "OK", h.eng.SaveRDB()
+	case "BGSAVE":
+		return "Background saving started", h.eng.BGSaveRDB()
 	case "BGREWRITEAOF":
-		return "Background append only file rewriting started", h.eng.RewriteAOF()
+		return "Background append only file rewriting started", h.eng.BGRewriteAOF()
 	case "LASTSAVE":
-		return time.Now().Unix(), nil
+		return h.eng.LastSave(), nil
+
+	// ─── consumer groups (needed for AOF replay) ───────────────────
+	case "XGROUP":
+		return httpXGroup(h, args)
+	case "XREADGROUP":
+		return httpXReadGroup(h, args)
+	case "XACK":
+		if len(args) < 3 {
+			return nil, errors.New("XACK key group id [id ...]")
+		}
+		return h.eng.KV.XAck(args[0], args[1], args[2:])
+	case "XPENDING":
+		if len(args) < 2 {
+			return nil, errors.New("XPENDING key group")
+		}
+		if len(args) == 2 {
+			return h.eng.KV.XPending(args[0], args[1], true, "-", "+", 0, "")
+		}
+		start, end, count := args[2], args[3], 0
+		if len(args) >= 5 {
+			count, _ = strconv.Atoi(args[4])
+		}
+		consumer := ""
+		if len(args) >= 6 {
+			consumer = args[5]
+		}
+		return h.eng.KV.XPending(args[0], args[1], false, start, end, count, consumer)
+	case "XCLAIM":
+		return httpXClaim(h, args)
+	case "XAUTOCLAIM":
+		return httpXAutoClaim(h, args)
+	case "XINFO":
+		return httpXInfo(h, args)
+
+	// ─── COPY / DUMP / RESTORE ─────────────────────────────────────
+	case "COPY":
+		if len(args) < 2 {
+			return nil, errors.New("COPY src dst [REPLACE]")
+		}
+		replace := false
+		for _, a := range args[2:] {
+			if strings.EqualFold(a, "REPLACE") {
+				replace = true
+			}
+		}
+		return h.eng.KV.Copy(args[0], args[1], replace)
+	case "DUMP":
+		if len(args) < 1 {
+			return nil, errors.New("DUMP key")
+		}
+		blob, ok, err := h.eng.KV.Dump(args[0])
+		if err != nil || !ok {
+			return nil, err
+		}
+		return blob, nil
+	case "RESTORE":
+		if len(args) < 3 {
+			return nil, errors.New("RESTORE key ttl blob [REPLACE]")
+		}
+		ttl, _ := strconv.ParseInt(args[1], 10, 64)
+		replace := false
+		for _, a := range args[3:] {
+			if strings.EqualFold(a, "REPLACE") {
+				replace = true
+			}
+		}
+		return "OK", h.eng.KV.RestoreKey(args[0], ttl, args[2], replace)
+
+	// ─── introspection ─────────────────────────────────────────────
+	case "OBJECT":
+		if len(args) < 2 {
+			return nil, errors.New("OBJECT subcommand key")
+		}
+		info, ok := h.eng.KV.Object(args[1])
+		if !ok {
+			return nil, nil
+		}
+		switch strings.ToUpper(args[0]) {
+		case "ENCODING":
+			return info.Encoding, nil
+		case "IDLETIME":
+			return info.IdleSec, nil
+		case "FREQ":
+			return int64(info.FreqHits), nil
+		case "REFCOUNT":
+			return int64(1), nil
+		}
+		return info, nil
+	case "MEMORY":
+		if len(args) < 1 {
+			return nil, errors.New("MEMORY USAGE|STATS|DOCTOR|PURGE")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "USAGE":
+			if len(args) < 2 {
+				return nil, errors.New("MEMORY USAGE key")
+			}
+			info, ok := h.eng.KV.Object(args[1])
+			if !ok {
+				return nil, nil
+			}
+			return info.Bytes, nil
+		case "DOCTOR":
+			return "no issues", nil
+		case "PURGE":
+			return "OK", nil
+		}
+		return "OK", nil
+	case "SLOWLOG":
+		if len(args) < 1 {
+			return nil, errors.New("SLOWLOG GET|LEN|RESET")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "GET":
+			count := 0
+			if len(args) >= 2 {
+				count, _ = strconv.Atoi(args[1])
+			}
+			return h.eng.SlowLog.Get(count), nil
+		case "LEN":
+			return int64(h.eng.SlowLog.Len()), nil
+		case "RESET":
+			h.eng.SlowLog.Reset()
+			return "OK", nil
+		}
+		return nil, errors.New("unknown SLOWLOG subcommand")
+	case "LATENCY":
+		if len(args) < 1 {
+			return nil, errors.New("LATENCY HISTORY|LATEST|RESET|DOCTOR")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "LATEST":
+			return h.eng.Latency.Latest(), nil
+		case "HISTORY":
+			if len(args) < 2 {
+				return nil, errors.New("LATENCY HISTORY event")
+			}
+			return h.eng.Latency.History(args[1]), nil
+		case "RESET":
+			return int64(h.eng.Latency.Reset(args[1:]...)), nil
+		case "DOCTOR":
+			return h.eng.Latency.Doctor(), nil
+		}
+		return nil, errors.New("unknown LATENCY subcommand")
+
+	// ─── ACL (read-only from HTTP; writes require RESP+auth) ───────
+	case "ACL":
+		return httpACL(h, args)
+
+	// ─── SCRIPT cache management ───────────────────────────────────
+	case "SCRIPT":
+		if len(args) < 1 {
+			return nil, errors.New("SCRIPT LOAD|EXISTS|FLUSH")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "LOAD":
+			if len(args) < 2 {
+				return nil, errors.New("SCRIPT LOAD script")
+			}
+			return h.eng.Scripts.Load(args[1]), nil
+		case "EXISTS":
+			return h.eng.Scripts.Exists(args[1:]...), nil
+		case "FLUSH":
+			h.eng.Scripts.Flush()
+			return "OK", nil
+		}
+		return nil, errors.New("unknown SCRIPT subcommand")
 
 	// ─── AI-native ─────────────────────────────────────────────────
 	case "SEMANTIC_SET":

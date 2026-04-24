@@ -37,7 +37,7 @@ export default function Commands() {
       </p>
 
       <div className="my-6 rounded-lg border border-border bg-white/5 px-4 py-3 text-sm">
-        <strong>~146 commands</strong> across <strong>7 data types</strong> +
+        <strong>~210 commands</strong> across <strong>7 data types</strong> +
         AI-native extensions. Organized below by group. Jump to:{" "}
         <a href="#connection">Connection</a> · <a href="#keys">Keys/TTL</a> ·{" "}
         <a href="#strings">Strings</a> · <a href="#lists">Lists</a> ·{" "}
@@ -45,8 +45,11 @@ export default function Commands() {
         <a href="#zsets">Sorted Sets</a> · <a href="#streams">Streams</a> ·{" "}
         <a href="#geo">Geo</a> · <a href="#bitmaps">Bitmaps</a> ·{" "}
         <a href="#hll">HyperLogLog</a> · <a href="#pubsub">Pub/Sub</a> ·{" "}
-        <a href="#tx">Transactions</a> · <a href="#persistence">Persistence</a>{" "}
-        · <a href="#ai">AI-native</a> · <a href="#http">HTTP API</a>
+        <a href="#tx">Transactions</a> · <a href="#blocking">Blocking</a> ·{" "}
+        <a href="#acl">Auth / ACL</a> · <a href="#scripting">Scripting</a> ·{" "}
+        <a href="#introspect">Introspection</a> ·{" "}
+        <a href="#persistence">Persistence</a> · <a href="#ai">AI-native</a> ·{" "}
+        <a href="#http">HTTP API</a>
       </div>
 
       {/* ── connection / server ───────────────────────────────────── */}
@@ -57,11 +60,11 @@ export default function Commands() {
           { cmd: "ECHO message", desc: "Return the message back." },
           { cmd: "SELECT 0", desc: "NeuroCache exposes a single logical database (db 0 only)." },
           { cmd: "DBSIZE", desc: "Total live key count." },
-          { cmd: "INFO", desc: "Server metadata (version, uptime, memory, keys)." },
+          { cmd: "INFO", desc: "Server metadata (version, uptime, memory, keys, persistence state)." },
           { cmd: "TIME", desc: "Server wall-clock as [seconds, microseconds]." },
-          { cmd: "COMMAND / HELLO", desc: "Minimal handshake replies (no-op compatibility stubs)." },
-          { cmd: "AUTH password", desc: "Stub — accepts any password. No ACL yet." },
-          { cmd: "CLIENT *", desc: "Stubbed. Returns OK so drivers that send CLIENT SETNAME don't choke." },
+          { cmd: "HELLO [protover [AUTH user pass] [SETNAME name]]", desc: "Server handshake; optional inline AUTH and client name." },
+          { cmd: "AUTH [username] password", desc: "Authenticate as an ACL user. One-arg form targets the default user (legacy requirepass)." },
+          { cmd: "RESET", desc: "Discard MULTI/WATCH state, unsubscribe from all channels, revert to the default user." },
           { cmd: "FLUSHDB / FLUSHALL", desc: "Delete every key in the keyspace." },
           { cmd: "QUIT", desc: "Close the connection." },
         ]}
@@ -87,6 +90,10 @@ export default function Commands() {
           { cmd: "RENAMENX src dst", desc: "Rename only if dst doesn't exist." },
           { cmd: "SCAN cursor [MATCH pat] [COUNT n] [TYPE t]", desc: "Cursor-based keyspace scan." },
           { cmd: "RANDOMKEY", desc: "Return an arbitrary live key." },
+          { cmd: "OBJECT ENCODING|IDLETIME|FREQ|REFCOUNT key", desc: "Per-key introspection: storage encoding, idle seconds, hit count." },
+          { cmd: "COPY src dst [REPLACE]", desc: "Deep-copy a key. Fails if dst exists without REPLACE." },
+          { cmd: "DUMP key", desc: "Serialize a key as an opaque gob+gzip blob usable with RESTORE." },
+          { cmd: "RESTORE key ttl-ms blob [REPLACE]", desc: "Recreate a key from a DUMP blob. TTL 0 = no expiry." },
         ]}
       />
 
@@ -201,8 +208,8 @@ export default function Commands() {
       <h2 id="streams">Streams</h2>
       <p>
         Append-only log with auto-generated IDs (<code>ms-seq</code>). Supports
-        server-side trimming and non-blocking reads; <code>XREAD BLOCK</code>{" "}
-        is available over RESP.
+        server-side trimming, blocking reads, and full consumer-group semantics
+        with a pending-entries list (PEL) per group.
       </p>
       <CmdTable
         rows={[
@@ -212,7 +219,29 @@ export default function Commands() {
           { cmd: "XREVRANGE key end start [COUNT n]", desc: "Reverse iteration." },
           { cmd: "XDEL key id [id ...]", desc: "Remove specific entries by ID." },
           { cmd: "XTRIM key MAXLEN [~|=] N", desc: "Cap the stream at N entries; returns removed count." },
-          { cmd: "XREAD [COUNT n] [BLOCK ms] STREAMS key [...] id [...]", desc: "Read entries newer than the given IDs; optionally block." },
+          { cmd: "XREAD [COUNT n] [BLOCK ms] STREAMS key [...] id [...]", desc: "Read entries newer than the given IDs; BLOCK uses real wait/notify, not polling." },
+        ]}
+      />
+      <h3>Consumer groups</h3>
+      <p>
+        Multiple consumers in the same group share an ever-advancing cursor,
+        so each new entry is delivered to exactly one of them. Un-ACKed
+        deliveries stay in the group&apos;s PEL and can be reclaimed by any
+        consumer with <code>XCLAIM</code> / <code>XAUTOCLAIM</code>.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "XGROUP CREATE key group id [MKSTREAM]", desc: "Create a group starting at id (0 or $). MKSTREAM auto-creates the stream." },
+          { cmd: "XGROUP SETID key group id", desc: "Reset a group's last-delivered-id." },
+          { cmd: "XGROUP DESTROY key group", desc: "Remove a group and every consumer under it." },
+          { cmd: "XGROUP CREATECONSUMER key group consumer", desc: "Ensure a consumer exists. Returns 1 if newly created." },
+          { cmd: "XGROUP DELCONSUMER key group consumer", desc: "Remove a consumer. Returns how many pending entries it owned." },
+          { cmd: "XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key ... id ...", desc: "Read new entries (> ) or replay this consumer's PEL (any other id). NOACK skips PEL bookkeeping." },
+          { cmd: "XACK key group id [id ...]", desc: "Acknowledge delivery; drops entries from the PEL." },
+          { cmd: "XPENDING key group [[IDLE ms] start end count [consumer]]", desc: "Summary form (no extra args) or long form with range + optional consumer filter." },
+          { cmd: "XCLAIM key group consumer min-idle-ms id [id ...] [IDLE ms] [TIME t] [RETRYCOUNT n] [FORCE] [JUSTID]", desc: "Re-assign pending entries to a new consumer." },
+          { cmd: "XAUTOCLAIM key group consumer min-idle-ms start [COUNT n] [JUSTID]", desc: "Scan the PEL and bulk-claim idle entries. Returns cursor, claimed entries, and deleted IDs." },
+          { cmd: "XINFO STREAM|GROUPS|CONSUMERS key [group]", desc: "Metadata: stream length + last-id, group cursors, per-consumer pending counts + idle time." },
         ]}
       />
 
@@ -302,19 +331,150 @@ export default function Commands() {
         ]}
       />
 
+      {/* ── blocking ─────────────────────────────────────────────── */}
+      <h2 id="blocking">Blocking commands</h2>
+      <p>
+        Backed by a per-key waiter hub — producers fire notifications on{" "}
+        <code>LPUSH</code> / <code>RPUSH</code> / <code>ZADD</code> /{" "}
+        <code>XADD</code>, and blocked consumers wake immediately without
+        polling. <code>timeout</code> is a float in seconds; <code>0</code>{" "}
+        means wait forever.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "BLPOP key [key ...] timeout", desc: "Pop from the head of the first non-empty list; block until one has data." },
+          { cmd: "BRPOP key [key ...] timeout", desc: "Same, popping from the tail." },
+          { cmd: "BLMOVE src dst LEFT|RIGHT LEFT|RIGHT timeout", desc: "Atomic pop-from-src + push-to-dst with a blocking wait." },
+          { cmd: "BZPOPMIN key [key ...] timeout", desc: "Block-pop the lowest-scoring member of the first non-empty sorted set." },
+          { cmd: "BZPOPMAX key [key ...] timeout", desc: "Block-pop the highest-scoring member." },
+          { cmd: "XREAD ... BLOCK ms ...", desc: "See Streams. Uses the same waiter hub; replaces the older 25ms poll loop." },
+          { cmd: "XREADGROUP ... BLOCK ms ...", desc: "Consumer-group read with blocking semantics." },
+        ]}
+      />
+
+      {/* ── auth / ACL ───────────────────────────────────────────── */}
+      <h2 id="acl">Auth &amp; ACL</h2>
+      <p>
+        Users, commands, categories, key patterns, and channel patterns are all
+        first-class. The default user is <code>default</code> with{" "}
+        <code>nopass</code> + wildcard permissions unless you set{" "}
+        <code>NEUROCACHE_REQUIREPASS</code> or load a{" "}
+        <code>users.acl</code> file. Set{" "}
+        <code>NEUROCACHE_PROTECTED_MODE=true</code> to reject commands from
+        unauthenticated clients.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "ACL WHOAMI", desc: "Name of the user on the current connection." },
+          { cmd: "ACL LIST / ACL USERS", desc: "Every user — LIST returns canonical rules, USERS returns just the names." },
+          { cmd: "ACL GETUSER name", desc: "Flags, password hashes, key patterns, channel patterns, commands." },
+          { cmd: "ACL SETUSER name [rule ...]", desc: "Create/update a user (see rule grammar below). Persists to users.acl." },
+          { cmd: "ACL DELUSER name [name ...]", desc: "Delete users. The default user is protected." },
+          { cmd: "ACL CAT [category]", desc: "List all categories, or all commands in one." },
+          { cmd: "ACL LOG [count | RESET]", desc: "Recent rejections (auth-fail, command-denied, key-denied, channel-denied)." },
+          { cmd: "ACL GENPASS [bits]", desc: "Mint a random hex password. Uses crypto/rand." },
+          { cmd: "ACL SAVE", desc: "Flush the in-memory registry to users.acl." },
+        ]}
+      />
+      <h3>SETUSER rule grammar</h3>
+      <p>Compatible with Redis. Rules are applied in order.</p>
+      <ul>
+        <li><code>on</code> / <code>off</code> — enable / disable the user.</li>
+        <li><code>nopass</code> / <code>resetpass</code> — accept any password / clear passwords.</li>
+        <li><code>&gt;pw</code> / <code>&lt;pw</code> — add / remove a plaintext password (hashed on write).</li>
+        <li><code>#hex</code> / <code>!hex</code> — add / remove an already-hashed password.</li>
+        <li><code>+CMD</code> / <code>-CMD</code> — grant / revoke a single command.</li>
+        <li><code>+@cat</code> / <code>-@cat</code> — grant / revoke a category.</li>
+        <li><code>allcommands</code> (<code>+@all</code>) / <code>nocommands</code>.</li>
+        <li><code>~pat</code> / <code>allkeys</code> / <code>resetkeys</code> — key-pattern access.</li>
+        <li><code>&amp;pat</code> / <code>allchannels</code> / <code>resetchannels</code> — pub/sub channel access.</li>
+        <li><code>reset</code> — wipe everything.</li>
+      </ul>
+      <Code lang="bash">{`# Create a read-only user scoped to the "cache:*" prefix
+ACL SETUSER alice on >s3cret ~cache:* +@read
+# Promote them to full access, including writes
+ACL SETUSER alice +@write +@list +@set
+# Revoke dangerous operations explicitly
+ACL SETUSER alice -FLUSHALL -DEBUG
+# Confirm
+ACL GETUSER alice
+AUTH alice s3cret`}</Code>
+
+      {/* ── scripting ────────────────────────────────────────────── */}
+      <h2 id="scripting">Scripting</h2>
+      <p>
+        Scripts run under an embedded Lua-subset interpreter with a
+        configurable wall-clock deadline (<code>NEUROCACHE_SCRIPT_TIMEOUT_MS</code>).
+        <code> redis.call</code> re-enters the dispatcher and re-checks ACL
+        permissions, so a script can never widen its caller&apos;s grants.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "EVAL script numkeys [key ...] [arg ...]", desc: "Run a script. KEYS and ARGV are pre-populated Lua tables (1-indexed)." },
+          { cmd: "EVALSHA sha1 numkeys [key ...] [arg ...]", desc: "Same but looks the script up by hash. Returns NOSCRIPT when absent." },
+          { cmd: "SCRIPT LOAD script", desc: "Precompile a script and return its sha1." },
+          { cmd: "SCRIPT EXISTS sha1 [sha1 ...]", desc: "1/0 vector for whether each hash is cached." },
+          { cmd: "SCRIPT FLUSH", desc: "Drop every cached script." },
+        ]}
+      />
+      <p>
+        <strong>Supported subset:</strong> local/assignment, numbers, strings,
+        booleans, nil, tables (array + hash), <code>if / elseif / else</code>,{" "}
+        <code>while</code>, numeric <code>for</code>, <code>for-in</code> over
+        tables, <code>return</code>, <code>break</code>, arithmetic +
+        comparison + <code>..</code> concat, <code>not</code>/<code>and</code>/<code>or</code>,
+        and the <code>redis.*</code> / <code>KEYS</code> / <code>ARGV</code> globals.
+      </p>
+      <Code lang="lua">{`-- atomic rate-limit: allow N hits per window
+local n = tonumber(redis.call("INCR", KEYS[1]))
+if n == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+if n > tonumber(ARGV[2]) then
+  return redis.error_reply("rate_limited")
+end
+return n`}</Code>
+
+      {/* ── introspection ────────────────────────────────────────── */}
+      <h2 id="introspect">Introspection &amp; Operations</h2>
+      <CmdTable
+        rows={[
+          { cmd: "CLIENT ID", desc: "Numeric ID of this connection." },
+          { cmd: "CLIENT GETNAME / SETNAME name", desc: "Read or set the friendly name shown in CLIENT LIST." },
+          { cmd: "CLIENT INFO", desc: "One-line summary of the current connection." },
+          { cmd: "CLIENT LIST", desc: "Newline-separated summary of every connected client." },
+          { cmd: "CLIENT KILL ID id", desc: "Evict a client by ID. Returns 1 / 0." },
+          { cmd: "CLIENT PAUSE ms / CLIENT UNPAUSE", desc: "Pause new command execution on every client for ms milliseconds." },
+          { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
+          { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
+          { cmd: "SLOWLOG GET [count]", desc: "Most-recent slow executions (id, timestamp, micros, command, client)." },
+          { cmd: "SLOWLOG LEN / SLOWLOG RESET", desc: "Entry count / wipe the ring buffer." },
+          { cmd: "LATENCY LATEST", desc: "One row per event name with the most recent sample." },
+          { cmd: "LATENCY HISTORY event", desc: "Every sample for an event name." },
+          { cmd: "LATENCY RESET [event ...]", desc: "Clear one or every event bucket." },
+          { cmd: "LATENCY DOCTOR / LATENCY GRAPH", desc: "Human-readable summary / ASCII graph." },
+          { cmd: "MEMORY USAGE key", desc: "Approximate bytes held for a key." },
+          { cmd: "MEMORY STATS", desc: "Heap + dataset byte counters, goroutine count." },
+          { cmd: "MEMORY DOCTOR / MEMORY PURGE", desc: "Diagnostic text / runtime.GC trigger." },
+        ]}
+      />
+
       {/* ── persistence ──────────────────────────────────────────── */}
       <h2 id="persistence">Persistence</h2>
       <p>
         Enable AOF with <code>NEUROCACHE_AOF_ENABLED=true</code>, RDB with{" "}
-        <code>NEUROCACHE_RDB_ENABLED=true</code>. If AOF is enabled it is the
-        sole source of truth on startup; RDB is still written periodically as
-        a fast backup.
+        <code>NEUROCACHE_RDB_ENABLED=true</code>. Fsync cadence for the AOF is
+        controlled by <code>NEUROCACHE_AOF_FSYNC</code> (<code>always</code>,{" "}
+        <code>everysec</code>, <code>no</code>). When both are enabled, AOF is
+        the sole source of truth on startup; RDB still runs as a periodic
+        backup and a fast cold-boot restore.
       </p>
       <CmdTable
         rows={[
-          { cmd: "SAVE / BGSAVE", desc: "Write an RDB snapshot (gzipped JSON) to NEUROCACHE_DATA_DIR/dump.rdb." },
-          { cmd: "BGREWRITEAOF", desc: "Rebuild append.aof from the live keyspace (atomic rename)." },
-          { cmd: "LASTSAVE", desc: "Unix timestamp of the most recent snapshot." },
+          { cmd: "SAVE", desc: "Write an RDB snapshot synchronously (blocks the caller)." },
+          { cmd: "BGSAVE", desc: "Same, but on a background goroutine. Returns 'Background saving started' or an error if one is already in flight." },
+          { cmd: "BGREWRITEAOF", desc: "Rebuild append.aof from the live keyspace, atomically renamed. Runs in the background." },
+          { cmd: "LASTSAVE", desc: "Unix timestamp of the last successful RDB write (seeded from dump.rdb mtime at boot)." },
         ]}
       />
 
@@ -388,32 +548,38 @@ curl -X POST http://localhost:8080/api/exec \\
 
       <h2>Not yet implemented</h2>
       <p>
-        Some Redis features are intentionally out of scope for now. If you
-        need any of these, open an issue:
+        These require cluster-level architecture and are on the Part 2
+        roadmap. Open an issue if any of them block you:
       </p>
       <ul>
         <li>
-          <strong>Stream consumer groups:</strong> XGROUP, XREADGROUP, XACK,
-          XCLAIM, XAUTOCLAIM, XPENDING, XINFO
+          <strong>Replication:</strong> <code>REPLICAOF</code>, <code>PSYNC</code>,
+          <code> WAIT</code>, <code>FAILOVER</code>, <code>ROLE</code>
         </li>
         <li>
-          <strong>Blocking commands:</strong> BLPOP, BRPOP, BLMOVE, BLMPOP,
-          BZPOPMIN/MAX
+          <strong>Cluster:</strong> <code>CLUSTER *</code>,{" "}
+          <code>MIGRATE</code>, <code>READONLY</code> / <code>READWRITE</code>,
+          keyslot routing
         </li>
         <li>
-          <strong>Advanced sorted-set ops:</strong> ZUNIONSTORE, ZINTERSTORE,
-          ZDIFFSTORE, ZRANGEBYLEX, ZRANGESTORE
+          <strong>Modules:</strong> <code>MODULE LOAD</code> / <code>UNLOAD</code>{" "}
+          and a stable module ABI
         </li>
         <li>
-          <strong>Scripting:</strong> EVAL, EVALSHA, FUNCTION, FCALL (requires
-          an embedded Lua VM)
+          <strong>Redis Stack types:</strong> RedisJSON (<code>JSON.*</code>),
+          RediSearch (<code>FT.*</code>), TimeSeries (<code>TS.*</code>),
+          Bloom / Cuckoo / CMS
         </li>
         <li>
-          <strong>Cluster / Replication:</strong> CLUSTER *, REPLICAOF, ROLE,
-          FAILOVER
+          <strong>Advanced sorted-set ops:</strong> <code>ZUNIONSTORE</code>,{" "}
+          <code>ZINTERSTORE</code>, <code>ZDIFFSTORE</code>,{" "}
+          <code>ZRANGEBYLEX</code>, <code>ZRANGESTORE</code>,{" "}
+          <code>ZMPOP</code> / <code>BZMPOP</code>
         </li>
         <li>
-          <strong>ACL:</strong> ACL SETUSER, USERS, GETUSER, CAT, WHOAMI
+          <strong>Functions / FCALL:</strong> the stateful successor to EVAL.
+          EVAL itself is implemented via a Lua-subset interpreter (see{" "}
+          <a href="#scripting">Scripting</a>).
         </li>
       </ul>
     </>
