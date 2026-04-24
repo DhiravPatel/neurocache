@@ -137,6 +137,33 @@ export default function Configuration() {
             </td>
           </tr>
           <tr>
+            <td><code>NEUROCACHE_REPLICAOF</code></td>
+            <td><em>(unset)</em></td>
+            <td>
+              <code>host:port</code> of a master to follow at boot.
+              Equivalent to issuing <code>REPLICAOF</code> before the
+              first client connects. Leave unset to start as a master.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_REPL_BACKLOG_SIZE</code></td>
+            <td><code>1048576</code></td>
+            <td>
+              Bytes retained for partial-resync. Sized so a brief network
+              hiccup doesn&apos;t force a full RDB resend; raise this for
+              chatty workloads where replicas may disconnect for tens of
+              seconds.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_REPL_TIMEOUT_SEC</code></td>
+            <td><code>60</code></td>
+            <td>
+              Dial / read timeout for the replica → master link. The
+              dial loop backs off (1s → 10s) between retries.
+            </td>
+          </tr>
+          <tr>
             <td><code>NEUROCACHE_LOG_LEVEL</code></td>
             <td><code>info</code></td>
             <td><code>debug | info | warn | error</code>.</td>

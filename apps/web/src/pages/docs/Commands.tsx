@@ -37,7 +37,7 @@ export default function Commands() {
       </p>
 
       <div className="my-6 rounded-lg border border-border bg-white/5 px-4 py-3 text-sm">
-        <strong>~210 commands</strong> across <strong>7 data types</strong> +
+        <strong>~220 commands</strong> across <strong>7 data types</strong> +
         AI-native extensions. Organized below by group. Jump to:{" "}
         <a href="#connection">Connection</a> · <a href="#keys">Keys/TTL</a> ·{" "}
         <a href="#strings">Strings</a> · <a href="#lists">Lists</a> ·{" "}
@@ -48,6 +48,7 @@ export default function Commands() {
         <a href="#tx">Transactions</a> · <a href="#blocking">Blocking</a> ·{" "}
         <a href="#acl">Auth / ACL</a> · <a href="#scripting">Scripting</a> ·{" "}
         <a href="#introspect">Introspection</a> ·{" "}
+        <a href="#replication">Replication</a> ·{" "}
         <a href="#persistence">Persistence</a> · <a href="#ai">AI-native</a> ·{" "}
         <a href="#http">HTTP API</a>
       </div>
@@ -459,6 +460,51 @@ return n`}</Code>
         ]}
       />
 
+      {/* ── replication ──────────────────────────────────────────── */}
+      <h2 id="replication">Replication</h2>
+      <p>
+        Async master → replica streaming. The master appends every write
+        to a fixed-size byte-offset backlog (default 1 MiB) and fans the
+        bytes out to every connected replica. Replicas dial the master,
+        run a <code>PING / REPLCONF / PSYNC</code> handshake, consume an
+        RDB snapshot on first connect (or resume from the backlog if
+        their replid+offset are still in range), and ACK their applied
+        offset every second so <code>WAIT</code> can tell when N
+        replicas have caught up.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "REPLICAOF host port", desc: "Switch this node into replica mode following host:port. Drops any prior follower link." },
+          { cmd: "REPLICAOF NO ONE / SLAVEOF NO ONE", desc: "Promote this node back to master. Mints a fresh replid; the previous one is preserved for partial-resync of former siblings." },
+          { cmd: "SLAVEOF host port", desc: "Legacy alias of REPLICAOF." },
+          { cmd: "ROLE", desc: "Reports master|slave + offset. On a master also lists every connected replica with its acknowledged offset." },
+          { cmd: "WAIT numreplicas timeout-ms", desc: "Block until numreplicas have ACKed the master's current offset, or the deadline fires. Returns the count actually reached." },
+          { cmd: "FAILOVER [TO host port] [TIMEOUT ms] [ABORT|FORCE]", desc: "Promote a chosen replica to master (TO form), self-promote (no args, on a replica), or cancel an in-flight failover (ABORT)." },
+          { cmd: "PSYNC replid offset / SYNC", desc: "Internal handshake. Replies +FULLRESYNC <replid> <offset> and streams an RDB dump, or +CONTINUE to resume from the backlog." },
+          { cmd: "REPLCONF listening-port|capa|ack|getack ...", desc: "Internal handshake / heartbeat. Replicas announce their listen port and capabilities; ACKs feed WAIT." },
+        ]}
+      />
+      <p>
+        <strong>Auto-follow at boot:</strong> set{" "}
+        <code>NEUROCACHE_REPLICAOF=host:port</code> and the engine will
+        dial the master before accepting client traffic. Backlog size
+        and dial timeout are tunable — see{" "}
+        <a href="/docs/configuration">Configuration</a>.
+      </p>
+      <Code lang="bash">{`# On the replica
+redis-cli -p 6380 REPLICAOF localhost 6379
+
+# On the master, after a few writes
+redis-cli -p 6379 ROLE
+# 1) "master"
+# 2) (integer) 1428                     ← current byte offset
+# 3) 1) 1) "127.0.0.1"
+#       2) "6380"                       ← replica's listen port
+#       3) (integer) 1428               ← replica's ACKed offset
+
+# Block until at least 1 replica has caught up to the current offset
+redis-cli -p 6379 WAIT 1 5000           # → (integer) 1`}</Code>
+
       {/* ── persistence ──────────────────────────────────────────── */}
       <h2 id="persistence">Persistence</h2>
       <p>
@@ -548,18 +594,15 @@ curl -X POST http://localhost:8080/api/exec \\
 
       <h2>Not yet implemented</h2>
       <p>
-        These require cluster-level architecture and are on the Part 2
-        roadmap. Open an issue if any of them block you:
+        These remain on the Part 2 roadmap. Replication shipped — see{" "}
+        <a href="#replication">Replication</a> above. Open an issue if
+        any of the rest blocks you:
       </p>
       <ul>
         <li>
-          <strong>Replication:</strong> <code>REPLICAOF</code>, <code>PSYNC</code>,
-          <code> WAIT</code>, <code>FAILOVER</code>, <code>ROLE</code>
-        </li>
-        <li>
           <strong>Cluster:</strong> <code>CLUSTER *</code>,{" "}
           <code>MIGRATE</code>, <code>READONLY</code> / <code>READWRITE</code>,
-          keyslot routing
+          <code> ASKING</code>, 16384-slot keyslot routing
         </li>
         <li>
           <strong>Modules:</strong> <code>MODULE LOAD</code> / <code>UNLOAD</code>{" "}
