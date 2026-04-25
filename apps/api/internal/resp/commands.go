@@ -104,6 +104,20 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.xautoclaimCmd(args)
 	case "XINFO":
 		c.xinfoCmd(args)
+
+	// ─── replication ───────────────────────────────────────────────
+	case "REPLICAOF", "SLAVEOF":
+		c.replicaofCmd(args)
+	case "ROLE":
+		c.roleCmd()
+	case "WAIT":
+		c.waitCmd(args)
+	case "FAILOVER":
+		c.failoverCmd(args)
+	case "PSYNC", "SYNC":
+		c.psyncCmd(args)
+	case "REPLCONF":
+		c.replconfCmd(args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{

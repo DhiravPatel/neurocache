@@ -25,9 +25,13 @@ func main() {
 	eng := engine.New(cfg, log)
 	// Persistence must be loaded before accepting connections so that
 	// AOF replay and RDB restore observe a quiescent engine.
-	if err := eng.EnablePersistence(httpapi.NewReplayer(eng, cfg, log)); err != nil {
+	replayer := httpapi.NewReplayer(eng, cfg, log)
+	if err := eng.EnablePersistence(replayer); err != nil {
 		log.Error("persistence init failed", "err", err)
 	}
+	// The replica-apply path reuses the same HTTP-style dispatcher so
+	// master → replica commands execute identically to a local call.
+	eng.SetReplayRunner(replayer)
 	eng.Start()
 	defer eng.Stop()
 
