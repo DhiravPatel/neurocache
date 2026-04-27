@@ -30,9 +30,10 @@ import (
 // segment is one step of a parsed path. Exactly one of the index/key
 // fields is set per segment kind.
 type segment struct {
-	kind segKind
-	key  string // member name for kKey / kRecursive
-	idx  int    // array index for kIndex
+	kind   segKind
+	key    string     // member name for kKey / kRecursive
+	idx    int        // array index for kIndex
+	filter *predicate // for kFilter — boolean expression evaluated per element
 }
 
 type segKind int
@@ -44,6 +45,7 @@ const (
 	kIndex         // $[0]
 	kWildcardIndex // $[*]
 	kRecursive     // $..field
+	kFilter        // $[?(@.field op value)]
 )
 
 // Path is a parsed JSONPath. Compile once via parsePath, evaluate many
@@ -113,11 +115,19 @@ func parsePath(raw string) (Path, error) {
 				body[0] == '\'' && body[len(body)-1] == '\''):
 				p.segments = append(p.segments, segment{kind: kKey, key: body[1 : len(body)-1]})
 			default:
+				if strings.HasPrefix(body, "?") {
+					expr := strings.TrimPrefix(body, "?")
+					expr = strings.TrimPrefix(expr, "(")
+					expr = strings.TrimSuffix(expr, ")")
+					pred, err := parsePredicate(expr)
+					if err != nil {
+						return p, fmt.Errorf("filter parse: %w", err)
+					}
+					p.segments = append(p.segments, segment{kind: kFilter, filter: pred})
+					break
+				}
 				idx, err := strconv.Atoi(body)
 				if err != nil {
-					if strings.HasPrefix(body, "?") {
-						return p, errors.New("filter expressions are not supported in this build")
-					}
 					return p, fmt.Errorf("invalid bracket subscript: %s", body)
 				}
 				p.segments = append(p.segments, segment{kind: kIndex, idx: idx})
@@ -217,6 +227,29 @@ func step(v any, seg segment) []any {
 		out := []any{}
 		walkRecursive(v, seg.key, &out)
 		return out
+	case kFilter:
+		// Filter only operates on collections. For arrays, keep elements
+		// the predicate matches; for objects, keep values whose
+		// predicate evaluates true. Anything else falls through to nil.
+		if arr, ok := v.([]any); ok {
+			out := make([]any, 0, len(arr))
+			for _, el := range arr {
+				if seg.filter.Eval(el) {
+					out = append(out, el)
+				}
+			}
+			return out
+		}
+		if obj, ok := v.(map[string]any); ok {
+			out := []any{}
+			for _, val := range obj {
+				if seg.filter.Eval(val) {
+					out = append(out, val)
+				}
+			}
+			return out
+		}
+		return nil
 	}
 	return nil
 }

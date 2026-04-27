@@ -12,6 +12,7 @@ var (
 	bloomTypeID  = modules.MakeTypeID("bf-rb1!")
 	cuckooTypeID = modules.MakeTypeID("cf-rb1!")
 	cmsTypeID    = modules.MakeTypeID("cms-rb1!")
+	topkTypeID   = modules.MakeTypeID("topk-1!")
 )
 
 // Module is the registration entry. main wires it via side-effect
@@ -50,6 +51,14 @@ func initModule(ctx *modules.RegisterCtx) error {
 		Marshal:   func(v any) ([]byte, error) { return v.(*CMS).Marshal() },
 		Unmarshal: func(b []byte) (any, error) { return UnmarshalCMS(b) },
 		MemUsage:  func(v any) int64 { c := v.(*CMS); return int64(c.Width*c.Depth) * 8 },
+	}); err != nil {
+		return err
+	}
+	if err := ctx.RegisterType(modules.CustomType{
+		ID: topkTypeID, Name: "TopK-type",
+		Marshal:   func(v any) ([]byte, error) { return v.(*TopK).Marshal() },
+		Unmarshal: func(b []byte) (any, error) { return UnmarshalTopK(b) },
+		MemUsage:  func(v any) int64 { return v.(*TopK).MemUsage() },
 	}); err != nil {
 		return err
 	}
@@ -97,7 +106,185 @@ func commands() []modules.Cmd {
 		{Name: "CMS.QUERY", Arity: -3, Categories: r, KeyPosition: modules.KeyAt(1), Run: cmsQuery},
 		{Name: "CMS.MERGE", Arity: -4, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: cmsMerge},
 		{Name: "CMS.INFO", Arity: 2, Categories: r, KeyPosition: modules.KeyAt(1), Run: cmsInfo},
+
+		// ── TopK ───────────────────────────────────────────────
+		{Name: "TOPK.RESERVE", Arity: -3, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: topkReserve},
+		{Name: "TOPK.ADD", Arity: -3, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: topkAdd},
+		{Name: "TOPK.INCRBY", Arity: -4, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: topkIncrBy},
+		{Name: "TOPK.QUERY", Arity: -3, Categories: r, KeyPosition: modules.KeyAt(1), Run: topkQuery},
+		{Name: "TOPK.COUNT", Arity: -3, Categories: r, KeyPosition: modules.KeyAt(1), Run: topkCount},
+		{Name: "TOPK.LIST", Arity: -2, Categories: r, KeyPosition: modules.KeyAt(1), Run: topkList},
+		{Name: "TOPK.INFO", Arity: 2, Categories: r, KeyPosition: modules.KeyAt(1), Run: topkInfo},
 	}
+}
+
+// ── TopK command handlers ─────────────────────────────────────────
+
+func topkReserve(c *modules.Ctx, args []string) error {
+	key := args[0]
+	k64, err := strconv.ParseUint(args[1], 10, 32)
+	if err != nil {
+		c.Reply.Error("invalid K")
+		return nil
+	}
+	width, depth := uint32(0), uint32(0)
+	decay := 0.0
+	if len(args) >= 3 {
+		w, _ := strconv.ParseUint(args[2], 10, 32)
+		width = uint32(w)
+	}
+	if len(args) >= 4 {
+		d, _ := strconv.ParseUint(args[3], 10, 32)
+		depth = uint32(d)
+	}
+	if len(args) >= 5 {
+		decay, _ = strconv.ParseFloat(args[4], 64)
+	}
+	t, err := NewTopK(uint32(k64), width, depth, decay)
+	if err != nil {
+		c.Reply.Error(err.Error())
+		return nil
+	}
+	if err := c.Engine.SetCustomValue(key, topkTypeID, t, 0); err != nil {
+		c.Reply.Error(err.Error())
+		return nil
+	}
+	c.Reply.SimpleString("OK")
+	return nil
+}
+
+func topkAdd(c *modules.Ctx, args []string) error {
+	key := args[0]
+	t, err := loadOrCreateTopK(c, key)
+	if err != nil {
+		c.Reply.Error(err.Error())
+		return nil
+	}
+	out := make([]any, 0, len(args)-1)
+	for _, item := range args[1:] {
+		displaced := t.Add(item)
+		if displaced == "" {
+			out = append(out, nil)
+		} else {
+			out = append(out, displaced)
+		}
+	}
+	_ = c.Engine.SetCustomValue(key, topkTypeID, t, 0)
+	c.Reply.Array(out)
+	return nil
+}
+
+func topkIncrBy(c *modules.Ctx, args []string) error {
+	if (len(args)-1)%2 != 0 {
+		c.Reply.Error("TOPK.INCRBY requires item/delta pairs")
+		return nil
+	}
+	key := args[0]
+	t, err := loadOrCreateTopK(c, key)
+	if err != nil {
+		c.Reply.Error(err.Error())
+		return nil
+	}
+	out := make([]any, 0, (len(args)-1)/2)
+	for i := 1; i+1 < len(args); i += 2 {
+		delta, _ := strconv.ParseUint(args[i+1], 10, 64)
+		displaced := t.IncrBy(args[i], delta)
+		if displaced == "" {
+			out = append(out, nil)
+		} else {
+			out = append(out, displaced)
+		}
+	}
+	_ = c.Engine.SetCustomValue(key, topkTypeID, t, 0)
+	c.Reply.Array(out)
+	return nil
+}
+
+func topkQuery(c *modules.Ctx, args []string) error {
+	v, ok, _ := c.Engine.GetCustomValue(args[0], topkTypeID)
+	out := make([]any, len(args)-1)
+	if !ok {
+		for i := range out {
+			out[i] = int64(0)
+		}
+		c.Reply.Array(out)
+		return nil
+	}
+	t := v.(*TopK)
+	for i, item := range args[1:] {
+		if t.Query(item) {
+			out[i] = int64(1)
+		} else {
+			out[i] = int64(0)
+		}
+	}
+	c.Reply.Array(out)
+	return nil
+}
+
+func topkCount(c *modules.Ctx, args []string) error {
+	v, ok, _ := c.Engine.GetCustomValue(args[0], topkTypeID)
+	out := make([]any, len(args)-1)
+	if !ok {
+		for i := range out {
+			out[i] = int64(0)
+		}
+		c.Reply.Array(out)
+		return nil
+	}
+	t := v.(*TopK)
+	for i, item := range args[1:] {
+		out[i] = int64(t.Count(item))
+	}
+	c.Reply.Array(out)
+	return nil
+}
+
+func topkList(c *modules.Ctx, args []string) error {
+	v, ok, _ := c.Engine.GetCustomValue(args[0], topkTypeID)
+	if !ok {
+		c.Reply.Array([]any{})
+		return nil
+	}
+	t := v.(*TopK)
+	withCount := len(args) >= 2 && strings.EqualFold(args[1], "WITHCOUNT")
+	items := t.List()
+	out := make([]any, 0, len(items)*2)
+	for _, it := range items {
+		out = append(out, it.Item)
+		if withCount {
+			out = append(out, int64(it.Count))
+		}
+	}
+	c.Reply.Array(out)
+	return nil
+}
+
+func topkInfo(c *modules.Ctx, args []string) error {
+	v, ok, _ := c.Engine.GetCustomValue(args[0], topkTypeID)
+	if !ok {
+		c.Reply.Error("ERR not found")
+		return nil
+	}
+	t := v.(*TopK)
+	c.Reply.Array([]any{
+		"k", int64(t.K),
+		"width", int64(t.Width),
+		"depth", int64(t.Depth),
+		"decay", strconv.FormatFloat(t.Decay, 'g', -1, 64),
+	})
+	return nil
+}
+
+func loadOrCreateTopK(c *modules.Ctx, key string) (*TopK, error) {
+	v, ok, err := c.Engine.GetCustomValue(key, topkTypeID)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return v.(*TopK), nil
+	}
+	return NewTopK(50, 8, 7, 0.9)
 }
 
 // ── Bloom command handlers ────────────────────────────────────────

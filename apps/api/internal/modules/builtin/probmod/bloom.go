@@ -279,3 +279,14 @@ func (r *reader) f64() (float64, error) {
 	}
 	return math.Float64frombits(v), nil
 }
+
+// bytes returns the next n bytes as a slice into r.b. Used by callers
+// (TopK marshaler) that need to read length-prefixed strings.
+func (r *reader) bytes(n int) ([]byte, error) {
+	if r.i+n > len(r.b) {
+		return nil, errors.New("eof")
+	}
+	v := r.b[r.i : r.i+n]
+	r.i += n
+	return v, nil
+}

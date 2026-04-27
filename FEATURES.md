@@ -122,7 +122,7 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 | Feature | Status | Where |
 |---|---|---|
 | JSONPath subset (`$`, `$.field`, `$["field"]`, `$[0]`, `$[*]`, `$.*`, `$..field`) | ✅ | `modules/builtin/jsonmod/path.go` |
-| Filter expressions `[?(@.qty>0)]` | ❌ | deferred |
+| Filter expressions `[?(@.qty>0)]` | ✅ | `==`, `!=`, `<`, `<=`, `>`, `>=`, `=~`, `&&`, `||`, `!`, dotted field paths, JSON literals — `jsonmod/predicate.go` |
 | `JSON.SET key path value [NX|XX]` | ✅ | `modules/builtin/jsonmod/commands.go` |
 | `JSON.GET` (multi-path, INDENT/NEWLINE/SPACE) | ✅ | same |
 | `JSON.DEL` / `JSON.FORGET` / `JSON.TYPE` | ✅ | same |
@@ -142,7 +142,7 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 | `CF.RESERVE/ADD/ADDNX/INSERT/INSERTNX/EXISTS/MEXISTS/DEL/COUNT/INFO` | ✅ | `modules/builtin/probmod/probmod.go` |
 | Count-Min Sketch (init by dim or prob, weighted merge) | ✅ | `modules/builtin/probmod/cms.go` |
 | `CMS.INITBYDIM/INITBYPROB/INCRBY/QUERY/MERGE/INFO` | ✅ | `modules/builtin/probmod/probmod.go` |
-| TopK (`TOPK.*`) | ❌ | deferred |
+| TopK (`TOPK.*`) | ✅ | HeavyKeeper algorithm; `TOPK.RESERVE/ADD/INCRBY/QUERY/COUNT/LIST/INFO` — `probmod/topk.go` |
 
 ### M4-C — TimeSeries (`timeseries` module)
 
@@ -154,7 +154,7 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 | Downsampling rules (lazy bucket-close propagation) | ✅ | `modules/builtin/tsmod/series.go`, `tsmod.go` |
 | `TS.CREATE/ALTER/ADD/MADD/INCRBY/DECRBY/GET/MGET/RANGE/REVRANGE/MRANGE/MREVRANGE/DEL/QUERYINDEX/INFO/CREATERULE/DELETERULE` | ✅ | `modules/builtin/tsmod/tsmod.go` |
 | Label filters (`k=v`, `k!=v`, `k=`, `k!=`, `k=(v1,v2)`) | ✅ | same |
-| Compressed chunks (Gorilla / delta-of-delta) | ⚠ | uncompressed today |
+| Compressed chunks (Gorilla / delta-of-delta) | ✅ | XOR float compression + variable-length DoD timestamps; opt-in `GorillaChunk` — `tsmod/gorilla.go` |
 
 ### M4-D — RediSearch subset (`search` module)
 
@@ -168,11 +168,16 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 | Query parser (boolean ops, field qualifiers, ranges, tag sets, phrases, prefix) | ✅ | `modules/builtin/searchmod/parser.go` |
 | `FT.AGGREGATE` pipeline (GROUPBY, REDUCE×8, SORTBY, LIMIT, APPLY with embedded expr) | ✅ | `modules/builtin/searchmod/aggregate.go` |
 | `FT.CREATE/DROPINDEX/ALTER/ADD/DEL/GET/SEARCH/AGGREGATE/EXPLAIN/INFO/_LIST` | ✅ | `modules/builtin/searchmod/searchmod.go` |
-| GEO + VECTOR fields | ❌ | deferred |
-| Fuzzy queries `%term%` | ❌ | deferred |
-| `FT.SUGADD/SUGGET/SYNUPDATE/SYNDUMP/SPELLCHECK/CURSOR/PROFILE` | ❌ | deferred |
-| `FT.AGGREGATE FILTER` stage | ❌ | deferred |
-| Strict positional phrase matching | ❌ | conjunctive only |
+| GEO field | ✅ | Haversine radius search, auto-detected lat/lon ordering, units `m`/`km`/`mi`/`ft`; query syntax `@field:[lat lon r unit]` — `searchmod/geo.go` |
+| VECTOR field | ✅ | FLAT (exact, brute force) + HNSW (ANN, layered graph), metrics `COSINE`/`L2`/`IP`, KNN syntax `*=>[KNN k @field $vec]` with `PARAMS` binding — `searchmod/vector.go` |
+| Fuzzy queries `%term%` | ✅ | Cutoff-aware Levenshtein; `%`/`%%`/`%%%` for distance 1/2/3 — `searchmod/fuzzy.go` |
+| `FT.SUGADD/SUGGET/SUGDEL/SUGLEN` | ✅ | Trie-backed autocomplete with score table, `INCR`/`PAYLOAD`/`FUZZY`/`MAX`/`WITHSCORES`/`WITHPAYLOADS` — `searchmod/suggestions.go` |
+| `FT.SYNUPDATE/SYNDUMP` | ✅ | Per-index synonym groups with query-time term expansion — `searchmod/suggestions.go` |
+| `FT.SPELLCHECK` | ✅ | Levenshtein over indexed terms, scored by inverse edit-distance × document frequency — `searchmod/extras.go` |
+| `FT.CURSOR READ/DEL` | ✅ | Per-process cursor registry with TTL refresh — `searchmod/extras.go` |
+| `FT.PROFILE` | ✅ | Reports parse-time / exec-time / docs-scanned / hits-returned for `SEARCH` and `AGGREGATE` — `searchmod/extras.go` |
+| `FT.AGGREGATE FILTER` stage | ✅ | Reuses APPLY arithmetic + adds `==`/`!=`/`<`/`<=`/`>`/`>=`/`&&`/`||` — `searchmod/aggregate.go` |
+| Strict positional phrase matching | ✅ | Posting list now stores per-doc positions; phrase eval requires every term at `pos+offset` — `searchmod/index.go` + `query.go` |
 
 ---
 
@@ -270,14 +275,11 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 
 ## Total command count
 
-**~310 commands** across 11 data types + 5 modules + AI-native extensions.
+**~340 commands** across 11 data types + 5 modules + AI-native extensions.
 
 ## Known gaps (each a bounded follow-up, not architectural)
 
 - Advanced sorted-set ops: `ZUNIONSTORE`, `ZINTERSTORE`, `ZDIFFSTORE`, `ZRANGEBYLEX`, `ZRANGESTORE`, `ZMPOP`/`BZMPOP`
-- Search: GEO + VECTOR fields, fuzzy queries, suggestions, synonyms, spellcheck, cursors, profile, FILTER aggregate stage, strict positional phrase matching
-- Probabilistic: TopK (`TOPK.*`)
-- TimeSeries: Gorilla-style compressed chunks
 - Hash field-level TTLs (`HEXPIRE` / `HTTL`, Redis 7.4)
 - `LMPOP`/`BLMPOP`, `LPOS`, `GETDEL`, `GETEX`, `LCS`, `BITFIELD`, `SORT`/`SORT_RO`
 - Sharded pub/sub keyspace notifications
