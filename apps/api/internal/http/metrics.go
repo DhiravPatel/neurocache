@@ -25,6 +25,31 @@ func (h *handlers) metricsBreakdown(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"commands": h.eng.Metrics.CommandBreakdown()})
 }
 
+// vectorSets surfaces the keyspace's vector-set inventory: every key
+// of TypeVector with its index config + cardinality. Backs the
+// "Vector Sets" dashboard page.
+func (h *handlers) vectorSets(w http.ResponseWriter, _ *http.Request) {
+	out := []map[string]any{}
+	for _, key := range h.eng.KV.Keys("*") {
+		info, ok, err := h.eng.KV.VInfo(key)
+		if err != nil || !ok {
+			continue
+		}
+		out = append(out, map[string]any{
+			"key":          key,
+			"algo":         info.Algo,
+			"dim":          info.Dim,
+			"metric":       info.Metric,
+			"m":            info.M,
+			"ef_construct": info.EFC,
+			"ef_runtime":   info.EFR,
+			"card":         info.Card,
+			"bytes_approx": info.BytesApprox,
+		})
+	}
+	writeJSON(w, 200, map[string]any{"sets": out})
+}
+
 // hotKeysTracker surfaces the runtime HeavyKeeper-backed top-K tracker
 // (HOTKEYS command). Distinct from /api/metrics/hot-keys, which only
 // tracks GET hits — this endpoint captures every keyspace mutation

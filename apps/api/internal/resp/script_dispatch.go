@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/vectorindex"
 )
 
 // scriptDispatch is the value-returning subset of the dispatcher used
@@ -476,6 +477,113 @@ func scriptDispatch(c *conn, cmd string, args []string) (any, error) {
 		}
 		c.eng.RecordWrite("XACKDEL", args)
 		return int64(n), nil
+	// phase 5 — vector-set type. Cover the high-traffic V* commands
+	// scripts actually reach for (read paths + the basic insert).
+	case "VADD":
+		if len(args) < 3 {
+			return nil, errors.New("VADD key id vec [opts ...]")
+		}
+		key, id := args[0], args[1]
+		dim, _, _ := c.eng.KV.VDim(key)
+		opts := vectorindex.Options{Algo: vectorindex.AlgoHNSW, Metric: vectorindex.MetricCosine, Dim: dim}
+		// Light option parser — same shape as the dispatcher handler
+		// but limited to what scripts realistically pass.
+		for i := 3; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "DIM":
+				if i+1 < len(args) {
+					opts.Dim, _ = strconv.Atoi(args[i+1])
+					i++
+				}
+			case "METRIC":
+				if i+1 < len(args) {
+					opts.Metric = vectorindex.Metric(strings.ToUpper(args[i+1]))
+					i++
+				}
+			case "TYPE":
+				if i+1 < len(args) {
+					opts.Algo = vectorindex.Algo(strings.ToUpper(args[i+1]))
+					i++
+				}
+			}
+		}
+		if opts.Dim == 0 {
+			return nil, errors.New("DIM is required for the first VADD on this key")
+		}
+		vec, err := vectorindex.ParseVector(args[2], opts.Dim)
+		if err != nil {
+			return nil, err
+		}
+		n, err := c.eng.KV.VAdd(key, id, vec, opts)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("VADD", args)
+		return int64(n), nil
+	case "VREM":
+		if len(args) < 2 {
+			return nil, errors.New("VREM key id [id ...]")
+		}
+		n, err := c.eng.KV.VRem(args[0], args[1:]...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("VREM", args)
+		return int64(n), nil
+	case "VSIM":
+		if len(args) < 2 {
+			return nil, errors.New("VSIM key vec [COUNT n]")
+		}
+		count := 10
+		for i := 2; i < len(args); i++ {
+			if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		}
+		dim, ok, _ := c.eng.KV.VDim(args[0])
+		if !ok {
+			return []any{}, nil
+		}
+		query, err := vectorindex.ParseVector(args[1], dim)
+		if err != nil {
+			return nil, err
+		}
+		results, err := c.eng.KV.VSim(args[0], query, count)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, 0, len(results)*2)
+		for _, r := range results {
+			out = append(out, r.ID)
+			out = append(out, strconv.FormatFloat(r.Distance, 'f', -1, 64))
+		}
+		return out, nil
+	case "VCARD":
+		if len(args) < 1 {
+			return nil, errors.New("VCARD key")
+		}
+		n, err := c.eng.KV.VCard(args[0])
+		return int64(n), err
+	case "VDIM":
+		if len(args) < 1 {
+			return nil, errors.New("VDIM key")
+		}
+		d, ok, err := c.eng.KV.VDim(args[0])
+		if err != nil || !ok {
+			return nil, err
+		}
+		return int64(d), nil
+	case "VEMB":
+		if len(args) < 2 {
+			return nil, errors.New("VEMB key id")
+		}
+		vec, ok, err := c.eng.KV.VEmb(args[0], args[1])
+		if err != nil || !ok {
+			return nil, err
+		}
+		return vectorindex.EncodeVector(vec), nil
+
 	case "XDELEX":
 		if len(args) < 2 {
 			return nil, errors.New("XDELEX key [REF|KEEPREF|ACKED] id [...]")

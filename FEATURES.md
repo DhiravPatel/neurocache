@@ -412,9 +412,46 @@ Small, high-value commands that close common operational pain points. Each is a 
 
 **EVAL bridge**: `DELEX`, `DIGEST`, `MSETEX`, `XACKDEL`, `XDELEX` are all callable from Lua via `redis.call`.
 
+## Phase 5 — Vector set type (V*) — first-class data type
+
+The big one. New first-class data type backed by a shared `internal/vectorindex/` package (HNSW + FLAT with COSINE / L2 / IP metrics). Sits alongside string / list / hash / set / zset / stream as a peer in the keyspace, not a module type.
+
+| Feature | Status | Where |
+|---|---|---|
+| `VADD key id vec [DIM n] [METRIC L2\|IP\|COSINE] [TYPE FLAT\|HNSW] [M m] [EFCONSTRUCTION n] [EFRUNTIME n] [SETATTR json]` — insert/replace; trailing options configure the new index, ignored on existing keys; vec accepts FP32 binary or comma-separated decimals | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VREM key id [id ...]` — remove members (PEL-equivalent: drops attributes too) | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VSIM key vec [COUNT n] [WITHSCORES] [WITHATTRS]` — KNN; smaller distance = more similar across all metrics | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VEMB key id` — fetch the stored vector as FP32 binary | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VSETATTR / VGETATTR / VDELATTR key id [json]` — opaque per-member JSON attribute storage | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VLINKS key id` — HNSW neighbour lists per layer (empty on FLAT or when id is missing) | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VINFO key` — algo / dim / metric / M / EFC / EFR / card / bytes-approx | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VCARD key` / `VDIM key` — member count / configured dimension | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VRANDMEMBER key [count]` — single / unique / with-replacement (matches SRANDMEMBER) | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+| `VSCAN key cursor [MATCH pat] [COUNT n]` — cursor iteration over member ids; sort-stabilised so see-every-key holds across calls | ✅ | `store/vector.go`, `resp/commands_vector.go` |
+
+**Shared algorithm** [`internal/vectorindex/`](apps/api/internal/vectorindex/) — clean reusable package, deliberately distinct from the searchmod's tightly-coupled vector code so the two evolve independently.
+
+**Engine integration**
+- `TypeVector ValueType = 101` (out of the iota block, mirroring `TypeModule`); new `Entry.Vector *VectorSet` field
+- Participates in TTL expiry, eviction byte accounting, keyspace notifications (`vadd` / `vrem` events fire), `DEL` / `EXISTS` / `TYPE`
+- `removeIfEmpty` keeps vector sets alive at zero members — index config is precious; clients tear it down via `DEL`
+- Cluster routing automatic (single-key commands)
+- Replication propagation via the writeset (`VADD` / `VREM` / `VSETATTR` / `VDELATTR`)
+
+**Persistence**
+- `Export()` / `Restore()` round-trip the `ExportVectorOpts` (algo / dim / metric / M / EFC / EFR) plus every `(id, vec, attr)` triple
+- `DUMP` / `RESTORE` (per-key blob) and `COPY` paths in `object.go` carry the same payload
+- AOF replay: VADD / VREM / VSETATTR / VDELATTR are in the writeset, replayed on startup as ordinary commands — no new opcode needed
+
+**HTTP + Dashboard**
+- `GET /api/vector/sets` returns every vector-set key with its config + memory cost
+- New "Vector Sets" page on the dashboard with a sortable inventory table and a built-in KNN probe panel (paste a CSV vector, run VSIM, see the top-K with distances)
+
+**Coverage bump**: 11 → **12 data types**.
+
 ## Total command count
 
-**~480 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~493 commands** across 12 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 

@@ -236,6 +236,22 @@ var registry = map[string]commandInfo{
 	// phase 3: HOTKEYS — admin-class observability command.
 	"HOTKEYS": {[]string{CatAdmin, CatRead, CatFast}},
 
+	// phase 5: vector-set type. Sits in its own implicit category
+	// (CatRead/CatWrite + CatSlow for the index-touching ops).
+	"VADD":        {[]string{CatWrite, CatSlow}},
+	"VREM":        {[]string{CatWrite, CatFast}},
+	"VSIM":        {[]string{CatRead, CatSlow}},
+	"VEMB":        {[]string{CatRead, CatFast}},
+	"VSETATTR":    {[]string{CatWrite, CatFast}},
+	"VGETATTR":    {[]string{CatRead, CatFast}},
+	"VDELATTR":    {[]string{CatWrite, CatFast}},
+	"VLINKS":      {[]string{CatRead, CatFast}},
+	"VINFO":       {[]string{CatRead, CatFast}},
+	"VCARD":       {[]string{CatRead, CatFast}},
+	"VDIM":        {[]string{CatRead, CatFast}},
+	"VRANDMEMBER": {[]string{CatRead, CatFast}},
+	"VSCAN":       {[]string{CatRead, CatSlow}},
+
 	// phase 4: niche 8.x-pattern additions
 	"DELEX":   {[]string{CatString, CatWrite, CatFast}},
 	"DIGEST":  {[]string{CatKeyspace, CatRead, CatFast}},

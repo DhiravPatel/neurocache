@@ -175,6 +175,10 @@ func commandKeySpec(name string) (first, last, step int) {
 	case "DELEX", "XACKDEL", "XDELEX", "XCFGSET":
 		// All single-key, first-arg.
 		return 1, 1, 1
+	case "VADD", "VREM", "VSIM", "VEMB", "VSETATTR", "VGETATTR", "VDELATTR",
+		"VLINKS", "VINFO", "VCARD", "VDIM", "VRANDMEMBER", "VSCAN":
+		// Every V* command takes the vector-set key at args[0].
+		return 1, 1, 1
 	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "GEOSEARCHSTORE":
 		return 1, 2, 1
 	case "GEORADIUS", "GEORADIUS_RO", "GEORADIUSBYMEMBER", "GEORADIUSBYMEMBER_RO",

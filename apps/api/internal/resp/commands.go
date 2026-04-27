@@ -277,6 +277,34 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "HOTKEYS":
 		c.hotkeysCmd(args)
 
+	// ─── phase 5: vector set type ────────────────────────────────
+	case "VADD":
+		c.vaddCmd(args)
+	case "VREM":
+		c.vremCmd(args)
+	case "VSIM":
+		c.vsimCmd(args)
+	case "VEMB":
+		c.vembCmd(args)
+	case "VSETATTR":
+		c.vsetattrCmd(args)
+	case "VGETATTR":
+		c.vgetattrCmd(args)
+	case "VDELATTR":
+		c.vdelattrCmd(args)
+	case "VLINKS":
+		c.vlinksCmd(args)
+	case "VINFO":
+		c.vinfoCmd(args)
+	case "VCARD":
+		c.vcardCmd(args)
+	case "VDIM":
+		c.vdimCmd(args)
+	case "VRANDMEMBER":
+		c.vrandmemberCmd(args)
+	case "VSCAN":
+		c.vscanCmd(args)
+
 	// ─── phase 4: niche 8.x-pattern additions ─────────────────────
 	case "DELEX":
 		c.delexCmd(args)

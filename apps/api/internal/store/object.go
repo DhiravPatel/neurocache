@@ -95,6 +95,21 @@ func (s *Store) Dump(key string) (string, bool, error) {
 			exp.Stream = append(exp.Stream, ExportStreamEntry{ID: se.ID.String(), Fields: se.Fields})
 		}
 		e.Stream.mu.Unlock()
+	case TypeVector:
+		if e.Vector != nil && e.Vector.Index != nil {
+			idx := e.Vector.Index
+			exp.VectorOpts = ExportVectorOpts{
+				Algo: string(idx.Algo()), Dim: idx.Dim(), Metric: string(idx.Metric()),
+				M: idx.M(), EFC: idx.EFC(), EFR: idx.EFR(),
+			}
+			for _, id := range idx.IDs() {
+				vec, _ := idx.Get(id)
+				attr, _ := idx.GetAttr(id)
+				exp.VectorMembers = append(exp.VectorMembers, ExportVectorMember{
+					ID: id, Vec: encodeVectorString(vec), Attr: attr,
+				})
+			}
+		}
 	}
 	s.mu.RUnlock()
 	var buf bytes.Buffer
@@ -184,6 +199,21 @@ func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
 			exp.Stream = append(exp.Stream, ExportStreamEntry{ID: sm.ID.String(), Fields: sm.Fields})
 		}
 		se.Stream.mu.Unlock()
+	case TypeVector:
+		if se.Vector != nil && se.Vector.Index != nil {
+			idx := se.Vector.Index
+			exp.VectorOpts = ExportVectorOpts{
+				Algo: string(idx.Algo()), Dim: idx.Dim(), Metric: string(idx.Metric()),
+				M: idx.M(), EFC: idx.EFC(), EFR: idx.EFR(),
+			}
+			for _, id := range idx.IDs() {
+				vec, _ := idx.Get(id)
+				attr, _ := idx.GetAttr(id)
+				exp.VectorMembers = append(exp.VectorMembers, ExportVectorMember{
+					ID: id, Vec: encodeVectorString(vec), Attr: attr,
+				})
+			}
+		}
 	}
 	s.restoreOne(exp)
 	return true, nil
@@ -240,6 +270,11 @@ func (s *Store) restoreOne(ent ExportEntry) {
 			if e.Stream.lastID.Less(id) {
 				e.Stream.lastID = id
 			}
+		}
+	case "vectorset":
+		e.Type = TypeVector
+		if !restoreVectorSet(e, ent) {
+			return
 		}
 	}
 	s.recomputeBytes(e)

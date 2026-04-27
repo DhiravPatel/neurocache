@@ -42,6 +42,8 @@ func (t ValueType) String() string {
 		return "zset"
 	case TypeStream:
 		return "stream"
+	case TypeVector:
+		return "vectorset"
 	default:
 		return "none"
 	}
@@ -64,6 +66,7 @@ type Entry struct {
 	ZSet     *ZSet
 	Stream   *Stream
 	Module   *ModuleValue // populated when Type == TypeModule
+	Vector   *VectorSet   // populated when Type == TypeVector
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -385,6 +388,11 @@ func (s *Store) removeIfEmpty(e *Entry) {
 		// Streams keep the key even at length 0 — they have metadata
 		// (last-ID, consumer groups) that must persist. Match Redis.
 		empty = false
+	case TypeVector:
+		// Vector sets keep the key when emptied — the index dimension
+		// + algorithm choice are configuration the caller chose at
+		// VADD time and shouldn't lose to the last VREM.
+		empty = false
 	}
 	if empty {
 		s.bytes.Add(-int64(e.Bytes))
@@ -428,6 +436,11 @@ func (s *Store) recomputeBytes(e *Entry) {
 		n = len(e.Key)
 		if e.Stream != nil {
 			n += e.Stream.approxBytes()
+		}
+	case TypeVector:
+		n = len(e.Key)
+		if e.Vector != nil && e.Vector.Index != nil {
+			n += int(e.Vector.Index.MemUsage())
 		}
 	}
 	e.Bytes = n

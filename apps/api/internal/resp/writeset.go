@@ -79,6 +79,10 @@ var writeCommands = map[string]bool{
 	// in AOF. The mutators below do.
 	"DELEX": true, "MSETEX": true,
 	"XACKDEL": true, "XDELEX": true,
+
+	// phase 5: vector set type — every state-changing V* command.
+	"VADD": true, "VREM": true,
+	"VSETATTR": true, "VDELATTR": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

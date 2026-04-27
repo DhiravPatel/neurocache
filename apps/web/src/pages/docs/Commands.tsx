@@ -230,6 +230,36 @@ export default function Commands() {
         ]}
       />
 
+      {/* ── vector sets ──────────────────────────────────────────── */}
+      <h2 id="vectorsets">Vector Sets</h2>
+      <p>
+        First-class vector-set type backed by a per-key index (HNSW or
+        FLAT). Distance metrics: <code>COSINE</code> (1 − cosine
+        similarity), <code>L2</code> (squared euclidean),{" "}
+        <code>IP</code> (negated inner product) — every metric returns
+        "smaller = better" so a single comparator serves all three.
+        Vectors accept the FP32 binary form (<code>dim*4</code>{" "}
+        little-endian bytes) or a comma-separated decimal CSV
+        (<code>"1.0,2.0,3.0"</code>) for the playground.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "VADD key id vec [DIM n] [METRIC L2|IP|COSINE] [TYPE FLAT|HNSW] [M m] [EFCONSTRUCTION n] [EFRUNTIME n] [SETATTR json]", desc: "Insert/replace a vector. Trailing options configure the new index on a fresh key — ignored on existing keys (you can't change algo / metric / dim post-creation; VREM-and-recreate). Returns 1 (id was new) or 0 (id replaced)." },
+          { cmd: "VREM key id [id ...]", desc: "Remove members. Returns count actually removed; per-member JSON attributes are dropped too." },
+          { cmd: "VSIM key vec [COUNT n] [WITHSCORES] [WITHATTRS]", desc: "KNN — top-N nearest members. WITHSCORES interleaves the distance after each id; WITHATTRS interleaves the JSON attribute (or empty bulk when none)." },
+          { cmd: "VEMB key id", desc: "Fetch the stored vector as FP32 binary." },
+          { cmd: "VSETATTR key id <json>", desc: "Set the JSON attribute blob for one id. Returns 1 (id existed) / 0 (id missing — attr ignored)." },
+          { cmd: "VGETATTR key id", desc: "Read the JSON attribute, nil when absent." },
+          { cmd: "VDELATTR key id", desc: "Drop the attribute. Returns 1/0." },
+          { cmd: "VLINKS key id", desc: "HNSW neighbour lists per layer (empty array on FLAT or when id is missing)." },
+          { cmd: "VINFO key", desc: "Index metadata: algo, dim, metric, M, ef-construction, ef-runtime, card, bytes-approx." },
+          { cmd: "VCARD key", desc: "Member count." },
+          { cmd: "VDIM key", desc: "Configured vector dimension. nil when the key doesn't exist." },
+          { cmd: "VRANDMEMBER key [count]", desc: "Random ids. Behaviour mirrors SRANDMEMBER (single id when no count, unique cap when positive, with-replacement sample when negative)." },
+          { cmd: "VSCAN key cursor [MATCH pat] [COUNT n]", desc: "Cursor-based id iteration. Sort-stabilised so SCAN's see-every-key guarantee holds across calls." },
+        ]}
+      />
+
       {/* ── streams ──────────────────────────────────────────────── */}
       <h2 id="streams">Streams</h2>
       <p>
@@ -875,10 +905,6 @@ curl -X POST http://localhost:8080/api/exec \\
           <code>skiplist</code> / <code>stream</code>); Redis
           distinguishes ziplist vs listpack vs hashtable based on
           internal encoding heuristics.
-        </li>
-        <li>
-          <strong>Vector set type (V*)</strong> — first-class vector
-          set is in the next phase.
         </li>
       </ul>
     </>
