@@ -56,13 +56,14 @@ type Entry struct {
 	Key  string
 	Type ValueType
 
-	Str    string
-	List   *list.List // elements are strings
-	Hash   map[string]string
-	Set    map[string]struct{}
-	ZSet   *ZSet
-	Stream *Stream
-	Module *ModuleValue // populated when Type == TypeModule
+	Str      string
+	List     *list.List // elements are strings
+	Hash     map[string]string
+	HashTTL  map[string]time.Time // optional per-field expiries (Redis 7.4)
+	Set      map[string]struct{}
+	ZSet     *ZSet
+	Stream   *Stream
+	Module   *ModuleValue // populated when Type == TypeModule
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -103,6 +104,7 @@ func (s *Store) fire(event, key string) {
 
 // ttlLoop is a lazy expirer. It sweeps once per second; reads also check
 // ExpireAt so callers never see an expired value even between sweeps.
+// Per-field hash TTLs (Redis 7.4 HEXPIRE) ride on the same tick.
 func (s *Store) ttlLoop() {
 	t := time.NewTicker(1 * time.Second)
 	defer t.Stop()
@@ -117,6 +119,7 @@ func (s *Store) ttlLoop() {
 				expired = append(expired, k)
 			}
 		}
+		s.sweepHashFields(now)
 		s.mu.Unlock()
 		for _, k := range expired {
 			s.fire("expired", k)

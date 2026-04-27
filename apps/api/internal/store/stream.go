@@ -358,6 +358,54 @@ func (s *Store) XRead(keys, lastIDs []string, count int) (map[string][]StreamEnt
 	return out, nil
 }
 
+// XSetID overrides a stream's last-generated-id. Used by XSETID and
+// by replicas applying the same command from the primary.
+func (s *Store) XSetID(key, idStr string) error {
+	id, err := ParseStreamID(idStr, false)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok, err := s.get(key, TypeStream)
+	if err != nil || !ok {
+		return err
+	}
+	e.Stream.mu.Lock()
+	e.Stream.lastID = id
+	e.Stream.mu.Unlock()
+	return nil
+}
+
+// XTrimMinID drops every entry with an ID < minIDStr. Used by
+// XADD MINID … and XTRIM MINID. Returns the number of removed entries.
+func (s *Store) XTrimMinID(key, minIDStr string) (int, error) {
+	min, err := ParseStreamID(minIDStr, false)
+	if err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok, err := s.get(key, TypeStream)
+	if err != nil || !ok {
+		return 0, err
+	}
+	e.Stream.mu.Lock()
+	defer e.Stream.mu.Unlock()
+	kept := e.Stream.entries[:0]
+	removed := 0
+	for _, en := range e.Stream.entries {
+		if en.ID.Less(min) {
+			removed++
+			continue
+		}
+		kept = append(kept, en)
+	}
+	e.Stream.entries = kept
+	s.recomputeBytes(e)
+	return removed, nil
+}
+
 // XLast returns the latest ID for a stream (for XREAD "$" bookkeeping).
 func (s *Store) XLast(key string) (string, bool, error) {
 	s.mu.RLock()

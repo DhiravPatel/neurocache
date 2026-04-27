@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 )
 
 // authCmd implements AUTH [username] password. With one arg the username
@@ -335,9 +337,123 @@ func (c *conn) clientCmd(args []string) {
 			c.info.NoEvict = false
 		}
 		writeSimple(c.bw, "OK")
+	case "TRACKING":
+		c.clientTrackingCmd(args[1:])
+	case "TRACKINGINFO":
+		info := c.eng.Tracking.Info(c.info.ID)
+		out := []any{
+			"flags", trackingFlagsString(info),
+			"redirect", int64(info.Redirect),
+			"prefixes", anyStrSlice(info.Prefixes),
+		}
+		writeValue(c.bw, out)
+	case "NO-LOOP":
+		// Sub-flag of TRACKING; idempotent toggle.
+		on := !(len(args) >= 2 && strings.EqualFold(args[1], "OFF"))
+		if c.invalidateCh != nil {
+			c.eng.Tracking.Enable(c.info.ID, false, on, 0, nil)
+		}
+		writeSimple(c.bw, "OK")
 	default:
 		writeSimple(c.bw, "OK")
 	}
+}
+
+// clientTrackingCmd handles CLIENT TRACKING ON|OFF [REDIRECT id]
+// [BCAST] [PREFIX p [PREFIX p ...]] [OPTIN] [OPTOUT] [NOLOOP].
+func (c *conn) clientTrackingCmd(args []string) {
+	if len(args) == 0 {
+		writeError(c.bw, "CLIENT TRACKING ON|OFF [opts ...]")
+		return
+	}
+	switch strings.ToUpper(args[0]) {
+	case "OFF":
+		c.eng.Tracking.Disable(c.info.ID)
+		if c.invalidateCh != nil {
+			close(c.invalidateCh)
+			c.invalidateCh = nil
+		}
+		writeSimple(c.bw, "OK")
+		return
+	case "ON":
+		// fall through to flag parsing
+	default:
+		writeError(c.bw, "syntax error")
+		return
+	}
+	bcast, noloop := false, false
+	redirect := uint64(0)
+	prefixes := []string{}
+	for i := 1; i < len(args); i++ {
+		switch strings.ToUpper(args[i]) {
+		case "BCAST":
+			bcast = true
+		case "NOLOOP":
+			noloop = true
+		case "OPTIN", "OPTOUT":
+			// Mode hints — we record but treat default == OPTIN today.
+		case "REDIRECT":
+			if i+1 < len(args) {
+				v, _ := strconv.ParseUint(args[i+1], 10, 64)
+				redirect = v
+				i++
+			}
+		case "PREFIX":
+			if i+1 < len(args) {
+				prefixes = append(prefixes, args[i+1])
+				i++
+			}
+		}
+	}
+	if c.invalidateCh == nil {
+		c.invalidateCh = make(chan []string, 64)
+		engine.RegisterInvalidationChannel(c.info.ID, c.invalidateCh)
+		go c.pumpInvalidations()
+	}
+	c.eng.Tracking.Enable(c.info.ID, bcast, noloop, redirect, prefixes)
+	writeSimple(c.bw, "OK")
+}
+
+// pumpInvalidations sends RESP3 push frames (or RESP2 pmessage on the
+// `__redis__:invalidate` channel) for every tracked-key write.
+func (c *conn) pumpInvalidations() {
+	for keys := range c.invalidateCh {
+		c.writeMu.Lock()
+		if c.proto >= 3 {
+			items := []any{"invalidate", anyStrSlice(keys)}
+			c.writePush(items)
+		} else {
+			// RESP2 fallback: emit a regular pub/sub message on the
+			// canonical channel name.
+			writeValue(c.bw, []any{"message", "__redis__:invalidate", anyStrSlice(keys)})
+		}
+		_ = c.bw.Flush()
+		c.writeMu.Unlock()
+	}
+}
+
+func trackingFlagsString(info introspect.TrackingInfo) []any {
+	flags := []any{}
+	if info.On {
+		flags = append(flags, "on")
+	} else {
+		flags = append(flags, "off")
+	}
+	if info.Bcast {
+		flags = append(flags, "bcast")
+	}
+	if info.NoLoop {
+		flags = append(flags, "noloop")
+	}
+	return flags
+}
+
+func anyStrSlice(xs []string) []any {
+	out := make([]any, len(xs))
+	for i, s := range xs {
+		out[i] = s
+	}
+	return out
 }
 
 // resetCmd implements RESET — clear MULTI/WATCH, drop subscriptions,

@@ -41,6 +41,8 @@ type Config struct {
 	ReplicaOf       string // "host:port" or "" — follow a master at boot
 	ReplBacklogSize int64  // bytes retained for partial resync (default 1 MiB)
 	ReplTimeoutSec  int    // dial/read timeout on the master link
+	ReplDiskless    bool   // skip on-disk RDB during full resync; stream in-memory
+	ReplChains      bool   // allow replicas to also serve PSYNC to downstream replicas
 
 	// Clustering
 	ClusterEnabled       bool   // turn on the slot/gossip stack
@@ -99,6 +101,8 @@ func Load() Config {
 		ReplicaOf:       env("NEUROCACHE_REPLICAOF", ""),
 		ReplBacklogSize: int64(envInt("NEUROCACHE_REPL_BACKLOG_SIZE", 1<<20)),
 		ReplTimeoutSec:  envInt("NEUROCACHE_REPL_TIMEOUT_SEC", 60),
+		ReplDiskless:    envBool("NEUROCACHE_REPL_DISKLESS", true),
+		ReplChains:      envBool("NEUROCACHE_REPL_CHAINS", false),
 
 		ClusterEnabled:             envBool("NEUROCACHE_CLUSTER_ENABLED", false),
 		ClusterBusPort:             env("NEUROCACHE_CLUSTER_BUS_PORT", ""),

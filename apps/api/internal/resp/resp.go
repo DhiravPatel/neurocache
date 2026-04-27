@@ -174,6 +174,10 @@ type conn struct {
 	// shardSubs holds active SSUBSCRIBE handles keyed by channel name.
 	shardSubs map[string]*pubsub.Subscription
 
+	// invalidateCh receives CLIENT TRACKING invalidation push frames.
+	// nil until the client opts into tracking; closed on disconnect.
+	invalidateCh chan []string
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -267,6 +271,12 @@ func (c *conn) cleanup() {
 	}
 	if c.monitorID != 0 {
 		c.eng.Monitor.Unsubscribe(c.monitorID)
+	}
+	if c.invalidateCh != nil {
+		engine.UnregisterInvalidationChannel(c.info.ID)
+		c.eng.Tracking.Disable(c.info.ID)
+		close(c.invalidateCh)
+		c.invalidateCh = nil
 	}
 	if c.info != nil {
 		c.eng.Clients.Forget(c.info.ID)

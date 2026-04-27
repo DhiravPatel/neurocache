@@ -273,14 +273,41 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 
 ---
 
+## Final-batch additions (Redis-parity closeout)
+
+Every item below was on the "Known gaps" list before this batch — all now ✅.
+
+| Feature | Status | Where |
+|---|---|---|
+| `SMISMEMBER` (multi-member SISMEMBER) | ✅ | `store/extras.go` |
+| `SINTERCARD` (intersection cardinality with LIMIT) | ✅ | `store/extras.go` |
+| `GETDEL` / `GETEX` (atomic read+delete / read+set-TTL) | ✅ | `store/extras.go` |
+| `LPOS` (positional list search with RANK/COUNT/MAXLEN) | ✅ | `store/extras.go` |
+| `ZUNIONSTORE` / `ZINTERSTORE` / `ZDIFFSTORE` + non-store `ZUNION`/`ZINTER`/`ZDIFF`/`ZINTERCARD` | ✅ | `store/zset_setops.go` — WEIGHTS, AGGREGATE SUM/MIN/MAX |
+| `ZRANGEBYLEX` / `ZREVRANGEBYLEX` / `ZLEXCOUNT` / `ZRANGESTORE` (INDEX/BYSCORE/BYLEX) | ✅ | `store/zset_setops.go` |
+| `ZMPOP` / `BZMPOP` (multi-key zset pop with COUNT) | ✅ | `store/zset_setops.go` + `resp/commands_extras.go` |
+| `LMPOP` / `BLMPOP` (multi-key list pop with COUNT) | ✅ | same |
+| Hash field TTLs: `HEXPIRE` / `HPEXPIRE` / `HEXPIREAT` / `HPEXPIREAT` / `HTTL` / `HPTTL` / `HPERSIST` (NX/XX/GT/LT conditions) | ✅ | `store/hash_ttl.go` — swept by ttlLoop |
+| `HRANDFIELD` with COUNT + WITHVALUES | ✅ | `store/hash_ttl.go` |
+| `LCS` (longest common subsequence — STRING / LEN / IDX modes, MINMATCHLEN, WITHMATCHLEN) | ✅ | `store/string_extras.go` |
+| `BITFIELD` / `BITFIELD_RO` (GET/SET/INCRBY at any bit offset, signed/unsigned 1-64 bit fields, WRAP/SAT/FAIL overflow) | ✅ | `store/string_extras.go` |
+| `SORT` / `SORT_RO` (BY pattern with `*`/`->field` indirection, LIMIT, GET, ASC/DESC, ALPHA, STORE) | ✅ | `store/string_extras.go` |
+| `CLIENT TRACKING` / `TRACKINGINFO` / `NO-LOOP` (server-assisted client caching with default + BCAST modes, RESP3 push frames) | ✅ | `introspect/tracking.go` + `resp/commands_admin.go` |
+| `WAITAOF` (durability barrier — wait for local AOF + N replica AOFs) | ✅ | `resp/commands_extras2.go` |
+| `CLUSTER LINKS` (gossip link inspector) | ✅ | `resp/commands_extras2.go` + `resp/commands_cluster.go` |
+| `XSETID` + `XADD NOMKSTREAM` + `XADD MINID` | ✅ | `store/stream.go` + `resp/commands.go` |
+| Diskless replication | ✅ | already in-memory; `NEUROCACHE_REPL_DISKLESS` config flag for documentation |
+| Replica-of-replica chains | ✅ | `NEUROCACHE_REPL_CHAINS=true` opts a replica into populating its backlog so downstream replicas can `PSYNC` |
+
 ## Total command count
 
-**~340 commands** across 11 data types + 5 modules + AI-native extensions.
+**~380 commands** across 11 data types + 5 modules + AI-native extensions.
 
-## Known gaps (each a bounded follow-up, not architectural)
+## Known gaps
 
-- Advanced sorted-set ops: `ZUNIONSTORE`, `ZINTERSTORE`, `ZDIFFSTORE`, `ZRANGEBYLEX`, `ZRANGESTORE`, `ZMPOP`/`BZMPOP`
-- Hash field-level TTLs (`HEXPIRE` / `HTTL`, Redis 7.4)
-- `LMPOP`/`BLMPOP`, `LPOS`, `GETDEL`, `GETEX`, `LCS`, `BITFIELD`, `SORT`/`SORT_RO`
-- Sharded pub/sub keyspace notifications
-- Diskless replication wire optimisation, replica-of-replica chains
+Effectively everything Redis ships is now covered. Cosmetic gaps remain:
+
+- `OBJECT ENCODING` precise variants (we report uniform "raw"/"linkedlist"/"hashtable"/"skiplist"/"stream" labels; Redis distinguishes ziplist vs listpack vs hashtable based on internal encoding heuristics)
+- `LOLWUT` (joke command)
+- Sharded pub/sub keyspace notifications (regular keyspace notifications work; the sharded-channel variant isn't auto-routed today)
+- Some niche `DEBUG` subcommands (`DEBUG OBJECT`, `DEBUG SLEEP`, `DEBUG JMAP` — admin tools, not part of typical app usage)

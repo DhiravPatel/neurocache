@@ -53,6 +53,7 @@ type Engine struct {
 	Latency  *introspect.LatencyMonitor
 	Clients  *introspect.ClientRegistry
 	Monitor  *introspect.MonitorBroker
+	Tracking *introspect.TrackingTable
 	Scripts   *scripting.Cache
 	Functions *scripting.FunctionRegistry
 	Blocker   *blocking.Hub
@@ -125,6 +126,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
 		Clients:   introspect.NewClientRegistry(),
 		Monitor:   introspect.NewMonitorBroker(),
+		Tracking:  introspect.NewTrackingTable(),
 		Scripts:   scripting.NewCache(),
 		Functions: scripting.NewFunctionRegistry(),
 		Blocker:   blocking.NewHub(),
@@ -145,6 +147,15 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		}
 		e.PubSub.Publish("__keyspace__:"+key, event)
 		e.PubSub.Publish("__keyevent__:"+event, key)
+		// Server-assisted client caching: fan out invalidations to
+		// every client that read this key (default mode) or whose
+		// PREFIX subscriptions match (BCAST mode). The pump goroutine
+		// on each receiving conn turns this into a RESP3 Push frame.
+		if e.Tracking != nil {
+			for _, t := range e.Tracking.Invalidations(key, 0) {
+				e.invalidateClient(t.ClientID, []string{key})
+			}
+		}
 		// Wake any blocked clients (BLPOP/BRPOP/BLMOVE/BZPOPMIN/BZPOPMAX
 		// /XREAD BLOCK). The blocker filters by event below — only writes
 		// that produce something a consumer can pop need to fire.
@@ -447,15 +458,19 @@ func (e *Engine) KeyVersion(key string) uint64 {
 
 // RecordWrite hands a write-path command to the AOF + replication
 // backlog. Called from dispatch after the command executes
-// successfully. Replica-mode nodes skip both paths — the write came
-// from the master's stream, replaying it would loop.
+// successfully.
+//
+// Replica-mode nodes skip the AOF (the master is durable on its own)
+// but, when ReplChains is enabled, still feed the backlog so
+// downstream replicas-of-replicas can PSYNC. We never fan out to the
+// engine's own master link — only the local fan-out to attached
+// replicas matters for the chain.
 func (e *Engine) RecordWrite(cmd string, args []string) {
-	if e.Replication != nil && e.Replication.IsReplica() {
-		// Replicas only apply the write; the master is the source of
-		// truth for durability + fan-out.
+	isReplica := e.Replication != nil && e.Replication.IsReplica()
+	if isReplica && !e.Cfg.ReplChains {
 		return
 	}
-	if e.AOF != nil {
+	if !isReplica && e.AOF != nil {
 		_ = e.AOF.Append(cmd, args)
 	}
 	if e.Master != nil {
@@ -648,6 +663,47 @@ func (e *Engine) ConsumeReplicaHeartbeats(r *replication.ReplicaLink) {
 				}
 			}
 		}
+	}
+}
+
+// ── client-tracking dispatcher ─────────────────────────────────────
+//
+// The RESP layer registers per-client invalidation channels with the
+// engine when CLIENT TRACKING ON fires. The keyspace notifier looks
+// up the client by ID and forwards the keys.
+
+var (
+	invalMu       sync.RWMutex
+	invalidateChs = map[uint64]chan<- []string{}
+)
+
+// RegisterInvalidationChannel exposes a client's push channel so the
+// engine notifier can deliver invalidations.
+func RegisterInvalidationChannel(clientID uint64, ch chan<- []string) {
+	invalMu.Lock()
+	defer invalMu.Unlock()
+	invalidateChs[clientID] = ch
+}
+
+// UnregisterInvalidationChannel cleans up on disconnect.
+func UnregisterInvalidationChannel(clientID uint64) {
+	invalMu.Lock()
+	defer invalMu.Unlock()
+	delete(invalidateChs, clientID)
+}
+
+// invalidateClient is the notifier-side dispatch. Drops on overflow
+// since invalidation is best-effort — the client falls back to a TTL.
+func (e *Engine) invalidateClient(clientID uint64, keys []string) {
+	invalMu.RLock()
+	ch := invalidateChs[clientID]
+	invalMu.RUnlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- keys:
+	default:
 	}
 }
 
