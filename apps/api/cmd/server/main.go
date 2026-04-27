@@ -19,6 +19,8 @@ import (
 	// Built-in modules — imported for side effects so MODULE LOAD can
 	// activate them by name. Add new modules here to compile them in.
 	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/echo"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/jsonmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/probmod"
 )
 
 func main() {
