@@ -39,6 +39,15 @@ var clusterRoutingExempt = map[string]bool{
 	// (CONFIG is already in the connection-control block above.)
 	"SENTINEL": true,
 
+	// NeuroCache-only primitives — single-node by design.
+	"IDEMPOTENT": true, "LOCK": true, "RATELIMIT": true, "DEDUP": true,
+	"CACHE.WEIGH": true, "CACHE.UNWEIGH": true, "CACHE.STATS": true,
+	"CACHE.WEIGHTS": true, "CACHE.HIT": true,
+	"KEY.TRACK": true, "KEY.UNTRACK": true, "KEY.HISTORY": true, "KEY.AT": true,
+	"AI.LIKE": true, "AI.RECOMMEND": true, "AI.SIMILAR": true,
+	"AI.STATS": true, "AI.FORGET": true,
+	"SHUTDOWN": true,
+
 	// scripting is keyless from the dispatcher's perspective; the
 	// individual redis.call invocations re-enter the routing check.
 	"EVAL": true, "EVALSHA": true, "SCRIPT": true,

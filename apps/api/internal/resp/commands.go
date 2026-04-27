@@ -42,8 +42,6 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeSimple(c.bw, "OK")
 	case "DBSIZE":
 		writeInt(c.bw, int64(c.eng.KV.Size()))
-	case "COMMAND":
-		writeArray(c.bw, []string{})
 	case "HELLO":
 		c.helloCmd(args)
 	case "QUIT":
@@ -57,7 +55,7 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "INFO":
 		writeBulk(c.bw, c.infoString())
 	case "DEBUG":
-		writeSimple(c.bw, "OK")
+		c.debugCmd(args)
 	case "RESET":
 		c.resetCmd()
 	case "OBJECT":
@@ -226,6 +224,28 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.waitaofCmd(args)
 	case "XSETID":
 		c.xsetidCmd(args)
+
+	// ─── plumbing additions ────────────────────────────────────────
+	case "COMMAND":
+		c.commandCmd(args)
+	case "SHUTDOWN":
+		c.shutdownCmd(args)
+
+	// ─── novel NeuroCache primitives ───────────────────────────────
+	case "IDEMPOTENT":
+		c.idempotentCmd(args)
+	case "LOCK":
+		c.lockCmd(args)
+	case "RATELIMIT":
+		c.ratelimitCmd(args)
+	case "DEDUP":
+		c.dedupCmd(args)
+	case "CACHE.WEIGH", "CACHE.UNWEIGH", "CACHE.STATS", "CACHE.WEIGHTS", "CACHE.HIT":
+		c.cacheCmd(splitDottedSubcommand(cmd, args))
+	case "KEY.TRACK", "KEY.UNTRACK", "KEY.HISTORY", "KEY.AT":
+		c.keyHistoryCmd(splitDottedSubcommand(cmd, args))
+	case "AI.LIKE", "AI.RECOMMEND", "AI.SIMILAR", "AI.STATS", "AI.FORGET":
+		c.aiCmd(splitDottedSubcommand(cmd, args))
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{

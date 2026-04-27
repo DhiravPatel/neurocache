@@ -30,6 +30,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/modules"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/primitives"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
@@ -71,6 +72,15 @@ type Engine struct {
 	RuntimeCfg *config.Runtime
 
 	Sentinel *sentinel.Sentinel
+
+	// NeuroCache-only primitives (no Redis equivalent).
+	Idempotent  *primitives.IdempotencyStore
+	Locks       *primitives.LockManager
+	RateLimit   *primitives.RateLimiter
+	Dedup       *primitives.Deduper
+	CostTable   *primitives.CostTable
+	History     *primitives.HistoryStore
+	Recommender *primitives.Recommender
 
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
@@ -140,6 +150,13 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	}
 	e.Modules = modules.NewRegistry(&moduleHandle{e: e})
 	e.RuntimeCfg = config.NewRuntime(&e.Cfg)
+	e.Idempotent = primitives.NewIdempotencyStore()
+	e.Locks = primitives.NewLockManager()
+	e.RateLimit = primitives.NewRateLimiter()
+	e.Dedup = primitives.NewDeduper()
+	e.CostTable = primitives.NewCostTable()
+	e.History = primitives.NewHistoryStore(64, 24*time.Hour)
+	e.Recommender = primitives.NewRecommender()
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
@@ -154,6 +171,13 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		if e.Tracking != nil {
 			for _, t := range e.Tracking.Invalidations(key, 0) {
 				e.invalidateClient(t.ClientID, []string{key})
+			}
+		}
+		// KEY.TRACK time-travel — snapshot the new value when this key
+		// is opted into versioning. Cheap when nothing's tracked.
+		if e.History != nil && e.History.IsTracked(key) {
+			if v, ok, _ := e.KV.GetTyped(key); ok {
+				e.History.Snapshot(key, v)
 			}
 		}
 		// Wake any blocked clients (BLPOP/BRPOP/BLMOVE/BZPOPMIN/BZPOPMAX

@@ -139,6 +139,8 @@ func (c *conn) aclCmd(args []string) {
 			return
 		}
 		writeSimple(c.bw, "OK")
+	case "DRYRUN":
+		c.aclDryRunCmd(args[1:])
 	default:
 		writeError(c.bw, "Unknown ACL subcommand "+args[0])
 	}
@@ -293,15 +295,27 @@ func (c *conn) clientCmd(args []string) {
 		}
 		writeBulk(c.bw, out.String())
 	case "KILL":
-		// CLIENT KILL ID id
-		if len(args) >= 3 && strings.EqualFold(args[1], "ID") {
-			id, _ := strconv.ParseUint(args[2], 10, 64)
-			if c.eng.Clients.Kill(id) {
-				writeInt(c.bw, 1)
-				return
+		// Two forms — Redis 2.4 single-arg "CLIENT KILL <addr>" and the
+		// modern selector-based form "CLIENT KILL [ID id] [ADDR ip:port]
+		// [LADDR ip:port] [USER user] [TYPE …] [SKIPME yes|no]".
+		if len(args) == 2 && !looksLikeSelector(args[1]) {
+			// legacy form: kill by addr
+			for _, ci := range c.eng.Clients.List() {
+				if ci.Addr == args[1] {
+					if c.eng.Clients.Kill(ci.ID) {
+						writeSimple(c.bw, "OK")
+						return
+					}
+				}
 			}
+			writeError(c.bw, "ERR No such client")
+			return
 		}
-		writeInt(c.bw, 0)
+		c.clientKillExtendedCmd(args[1:])
+		return
+	case "GETREDIR":
+		c.clientGetRedirCmd()
+		return
 	case "PAUSE":
 		if len(args) < 2 {
 			writeError(c.bw, "wrong number of arguments")

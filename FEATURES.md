@@ -299,9 +299,37 @@ Every item below was on the "Known gaps" list before this batch — all now ✅.
 | Diskless replication | ✅ | already in-memory; `NEUROCACHE_REPL_DISKLESS` config flag for documentation |
 | Replica-of-replica chains | ✅ | `NEUROCACHE_REPL_CHAINS=true` opts a replica into populating its backlog so downstream replicas can `PSYNC` |
 
+## Plumbing closeout (Redis-shipped commands we previously stubbed)
+
+| Feature | Status | Where |
+|---|---|---|
+| `COMMAND` / `COMMAND COUNT` / `COMMAND LIST` (with FILTERBY) / `COMMAND INFO` / `COMMAND DOCS` / `COMMAND GETKEYS` | ✅ | `resp/commands_command.go` |
+| `SHUTDOWN [NOSAVE\|SAVE\|ABORT]` | ✅ | `resp/commands_plumbing.go` |
+| `SCRIPT KILL` | ✅ | `resp/commands_plumbing.go` |
+| `OBJECT HELP` | ✅ | `resp/commands_admin.go` |
+| `ACL DRYRUN <user> <command> [args]` | ✅ | `resp/commands_plumbing.go` |
+| `DEBUG SLEEP <seconds>` | ✅ | `resp/commands_plumbing.go` |
+| `CLIENT KILL` with `ID/ADDR/LADDR/USER/TYPE/SKIPME` selectors | ✅ | `resp/commands_plumbing.go` |
+| `CLIENT GETREDIR` | ✅ | `resp/commands_plumbing.go` |
+| `XINFO STREAM key FULL` (per-group + per-consumer breakdown) | ✅ | `resp/commands_streams.go` |
+
+## NeuroCache-only primitives (not in Redis)
+
+These commands have no Redis equivalent. Each replaces a pattern most teams hand-roll in client code (or never get around to building correctly).
+
+| Command | What it does | Why it's first-class |
+|---|---|---|
+| `IDEMPOTENT key ttl-ms <command> [args ...]` | Run `<command>` at most once per `(key, ttl)` window; subsequent calls return the cached result without re-executing | Replaces hand-rolled SETNX-then-execute patterns; safe under concurrent retries — coordinated leader/follower wait |
+| `LOCK ACQUIRE/RELEASE/EXTEND/CHECK` | Distributed lock with **monotonic fencing tokens** | Every write returns a strictly-increasing token; downstream services can reject stale operations after a network partition (the bug Kleppmann's "How to do distributed locking" essay called out) |
+| `RATELIMIT key window-ms max [COST n]` | GCRA token-bucket rate limit; returns `[allowed, remaining, retry-after-ms, reset-ms]` | Smooth bursts + exact recovery rate; constant memory per key. The rate-limiter every team eventually rebuilds in Lua |
+| `DEDUP bucket id window-ms` | Returns 1 the first time `(bucket, id)` is seen within `window-ms`, 0 thereafter | Backed by a rotating two-bloom scheme — bounded memory even for unbounded id streams. The exactly-once-on-the-cheap primitive |
+| `CACHE.WEIGH key cost` / `CACHE.UNWEIGH` / `CACHE.HIT` / `CACHE.STATS` / `CACHE.WEIGHTS` | Annotate cache entries with cost (USD, tokens, ms); the eviction scorer uses `cost × (1 + hits)` so high-value entries survive longer | Cost-aware eviction tuned for LLM/AI caches where one cache miss might cost $$ in re-computation |
+| `KEY.TRACK key` / `KEY.UNTRACK` / `KEY.HISTORY key [count]` / `KEY.AT key unix-seconds` | Per-key version history with binary-search time-travel | Audit trails ("what was this user's tier when they hit our API?"), debugging ("show the value right before the incident"), and undo workflows |
+| `AI.LIKE user item [weight]` / `AI.RECOMMEND user [k]` / `AI.SIMILAR user [k]` / `AI.STATS` / `AI.FORGET user` | Collaborative-filtering recommendations: cosine-similarity over user interaction profiles, top-K items unseen by the requester | The recommendation substrate every social/commerce app rebuilds. Pairs with the existing `SEMANTIC_*` and `MEMORY_*` family for hybrid (content + collaborative) recall |
+
 ## Total command count
 
-**~380 commands** across 11 data types + 5 modules + AI-native extensions.
+**~410 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 
