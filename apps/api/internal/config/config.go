@@ -49,6 +49,9 @@ type Config struct {
 	ClusterAnnouncePort  string // port to advertise (defaults to RESPPort)
 	ClusterNodeID        string // optional stable node ID; minted if empty
 	ClusterRequireFullCoverage bool // refuse writes when not all 16384 slots are owned
+
+	// Modules
+	ModulesLoad string // comma-separated list of modules to MODULE LOAD at boot
 }
 
 func Load() Config {
@@ -90,6 +93,8 @@ func Load() Config {
 		ClusterAnnouncePort:        env("NEUROCACHE_CLUSTER_ANNOUNCE_PORT", ""),
 		ClusterNodeID:              env("NEUROCACHE_CLUSTER_NODE_ID", ""),
 		ClusterRequireFullCoverage: envBool("NEUROCACHE_CLUSTER_REQUIRE_FULL_COVERAGE", true),
+
+		ModulesLoad: env("NEUROCACHE_MODULES_LOAD", ""),
 	}
 }
 

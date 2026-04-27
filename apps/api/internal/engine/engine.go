@@ -28,6 +28,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/modules"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
@@ -60,6 +61,8 @@ type Engine struct {
 
 	Cluster *cluster.State
 	Bus     *cluster.Bus
+
+	Modules *modules.Registry
 
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
@@ -124,6 +127,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		stopCh:    make(chan struct{}),
 		versions:  map[string]uint64{},
 	}
+	e.Modules = modules.NewRegistry(&moduleHandle{e: e})
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
@@ -219,6 +223,7 @@ func (e *Engine) Start() {
 			e.Log.Error("cluster bootstrap failed", "err", err)
 		}
 	}
+	e.loadModulesFromConfig()
 }
 
 // startCluster builds the local node, plugs the slot counter into the
@@ -282,6 +287,9 @@ func (e *Engine) Stop() {
 	}
 	if e.Bus != nil {
 		e.Bus.Stop()
+	}
+	if e.Modules != nil {
+		_ = e.Modules.ShutdownAll()
 	}
 }
 

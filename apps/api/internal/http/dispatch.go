@@ -1099,6 +1099,10 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 	case "CLUSTER":
 		return httpCluster(h, args)
 
+	// ─── modules ───────────────────────────────────────────────────
+	case "MODULE":
+		return httpModule(h, args)
+
 	// ─── SCRIPT cache management ───────────────────────────────────
 	case "SCRIPT":
 		if len(args) < 1 {
@@ -1171,6 +1175,11 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 		return h.eng.Memory.List(args[0]), nil
 	}
 
+	// Module-registered commands take the slow path so HTTP playground
+	// users can drive them just like RESP clients.
+	if v, ok, err := dispatchHTTPModule(h, cmd, args); ok {
+		return v, err
+	}
 	return nil, errors.New("unknown command: " + cmd)
 }
 
