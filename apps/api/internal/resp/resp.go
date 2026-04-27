@@ -377,13 +377,63 @@ func (c *conn) execute(parts []string) {
 	}
 
 	c.writeMu.Lock()
+	// CLIENT NO-TOUCH (Redis 7.2): if this conn opted in, snapshot
+	// the LastRead / Hits of every key the command touches so we can
+	// restore them after dispatch. Only meaningful for read-class
+	// commands; writes are exempt because they legitimately mutate
+	// the entry's state.
+	var touchSnap []touchSnapshot
+	if c.info != nil && c.info.NoTouch && !isWriteCommand(cmd) {
+		touchSnap = c.snapshotTouchedKeys(args)
+	}
 	c.dispatch(cmd, args)
+	if touchSnap != nil {
+		c.restoreTouchedKeys(touchSnap)
+	}
 	c.writeMu.Unlock()
 	// Record after dispatch so failed commands don't pollute the AOF.
 	// This check is a best-effort — a write that errored out at parse
 	// time still gets appended, and replay will just log-and-skip it.
 	if isWriteCommand(cmd) {
 		c.eng.RecordWrite(cmd, args)
+	}
+}
+
+// touchSnapshot captures the per-entry state CLIENT NO-TOUCH must
+// preserve across a read.
+type touchSnapshot struct {
+	key      string
+	hits     uint64
+	lastRead time.Time
+}
+
+// snapshotTouchedKeys grabs LastRead / Hits for every key the
+// command might touch. We use keys_for_command — the same key
+// extractor the ACL gate uses — so the snapshot covers exactly
+// what the read will inspect.
+func (c *conn) snapshotTouchedKeys(args []string) []touchSnapshot {
+	keys := keysForCommand(strings.ToUpper(args[0]), args[1:])
+	if len(keys) == 0 {
+		// Some no-key reads (DBSIZE, KEYS, etc.) — nothing to preserve.
+		return nil
+	}
+	out := make([]touchSnapshot, 0, len(keys))
+	for _, k := range keys {
+		hits, last, ok := c.eng.KV.PeekTouchState(k)
+		if !ok {
+			continue
+		}
+		out = append(out, touchSnapshot{key: k, hits: hits, lastRead: last})
+	}
+	return out
+}
+
+// restoreTouchedKeys puts the LastRead / Hits we snapshotted back —
+// undoing whatever the dispatch did. Keys that disappeared during
+// the call (deleted by a concurrent writer) are skipped silently.
+func (c *conn) restoreTouchedKeys(snap []touchSnapshot) {
+	for _, s := range snap {
+		c.eng.KV.RestoreTouchState(s.key, s.hits, s.lastRead)
 	}
 }
 

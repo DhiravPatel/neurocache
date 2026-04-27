@@ -277,6 +277,10 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "HOTKEYS":
 		c.hotkeysCmd(args)
 
+	// ─── phase 6: completionist polish ────────────────────────────
+	case "LOLWUT":
+		c.lolwutCmd(args)
+
 	// ─── phase 5: vector set type ────────────────────────────────
 	case "VADD":
 		c.vaddCmd(args)

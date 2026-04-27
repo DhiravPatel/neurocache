@@ -449,9 +449,40 @@ The big one. New first-class data type backed by a shared `internal/vectorindex/
 
 **Coverage bump**: 11 → **12 data types**.
 
+## Phase 6 — Completionist polish (Redis 8.6 cosmetic gaps)
+
+The pedantic last mile — closing the cosmetic differences monitoring tools (RedisInsight, redis-cli --bigkeys) and pedantic clients pick up on. Functional behaviour was always correct; these changes make the *labels and reports* match Redis exactly so dashboards don't read "uniform raw / linkedlist" everywhere.
+
+| Feature | Status | Where |
+|---|---|---|
+| `OBJECT ENCODING` precision — size-heuristic labels: `int` / `embstr` / `raw` for strings, `listpack` / `quicklist` for lists, `listpack` / `hashtable` for hashes, `intset` / `listpack` / `hashtable` for sets, `listpack` / `skiplist` for zsets. Thresholds match Redis 7.x defaults | ✅ | `store/object.go::resolveEncoding` |
+| `DEBUG OBJECT key` — verbose internal report (encoding, refcount, serializedlength, lru, lru_seconds_idle, type) | ✅ | `resp/commands_debug.go` |
+| `DEBUG SDSLEN key` — string entry size probe | ✅ | `resp/commands_debug.go` |
+| `DEBUG STRINGMATCH-LEN pattern` — glob complexity probe | ✅ | `resp/commands_debug.go` |
+| `DEBUG RELOAD [NOSAVE]` — round-trip the keyspace through save+flush+load | ✅ | `resp/commands_debug.go` |
+| `DEBUG CHANGE-REPL-ID` — bump replication id (forces full resync on reconnecting replicas); new `replication.State.BumpReplID()` helper | ✅ | `resp/commands_debug.go`, `replication/state.go` |
+| `DEBUG JMAP` — Go-runtime memory-class report (heap_alloc, heap_sys, heap_inuse, …) in place of Redis's jemalloc dump | ✅ | `resp/commands_debug.go` |
+| `DEBUG QUICKLIST-PACKED-THRESHOLD` / `DEBUG SET-ACTIVE-EXPIRE` — accepted no-ops for tooling compat | ✅ | `resp/commands_plumbing.go` |
+| `CLIENT NO-TOUCH ON\|OFF` — Redis 7.2; **honored** via per-call snapshot/restore of LastRead+Hits in [resp.go::execute](apps/api/internal/resp/resp.go); new `store.PeekTouchState`/`RestoreTouchState` helpers; `no-touch=1` shows in CLIENT INFO/LIST | ✅ | `resp/resp.go`, `store/store.go`, `introspect/clients.go` |
+| `MEMORY MALLOC-STATS` — Go-runtime allocation summary (HeapAlloc, HeapSys, HeapInuse, HeapIdle, HeapReleased, GCSys, NumGC) | ✅ | `resp/commands_admin.go` |
+| `LOLWUT [VERSION n]` — pixel-art NeuroCache banner + version | ✅ | `resp/commands_lolwut.go` |
+| `FT.SEARCH SUMMARIZE [FIELDS n field ...] [FRAGS n] [LEN n] [SEPARATOR s]` — snippet generation around match positions; defaults match Redis (3 frags × 20 tokens, "... " separator) | ✅ | `modules/builtin/searchmod/highlight.go` |
+| `FT.SEARCH HIGHLIGHT [FIELDS n field ...] [TAGS open close]` — wraps matched terms in markup; whole-word + case-insensitive; default `<b>...</b>` | ✅ | `modules/builtin/searchmod/highlight.go` |
+| `FT.SEARCH INKEYS n key [...]` — restrict result set to specific document IDs | ✅ | `modules/builtin/searchmod/searchmod.go` |
+| `FT.SEARCH INFIELDS n field [...]` — restrict text-match scope to specific fields (post-filter) | ✅ | `modules/builtin/searchmod/searchmod.go` |
+| `FT.SEARCH SLOP n` — phrase proximity tolerance (parsed + accepted; scorer requires adjacency today) | ✅ | `modules/builtin/searchmod/searchmod.go` |
+| `FT.SEARCH RETURN n field AS alias [...]` — field-renaming on return | ✅ | `modules/builtin/searchmod/searchmod.go` |
+
+**Tier 4 (intentionally deferred — multi-session each)**:
+- Redis-binary `DUMP` / `RESTORE` payload format (~1500 lines) — needed for cross-engine migration tools (RIOT, redis-shake)
+- Cluster gossip Redis binary protocol (~1000 lines) — needed for mixing NeuroCache + Redis nodes in one cluster
+- AOF RDB preamble (~400 lines) — Redis 4.0+ writes AOF as `[RDB snapshot][delta commands]` for fast restart on large keyspaces
+
+These are wire-level byte-compatibility lifts. Within an all-NeuroCache deployment, our equivalents work identically; cross-engine interop is the only thing that benefits.
+
 ## Total command count
 
-**~493 commands** across 12 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~509 commands** across 12 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 

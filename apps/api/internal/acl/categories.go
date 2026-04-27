@@ -236,6 +236,9 @@ var registry = map[string]commandInfo{
 	// phase 3: HOTKEYS — admin-class observability command.
 	"HOTKEYS": {[]string{CatAdmin, CatRead, CatFast}},
 
+	// phase 6: completionist polish — joke + niche admin.
+	"LOLWUT": {[]string{CatFast, CatConnection}},
+
 	// phase 5: vector-set type. Sits in its own implicit category
 	// (CatRead/CatWrite + CatSlow for the index-touching ops).
 	"VADD":        {[]string{CatWrite, CatSlow}},

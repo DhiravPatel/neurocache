@@ -19,7 +19,7 @@ var clusterRoutingExempt = map[string]bool{
 	"QUIT": true, "RESET": true, "SELECT": true,
 	"CLIENT": true, "CONFIG": true, "DEBUG": true,
 	"OBJECT": true, "MEMORY": true, "SLOWLOG": true, "LATENCY": true,
-	"HOTKEYS": true,
+	"HOTKEYS": true, "LOLWUT": true,
 
 	// transactions don't redirect — Redis blocks WATCH/MULTI keys at
 	// EXEC time when a slot moves; we follow the same model.

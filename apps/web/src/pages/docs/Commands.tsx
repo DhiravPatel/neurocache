@@ -514,6 +514,11 @@ return n`}</Code>
           { cmd: "CLIENT PAUSE ms / CLIENT UNPAUSE", desc: "Pause new command execution on every client for ms milliseconds." },
           { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
           { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
+          { cmd: "CLIENT NO-TOUCH ON|OFF", desc: "Redis 7.2: when ON, this conn's reads do NOT bump per-key LRU/LFU counters. Honored via per-call snapshot/restore so audits don't poison eviction state." },
+          { cmd: "DEBUG OBJECT key", desc: "Verbose internal report (encoding, refcount, serializedlength, lru_seconds_idle, type) — used by RedisInsight + redis-cli --bigkeys." },
+          { cmd: "DEBUG SDSLEN / STRINGMATCH-LEN / RELOAD / CHANGE-REPL-ID / JMAP / QUICKLIST-PACKED-THRESHOLD / SET-ACTIVE-EXPIRE / SLEEP", desc: "Debug subcommand surface for tooling compat. JMAP returns Go-runtime heap stats in place of Redis's jemalloc dump." },
+          { cmd: "MEMORY MALLOC-STATS", desc: "Go-runtime allocation summary (HeapAlloc, HeapSys, HeapInuse, GCSys, NumGC, …) in place of Redis's jemalloc dump." },
+          { cmd: "LOLWUT [VERSION n]", desc: "ASCII-art banner + version. The joke command — useful as a smoke test that the server speaks Redis." },
           { cmd: "HOTKEYS [count]", desc: "Top-K hot keys by estimated frequency. NeuroCache-native — replaces redis-cli --hotkeys + LFU dance with a real-time HeavyKeeper tracker fed by the engine notifier." },
           { cmd: "HOTKEYS RESET / STATS / COUNT key / THRESHOLD [min] / RESIZE k / SAMPLE [every] / ENABLE | DISABLE / HELP", desc: "Tracker management. STATS exposes config + observation counts + memory cost. SAMPLE 1 records every event; bump to thin under load." },
           { cmd: "SLOWLOG GET [count]", desc: "Most-recent slow executions (id, timestamp, micros, command, client)." },
@@ -866,7 +871,7 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "FT.ADD index docID score [REPLACE] FIELDS field value [...]", desc: "Index a document." },
           { cmd: "FT.DEL index docID", desc: "Remove a document from the index." },
           { cmd: "FT.GET index docID", desc: "Fetch a stored document." },
-          { cmd: "FT.SEARCH index query [NOCONTENT] [WITHSCORES] [LIMIT off n] [SORTBY field [ASC|DESC]] [RETURN n field ...] [PARAMS n k v ...] [DIALECT n]", desc: "Run a query. Supports `term`, `term*`, `\"phrase\"`, `%term%` (fuzzy), `@field:term`, `@field:[lo hi]`, `@field:{tag1|tag2}`, `*=>[KNN k @field $vec]`, `A B` (AND), `A | B` (OR), `-A` (NOT), parentheses." },
+          { cmd: "FT.SEARCH index query [NOCONTENT] [WITHSCORES] [LIMIT off n] [SORTBY field [ASC|DESC]] [RETURN n field [AS alias] ...] [PARAMS n k v ...] [DIALECT n] [INKEYS n key ...] [INFIELDS n field ...] [SLOP n] [SUMMARIZE [FIELDS n field ...] [FRAGS n] [LEN n] [SEPARATOR s]] [HIGHLIGHT [FIELDS n field ...] [TAGS open close]]", desc: "Run a query. Supports `term`, `term*`, `\"phrase\"`, `%term%` (fuzzy), `@field:term`, `@field:[lo hi]`, `@field:{tag1|tag2}`, `*=>[KNN k @field $vec]`, `A B` (AND), `A | B` (OR), `-A` (NOT), parentheses. SUMMARIZE generates snippets around matches; HIGHLIGHT wraps matched terms; INKEYS/INFIELDS narrow scope; RETURN ... AS aliases columns." },
           { cmd: "FT.AGGREGATE index query [LOAD ...] [pipeline-stages ...]", desc: "Stages: GROUPBY n key... REDUCE fn nargs args... [AS alias]; SORTBY n field [ASC|DESC] ...; LIMIT off n; FILTER expr; APPLY expr AS alias." },
           { cmd: "FT.EXPLAIN index query", desc: "Pretty-print the parsed query tree." },
           { cmd: "FT.INFO index", desc: "Schema, field flags, document count." },
@@ -895,16 +900,30 @@ curl -X POST http://localhost:8080/api/exec \\
 
       <h2>Known gaps</h2>
       <p>
-        The remaining cosmetic gaps versus stock Redis 8.6:
+        100% of the Redis 8.6 functional surface is covered. The
+        remaining gaps are wire-level byte compatibility — they only
+        matter for cross-engine interop:
       </p>
       <ul>
         <li>
-          <strong>OBJECT ENCODING precise variants</strong> — we report
-          uniform encoding labels (<code>raw</code> /{" "}
-          <code>linkedlist</code> / <code>hashtable</code> /{" "}
-          <code>skiplist</code> / <code>stream</code>); Redis
-          distinguishes ziplist vs listpack vs hashtable based on
-          internal encoding heuristics.
+          <strong>Redis-binary <code>DUMP</code> / <code>RESTORE</code>{" "}
+          payload format</strong> — we use gob+gzip. Within
+          NeuroCache, DUMP→RESTORE round-trips perfectly. Migration
+          tools (RIOT, redis-shake, RedisRiot) expect Redis's
+          versioned RDB binary format, so cross-engine migration
+          needs a bridge tool today.
+        </li>
+        <li>
+          <strong>Cluster gossip Redis binary protocol</strong> — our
+          cluster bus uses a JSON-serialised format. Within an
+          all-NeuroCache cluster, gossip works fine; you can't mix
+          NeuroCache + real Redis nodes in one cluster.
+        </li>
+        <li>
+          <strong>AOF RDB preamble</strong> — Redis 4.0+ writes AOF
+          as <code>[RDB snapshot][delta commands]</code> for fast
+          restart on large keyspaces. Ours is a pure command log —
+          slower cold start at million-key scale.
         </li>
       </ul>
     </>
