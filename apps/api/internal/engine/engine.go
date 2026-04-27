@@ -22,6 +22,7 @@ import (
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/blocking"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/cluster"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
@@ -56,6 +57,9 @@ type Engine struct {
 	Backlog     *replication.Backlog
 	Master      *replication.Master
 	ReplClient  *replication.Client
+
+	Cluster *cluster.State
+	Bus     *cluster.Bus
 
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
@@ -116,6 +120,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 
 		Replication: replication.NewState(),
 		Backlog:     replication.NewBacklog(cfg.ReplBacklogSize),
+		Cluster:     cluster.NewState(),
 		stopCh:    make(chan struct{}),
 		versions:  map[string]uint64{},
 	}
@@ -209,6 +214,55 @@ func (e *Engine) Start() {
 	if host, port, ok := ParseReplicaOf(e.Cfg.ReplicaOf); ok {
 		e.FollowMaster(host, port)
 	}
+	if e.Cfg.ClusterEnabled {
+		if err := e.startCluster(); err != nil {
+			e.Log.Error("cluster bootstrap failed", "err", err)
+		}
+	}
+}
+
+// startCluster builds the local node, plugs the slot counter into the
+// cluster state, opens the bus listener, and wires PUBLISH fan-out so
+// pub/sub messages reach every node.
+func (e *Engine) startCluster() error {
+	host := e.Cfg.ClusterAnnounceHost
+	if host == "" {
+		host = e.Cfg.Host
+	}
+	port := e.Cfg.ClusterAnnouncePort
+	if port == "" {
+		port = e.Cfg.RESPPort
+	}
+	busPort := e.Cfg.ClusterBusPort
+	if busPort == "" {
+		// Default: dataplane port + 10000, matching Redis's convention.
+		if n, err := strconv.Atoi(port); err == nil {
+			busPort = strconv.Itoa(n + 10000)
+		} else {
+			busPort = "16379"
+		}
+	}
+	myself := cluster.NewNode(e.Cfg.ClusterNodeID, host, port, busPort, cluster.RoleMaster)
+	e.Cluster.Enable(myself)
+	e.Cluster.SetKeyCounter(func(slot int) int {
+		return e.KV.CountKeysInSlot(slot, cluster.KeySlot)
+	})
+
+	e.Bus = cluster.NewBus(e.Cluster, e.Log, ":"+busPort)
+	e.Bus.SetPublishHandler(func(channel, payload string) {
+		e.PubSub.Publish(channel, payload)
+	})
+	if err := e.Bus.Start(); err != nil {
+		return err
+	}
+	e.Log.Info("cluster mode enabled",
+		"node_id", myself.ID, "addr", myself.Addr(), "bus", myself.BusAddr())
+	return nil
+}
+
+// KeysInSlot is a thin wrapper used by CLUSTER GETKEYSINSLOT.
+func (e *Engine) KeysInSlot(slot, count int) []string {
+	return e.KV.KeysInSlot(slot, count, cluster.KeySlot)
 }
 
 func (e *Engine) Stop() {
@@ -225,6 +279,9 @@ func (e *Engine) Stop() {
 	}
 	if e.ReplClient != nil {
 		e.ReplClient.Stop()
+	}
+	if e.Bus != nil {
+		e.Bus.Stop()
 	}
 }
 

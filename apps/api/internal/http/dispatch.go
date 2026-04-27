@@ -1095,6 +1095,10 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 	case "ACL":
 		return httpACL(h, args)
 
+	// ─── cluster ───────────────────────────────────────────────────
+	case "CLUSTER":
+		return httpCluster(h, args)
+
 	// ─── SCRIPT cache management ───────────────────────────────────
 	case "SCRIPT":
 		if len(args) < 1 {

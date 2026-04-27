@@ -41,6 +41,14 @@ type Config struct {
 	ReplicaOf       string // "host:port" or "" — follow a master at boot
 	ReplBacklogSize int64  // bytes retained for partial resync (default 1 MiB)
 	ReplTimeoutSec  int    // dial/read timeout on the master link
+
+	// Clustering
+	ClusterEnabled       bool   // turn on the slot/gossip stack
+	ClusterBusPort       string // gossip listener port (default RESP+10000)
+	ClusterAnnounceHost  string // host to advertise (defaults to RESP host)
+	ClusterAnnouncePort  string // port to advertise (defaults to RESPPort)
+	ClusterNodeID        string // optional stable node ID; minted if empty
+	ClusterRequireFullCoverage bool // refuse writes when not all 16384 slots are owned
 }
 
 func Load() Config {
@@ -75,6 +83,13 @@ func Load() Config {
 		ReplicaOf:       env("NEUROCACHE_REPLICAOF", ""),
 		ReplBacklogSize: int64(envInt("NEUROCACHE_REPL_BACKLOG_SIZE", 1<<20)),
 		ReplTimeoutSec:  envInt("NEUROCACHE_REPL_TIMEOUT_SEC", 60),
+
+		ClusterEnabled:             envBool("NEUROCACHE_CLUSTER_ENABLED", false),
+		ClusterBusPort:             env("NEUROCACHE_CLUSTER_BUS_PORT", ""),
+		ClusterAnnounceHost:        env("NEUROCACHE_CLUSTER_ANNOUNCE_HOST", ""),
+		ClusterAnnouncePort:        env("NEUROCACHE_CLUSTER_ANNOUNCE_PORT", ""),
+		ClusterNodeID:              env("NEUROCACHE_CLUSTER_NODE_ID", ""),
+		ClusterRequireFullCoverage: envBool("NEUROCACHE_CLUSTER_REQUIRE_FULL_COVERAGE", true),
 	}
 }
 
