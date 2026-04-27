@@ -93,6 +93,8 @@ func (c *conn) functionCmd(args []string) {
 			sb.WriteString("\n")
 		}
 		writeBulk(c.bw, sb.String())
+	case "KILL":
+		c.functionKillCmd()
 	case "RESTORE":
 		if len(args) < 2 {
 			writeError(c.bw, "FUNCTION RESTORE payload [FLUSH|APPEND|REPLACE]")
@@ -122,9 +124,9 @@ func (c *conn) functionCmd(args []string) {
 }
 
 // fcallCmd implements FCALL function numkeys [key ...] [arg ...].
-// FCALL_RO is the read-only variant — same dispatch but we still let
-// the engine's per-command ACL gate decide if the caller can mutate.
-func (c *conn) fcallCmd(args []string, _ bool) {
+// FCALL_RO is the read-only variant — readOnly=true makes the redis.call
+// bridge reject every keyspace-mutating command before it executes.
+func (c *conn) fcallCmd(args []string, readOnly bool) {
 	if len(args) < 2 {
 		writeError(c.bw, "wrong number of arguments for 'fcall'")
 		return
@@ -152,8 +154,14 @@ func (c *conn) fcallCmd(args []string, _ bool) {
 		deadline = time.Now().Add(timeout)
 	}
 	caller := scripting.Caller(func(cmd string, a []string) (any, error) {
-		return c.callFromScript(cmd, a)
+		return c.callFromScript(cmd, a, readOnly)
 	})
+	scriptInProgress.Store(true)
+	scriptKillRequested.Store(false)
+	defer func() {
+		scriptInProgress.Store(false)
+		scriptKillRequested.Store(false)
+	}()
 	start := time.Now()
 	v, err := scripting.Run(body, keys, argv, caller, deadline)
 	c.eng.Functions.RecordCall(uint64(time.Since(start).Nanoseconds()), err != nil)
@@ -162,6 +170,19 @@ func (c *conn) fcallCmd(args []string, _ bool) {
 		return
 	}
 	writeValue(c.bw, v)
+}
+
+// functionKillCmd implements FUNCTION KILL — stops the currently
+// executing FCALL by raising the global kill flag the bridge polls
+// between redis.call invocations. Returns NOTBUSY when no function
+// is in flight, mirroring SCRIPT KILL semantics.
+func (c *conn) functionKillCmd() {
+	if !scriptInProgress.Load() {
+		writeError(c.bw, "NOTBUSY No scripts in execution right now.")
+		return
+	}
+	scriptKillRequested.Store(true)
+	writeSimple(c.bw, "OK")
 }
 
 // splitLibraryBlocks separates a concatenated FUNCTION DUMP payload

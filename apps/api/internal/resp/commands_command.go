@@ -166,9 +166,9 @@ func commandKeySpec(name string) (first, last, step int) {
 	switch name {
 	case "MSET", "MSETNX":
 		return 1, -1, 2
-	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT":
+	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT", "TOUCH":
 		return 1, -1, 1
-	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "BLMOVE", "SMOVE":
+	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "GEOSEARCHSTORE":
 		return 1, 2, 1
 	case "BITOP":
 		return 2, -1, 1

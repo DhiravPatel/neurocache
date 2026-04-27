@@ -90,6 +90,9 @@ export default function Commands() {
           { cmd: "PERSIST key", desc: "Clear the TTL; key stops expiring." },
           { cmd: "TTL key", desc: "Remaining seconds. -1 = no expiry, -2 = missing." },
           { cmd: "PTTL key", desc: "Remaining milliseconds." },
+          { cmd: "EXPIRETIME key", desc: "Absolute expiry as Unix seconds. -1 no TTL, -2 missing." },
+          { cmd: "PEXPIRETIME key", desc: "Absolute expiry in milliseconds." },
+          { cmd: "TOUCH key [key ...]", desc: "Refresh last-read time on each existing key without reading the value. Returns count touched." },
           { cmd: "KEYS pattern", desc: "Glob-matched key list. Supports *, ?, [abc]." },
           { cmd: "RENAME src dst", desc: "Atomic rename. Overwrites dst." },
           { cmd: "RENAMENX src dst", desc: "Rename only if dst doesn't exist." },
@@ -141,6 +144,7 @@ export default function Commands() {
           { cmd: "LTRIM key start stop", desc: "Truncate list to the [start, stop] slice." },
           { cmd: "LINSERT key BEFORE|AFTER pivot value", desc: "Insert relative to pivot." },
           { cmd: "RPOPLPUSH src dst", desc: "Pop from src tail, push to dst head, atomically." },
+          { cmd: "LMOVE src dst LEFT|RIGHT LEFT|RIGHT", desc: "Atomic pop-then-push across all four directions; src == dst is a single-element rotate." },
         ]}
       />
 
@@ -206,6 +210,11 @@ export default function Commands() {
           { cmd: "ZCOUNT key min max", desc: "Count members with score in range." },
           { cmd: "ZPOPMIN key / ZPOPMAX key", desc: "Remove and return lowest/highest-scoring member." },
           { cmd: "ZSCAN key cursor [MATCH pat] [COUNT n]", desc: "Cursor-based iteration with scores." },
+          { cmd: "ZMSCORE key member [member ...]", desc: "Parallel ZSCORE; one reply per member, nil for absent." },
+          { cmd: "ZRANDMEMBER key [count [WITHSCORES]]", desc: "Random members. count > 0 unique, < 0 with replacement." },
+          { cmd: "ZREMRANGEBYRANK key start stop", desc: "Remove members in [start, stop] rank range." },
+          { cmd: "ZREMRANGEBYSCORE key min max", desc: "Remove members with score in range. (exclusive bounds and ±inf supported." },
+          { cmd: "ZREMRANGEBYLEX key min max", desc: "Remove members in lex range; tokens accept -/+, [v, (v." },
         ]}
       />
 
@@ -262,6 +271,7 @@ export default function Commands() {
           { cmd: "GEOPOS key member [member ...]", desc: "Return [lon, lat] for each member (nil for missing)." },
           { cmd: "GEODIST key a b [m|km|mi|ft]", desc: "Distance between two members." },
           { cmd: "GEOSEARCH key FROMLONLAT lon lat BYRADIUS r unit [COUNT n]", desc: "Members within a radius of a point." },
+          { cmd: "GEOSEARCHSTORE dest src ...search-args [STOREDIST]", desc: "Same shape as GEOSEARCH, but writes results into dest. Default keeps source geohashes; STOREDIST writes haversine distances." },
           { cmd: "GEOHASH key member [member ...]", desc: "Standard 11-char base32 geohash per member." },
         ]}
       />
@@ -416,10 +426,13 @@ AUTH alice s3cret`}</Code>
       <CmdTable
         rows={[
           { cmd: "EVAL script numkeys [key ...] [arg ...]", desc: "Run a script. KEYS and ARGV are pre-populated Lua tables (1-indexed)." },
+          { cmd: "EVAL_RO script numkeys [key ...] [arg ...]", desc: "Read-only EVAL: redis.call refuses every keyspace-mutating command. Safe on read-only replicas." },
           { cmd: "EVALSHA sha1 numkeys [key ...] [arg ...]", desc: "Same but looks the script up by hash. Returns NOSCRIPT when absent." },
+          { cmd: "EVALSHA_RO sha1 numkeys [key ...] [arg ...]", desc: "Read-only EVALSHA." },
           { cmd: "SCRIPT LOAD script", desc: "Precompile a script and return its sha1." },
           { cmd: "SCRIPT EXISTS sha1 [sha1 ...]", desc: "1/0 vector for whether each hash is cached." },
           { cmd: "SCRIPT FLUSH", desc: "Drop every cached script." },
+          { cmd: "SCRIPT KILL / FUNCTION KILL", desc: "Wake the kill flag the EVAL/FCALL bridge polls between redis.call invocations." },
         ]}
       />
       <p>
@@ -449,6 +462,7 @@ return n`}</Code>
           { cmd: "CLIENT INFO", desc: "One-line summary of the current connection." },
           { cmd: "CLIENT LIST", desc: "Newline-separated summary of every connected client." },
           { cmd: "CLIENT KILL ID id", desc: "Evict a client by ID. Returns 1 / 0." },
+          { cmd: "CLIENT UNBLOCK id [TIMEOUT|ERROR]", desc: "Wake a blocked client. TIMEOUT (default) replies nil; ERROR replies -UNBLOCKED. Returns 1/0 (1 = was blocked)." },
           { cmd: "CLIENT PAUSE ms / CLIENT UNPAUSE", desc: "Pause new command execution on every client for ms milliseconds." },
           { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
           { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
@@ -672,7 +686,8 @@ curl -X POST http://localhost:8080/api/exec \\
         <code>$[0]</code> (negatives ok), <code>$[*]</code>,{" "}
         <code>$.*</code>, <code>$..field</code> (recursive descent).
         Filter expressions like <code>[?(@.qty &gt; 0)]</code> are
-        deferred — use JSON.GET on a subtree and filter client-side.
+        supported — use them inside any path segment to narrow the
+        result set server-side.
       </p>
       <CmdTable
         rows={[
@@ -696,6 +711,8 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "JSON.RESP key [path]", desc: "Return the value as a flattened RESP-shaped array." },
           { cmd: "JSON.MGET key [key ...] path", desc: "Same path on multiple keys." },
           { cmd: "JSON.MSET key path value [key path value ...]", desc: "Atomic multi-document set." },
+          { cmd: "JSON.MERGE key path value", desc: "RFC 7396 JSON Merge Patch — object members merge recursively, null deletes, scalars/arrays replace wholesale." },
+          { cmd: "JSON.ARRINDEX key path value [start [stop]]", desc: "First-match index of value in the array(s) at path; deep equality on objects/arrays, numeric int/float matching." },
         ]}
       />
 

@@ -10,7 +10,7 @@ func keysForCommand(cmd string, args []string) []string {
 	}
 	switch cmd {
 	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP",
-		"PFCOUNT":
+		"PFCOUNT", "TOUCH":
 		return args
 	case "MSET", "MSETNX":
 		out := []string{}
@@ -18,10 +18,17 @@ func keysForCommand(cmd string, args []string) []string {
 			out = append(out, args[i])
 		}
 		return out
-	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "BLMOVE", "SMOVE", "BITOP":
+	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "BITOP":
 		// destination + source (BITOP has dst + sources)
 		return args[1:]
 	case "SINTERSTORE", "SUNIONSTORE", "SDIFFSTORE":
+		// destination + source(s); ACL gates on every key referenced
+		return args
+	case "GEOSEARCHSTORE":
+		// dest src ...search-args — only the first two slots are keys.
+		if len(args) >= 2 {
+			return args[:2]
+		}
 		return args
 	case "ZADD", "XADD", "GEOADD", "PFADD", "PFMERGE":
 		return args[:1]

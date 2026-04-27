@@ -569,7 +569,7 @@ func (c *conn) bzmpopCmd(args []string) {
 		deadline = time.Now().Add(timeout)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		if k, popped, ok := tryPop(); ok {
 			w.Cancel()
 			emitBZMPop(c, k, popped)
@@ -586,8 +586,18 @@ func (c *conn) bzmpopCmd(args []string) {
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(rem)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}
@@ -694,7 +704,7 @@ func (c *conn) blmpopCmd(args []string) {
 		deadline = time.Now().Add(timeout)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		if k, popped, ok := tryPop(); ok {
 			w.Cancel()
 			out := make([]any, len(popped))
@@ -715,8 +725,18 @@ func (c *conn) blmpopCmd(args []string) {
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(rem)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}

@@ -205,6 +205,21 @@ var registry = map[string]commandInfo{
 	"EVAL": {[]string{CatScripting, CatSlow, CatDangerous}}, "EVALSHA": {[]string{CatScripting, CatSlow, CatDangerous}},
 	"SCRIPT": {[]string{CatScripting, CatSlow, CatDangerous}},
 
+	// phase 1: driver-critical fillers — registered so COMMAND DOCS,
+	// ACL CAT, and key-spec lookups treat them as first-class.
+	"TOUCH":            {[]string{CatKeyspace, CatRead, CatFast}},
+	"EXPIRETIME":       {[]string{CatKeyspace, CatRead, CatFast}},
+	"PEXPIRETIME":      {[]string{CatKeyspace, CatRead, CatFast}},
+	"LMOVE":            {[]string{CatList, CatWrite, CatFast}},
+	"ZMSCORE":          {[]string{CatSortedSet, CatRead, CatFast}},
+	"ZRANDMEMBER":      {[]string{CatSortedSet, CatRead, CatSlow}},
+	"ZREMRANGEBYRANK":  {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"ZREMRANGEBYSCORE": {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"ZREMRANGEBYLEX":   {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"GEOSEARCHSTORE":   {[]string{CatGeo, CatWrite, CatSlow}},
+	"EVAL_RO":          {[]string{CatScripting, CatSlow, CatRead}},
+	"EVALSHA_RO":       {[]string{CatScripting, CatSlow, CatRead}},
+
 	// NeuroCache AI-native
 	"SEMANTIC_SET": {[]string{CatAI, CatWrite, CatFast}},
 	"SEMANTIC_GET": {[]string{CatAI, CatRead, CatFast}},

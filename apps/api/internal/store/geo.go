@@ -174,6 +174,42 @@ func (s *Store) GeoSearch(key string, centerLat, centerLon, radius float64, unit
 	return out, nil
 }
 
+// GeoSearchStore copies the result of a GeoSearch into a destination
+// zset. The destination's scores are either the source members'
+// original geohashes (when storeDist=false — Redis default) or the
+// haversine distances in the requested unit (when storeDist=true,
+// matching Redis's STOREDIST flag). Returns the resulting cardinality.
+//
+// Atomicity: the search and the write happen under separate
+// critical sections — concurrent GEOADDs on src after the snapshot
+// won't be visible in dst. This matches Redis's behaviour, which
+// reads src into a temporary buffer before writing dst.
+func (s *Store) GeoSearchStore(dest, src string, centerLat, centerLon, radius float64, unit string, count int, storeDist bool) (int, error) {
+	hits, err := s.GeoSearch(src, centerLat, centerLon, radius, unit, count)
+	if err != nil {
+		return 0, err
+	}
+	merged := map[string]float64{}
+	if storeDist {
+		for _, h := range hits {
+			merged[h.Member] = h.Distance
+		}
+	} else {
+		// preserve original geohash scores for ZRANGE-style ordering
+		s.mu.RLock()
+		se, ok, _ := s.get(src, TypeZSet)
+		if ok {
+			for _, h := range hits {
+				if sc, had := se.ZSet.Score(h.Member); had {
+					merged[h.Member] = sc
+				}
+			}
+		}
+		s.mu.RUnlock()
+	}
+	return s.replaceZSet(dest, merged)
+}
+
 // GeoHash returns the standard 11-char base32 geohash for each member.
 // Missing members come back as empty strings.
 func (s *Store) GeoHash(key string, members ...string) ([]string, error) {

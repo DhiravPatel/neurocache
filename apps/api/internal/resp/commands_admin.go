@@ -316,6 +316,9 @@ func (c *conn) clientCmd(args []string) {
 	case "GETREDIR":
 		c.clientGetRedirCmd()
 		return
+	case "UNBLOCK":
+		c.clientUnblockCmd(args[1:])
+		return
 	case "PAUSE":
 		if len(args) < 2 {
 			writeError(c.bw, "wrong number of arguments")

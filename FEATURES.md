@@ -327,9 +327,29 @@ These commands have no Redis equivalent. Each replaces a pattern most teams hand
 | `KEY.TRACK key` / `KEY.UNTRACK` / `KEY.HISTORY key [count]` / `KEY.AT key unix-seconds` | Per-key version history with binary-search time-travel | Audit trails ("what was this user's tier when they hit our API?"), debugging ("show the value right before the incident"), and undo workflows |
 | `AI.LIKE user item [weight]` / `AI.RECOMMEND user [k]` / `AI.SIMILAR user [k]` / `AI.STATS` / `AI.FORGET user` | Collaborative-filtering recommendations: cosine-similarity over user interaction profiles, top-K items unseen by the requester | The recommendation substrate every social/commerce app rebuilds. Pairs with the existing `SEMANTIC_*` and `MEMORY_*` family for hybrid (content + collaborative) recall |
 
+## Phase 1 — Driver-critical fillers (Redis 8.6 closeout)
+
+Commands every official driver calls by default. Each is a small, additive handler — no new types, no new subsystems.
+
+| Feature | Status | Where |
+|---|---|---|
+| `ZMSCORE key member [member ...]` — parallel `ZSCORE` (Redis 6.2) | ✅ | `store/zset_extras.go`, `resp/commands_misc.go` |
+| `ZRANDMEMBER key [count [WITHSCORES]]` — single / unique / with-replacement / scored | ✅ | `store/zset_extras.go`, `resp/commands_misc.go` |
+| `ZREMRANGEBYRANK / ZREMRANGEBYSCORE / ZREMRANGEBYLEX` | ✅ | `store/zset_extras.go`, `resp/commands_misc.go` |
+| `LMOVE source destination LEFT\|RIGHT LEFT\|RIGHT` — atomic across all 4 directions, supports `src == dst` rotation | ✅ | `store/list_extras.go`, `resp/commands_misc.go` |
+| `TOUCH key [key ...]` — refresh `LastRead` without reading values (LFU/LRU helper) | ✅ | `store/list_extras.go`, `resp/commands_misc.go` |
+| `EXPIRETIME / PEXPIRETIME` — absolute Unix expiry as seconds / ms | ✅ | `store/list_extras.go`, `resp/commands_misc.go` |
+| `OBJECT FREQ` — already shipped; reads from per-entry hit counter | ✅ | `resp/commands_admin.go` |
+| `EVAL_RO / EVALSHA_RO` — read-only EVAL; bridge rejects writes, kill flag now actually toggles | ✅ | `resp/commands_script.go` |
+| `FUNCTION KILL` — wakes the script-kill flag the FCALL bridge polls between `redis.call` invocations | ✅ | `resp/commands_function.go` |
+| `CLIENT UNBLOCK <id> [TIMEOUT\|ERROR]` — unblock blocked client; `ERROR` form emits canonical `-UNBLOCKED` reply | ✅ | `blocking/waiters.go` (per-client index, reason flag), `resp/commands_misc.go`, every blocking handler now uses `RegisterFor` |
+| `GEOSEARCHSTORE dest src ...search-args [STOREDIST]` — write search results into a destination zset; default keeps geohash scores, `STOREDIST` writes haversine distances | ✅ | `store/geo.go`, `resp/commands_misc.go` |
+| `JSON.MERGE key path value` — RFC 7396 JSON Merge Patch (object-recurse, scalar-replace, null-deletes) | ✅ | `modules/builtin/jsonmod/extras.go` |
+| `JSON.ARRINDEX key path value [start [stop]]` — deep-equality search (works for nested objects/arrays + numeric int/float comparison) | ✅ | `modules/builtin/jsonmod/extras.go` |
+
 ## Total command count
 
-**~410 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~430 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 

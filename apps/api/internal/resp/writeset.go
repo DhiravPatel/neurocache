@@ -60,6 +60,13 @@ var writeCommands = map[string]bool{
 	"HPERSIST": true,
 	"BITFIELD": true,
 	"XSETID": true,
+
+	// phase 1: driver-critical fillers
+	"LMOVE": true, "BLMOVE": true,
+	"ZREMRANGEBYRANK": true, "ZREMRANGEBYSCORE": true, "ZREMRANGEBYLEX": true,
+	"GEOSEARCHSTORE": true,
+	// JSON.MERGE is module-write — module dispatch already records it
+	// via the writer hook; we do not list it here.
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

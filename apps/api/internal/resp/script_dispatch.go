@@ -285,6 +285,57 @@ func scriptDispatch(c *conn, cmd string, args []string) (any, error) {
 		}
 		return ret, nil
 
+	// phase 1 fillers — same shape as the dispatcher handlers, with the
+	// reply lowered to a plain Go value so Lua can consume it via the
+	// resp <-> Lua bridge in lua_real.go.
+	case "TOUCH":
+		return int64(c.eng.KV.Touch(args...)), nil
+	case "EXPIRETIME":
+		return c.eng.KV.ExpireTime(args[0]), nil
+	case "PEXPIRETIME":
+		return c.eng.KV.PExpireTime(args[0]), nil
+	case "LMOVE":
+		if len(args) < 4 {
+			return nil, errors.New("LMOVE requires source destination LEFT|RIGHT LEFT|RIGHT")
+		}
+		v, ok, err := c.eng.KV.LMove(args[0], args[1], strings.EqualFold(args[2], "RIGHT"), strings.EqualFold(args[3], "RIGHT"))
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, nil
+		}
+		c.eng.RecordWrite("LMOVE", args)
+		return v, nil
+	case "ZMSCORE":
+		scores, hits, err := c.eng.KV.ZMScore(args[0], args[1:]...)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(hits))
+		for i, h := range hits {
+			if !h {
+				out[i] = nil
+				continue
+			}
+			out[i] = strconv.FormatFloat(scores[i], 'f', -1, 64)
+		}
+		return out, nil
+	case "ZREMRANGEBYRANK":
+		s, _ := strconv.Atoi(args[1])
+		e, _ := strconv.Atoi(args[2])
+		n, err := c.eng.KV.ZRemRangeByRank(args[0], s, e)
+		c.eng.RecordWrite("ZREMRANGEBYRANK", args)
+		return int64(n), err
+	case "ZREMRANGEBYSCORE":
+		n, err := c.eng.KV.ZRemRangeByScore(args[0], args[1], args[2])
+		c.eng.RecordWrite("ZREMRANGEBYSCORE", args)
+		return int64(n), err
+	case "ZREMRANGEBYLEX":
+		n, err := c.eng.KV.ZRemRangeByLex(args[0], args[1], args[2])
+		c.eng.RecordWrite("ZREMRANGEBYLEX", args)
+		return int64(n), err
+
 	// pub/sub
 	case "PUBLISH":
 		return int64(c.eng.PubSub.Publish(args[0], args[1])), nil
