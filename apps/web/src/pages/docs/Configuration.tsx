@@ -137,6 +137,24 @@ export default function Configuration() {
             </td>
           </tr>
           <tr>
+            <td><code>NEUROCACHE_HOTKEYS_K</code></td>
+            <td><code>128</code></td>
+            <td>
+              Top-K size for the runtime <code>HOTKEYS</code> tracker.
+              Resize at runtime via <code>HOTKEYS RESIZE k</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_HOTKEYS_SAMPLE</code></td>
+            <td><code>1</code></td>
+            <td>
+              1-in-N sampling rate for the <code>HOTKEYS</code>{" "}
+              tracker. <code>1</code> records every keyspace event;
+              raise to thin the stream under high load. Adjust at
+              runtime via <code>HOTKEYS SAMPLE every</code>.
+            </td>
+          </tr>
+          <tr>
             <td><code>NEUROCACHE_REPLICAOF</code></td>
             <td><em>(unset)</em></td>
             <td>

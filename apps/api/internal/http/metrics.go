@@ -24,3 +24,28 @@ func (h *handlers) metricsHotKeys(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) metricsBreakdown(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"commands": h.eng.Metrics.CommandBreakdown()})
 }
+
+// hotKeysTracker surfaces the runtime HeavyKeeper-backed top-K tracker
+// (HOTKEYS command). Distinct from /api/metrics/hot-keys, which only
+// tracks GET hits — this endpoint captures every keyspace mutation
+// the engine notifier sees, downsampled.
+func (h *handlers) hotKeysTracker(w http.ResponseWriter, r *http.Request) {
+	if h.eng.HotKeys == nil {
+		writeJSON(w, 503, map[string]any{"error": "hotkeys tracker disabled"})
+		return
+	}
+	k := 0 // 0 = whole heap
+	if v, err := strconv.Atoi(r.URL.Query().Get("k")); err == nil && v > 0 {
+		k = v
+	}
+	rows := h.eng.HotKeys.Top(k)
+	out := make([]map[string]any, len(rows))
+	for i, r := range rows {
+		out[i] = map[string]any{"key": r.Key, "count": r.Count}
+	}
+	stats := h.eng.HotKeys.Stats()
+	writeJSON(w, 200, map[string]any{
+		"keys":  out,
+		"stats": stats,
+	})
+}

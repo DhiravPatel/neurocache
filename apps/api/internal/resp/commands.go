@@ -273,6 +273,10 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "GEORADIUSBYMEMBER_RO":
 		c.georadiusByMemberCmd(args, true)
 
+	// ─── phase 3: hot-key tracker ─────────────────────────────────
+	case "HOTKEYS":
+		c.hotkeysCmd(args)
+
 	// ─── plumbing additions ────────────────────────────────────────
 	case "COMMAND":
 		c.commandCmd(args)

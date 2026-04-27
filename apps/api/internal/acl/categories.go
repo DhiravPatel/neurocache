@@ -233,6 +233,9 @@ var registry = map[string]commandInfo{
 	"GEORADIUSBYMEMBER":      {[]string{CatGeo, CatWrite, CatSlow}},
 	"GEORADIUSBYMEMBER_RO":   {[]string{CatGeo, CatRead, CatSlow}},
 
+	// phase 3: HOTKEYS — admin-class observability command.
+	"HOTKEYS": {[]string{CatAdmin, CatRead, CatFast}},
+
 	// NeuroCache AI-native
 	"SEMANTIC_SET": {[]string{CatAI, CatWrite, CatFast}},
 	"SEMANTIC_GET": {[]string{CatAI, CatRead, CatFast}},

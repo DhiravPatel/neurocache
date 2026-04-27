@@ -478,6 +478,8 @@ return n`}</Code>
           { cmd: "CLIENT PAUSE ms / CLIENT UNPAUSE", desc: "Pause new command execution on every client for ms milliseconds." },
           { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
           { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
+          { cmd: "HOTKEYS [count]", desc: "Top-K hot keys by estimated frequency. NeuroCache-native — replaces redis-cli --hotkeys + LFU dance with a real-time HeavyKeeper tracker fed by the engine notifier." },
+          { cmd: "HOTKEYS RESET / STATS / COUNT key / THRESHOLD [min] / RESIZE k / SAMPLE [every] / ENABLE | DISABLE / HELP", desc: "Tracker management. STATS exposes config + observation counts + memory cost. SAMPLE 1 records every event; bump to thin under load." },
           { cmd: "SLOWLOG GET [count]", desc: "Most-recent slow executions (id, timestamp, micros, command, client)." },
           { cmd: "SLOWLOG LEN / SLOWLOG RESET", desc: "Entry count / wipe the ring buffer." },
           { cmd: "LATENCY LATEST", desc: "One row per event name with the most recent sample." },
@@ -869,10 +871,6 @@ curl -X POST http://localhost:8080/api/exec \\
         <li>
           <strong>Vector set type (V*)</strong> — first-class vector
           set is in the next phase.
-        </li>
-        <li>
-          <strong>HOTKEYS</strong> — the Redis 8.6 top-K key access
-          tracker; landing in a dedicated phase.
         </li>
       </ul>
     </>

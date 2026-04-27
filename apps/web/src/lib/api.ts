@@ -154,4 +154,25 @@ export const api = {
     req<{ keys: HotKey[] }>(`/api/metrics/hot-keys?k=${k}`),
   metricsBreakdown: () =>
     req<{ commands: CommandCount[] }>("/api/metrics/breakdown"),
+
+  // HOTKEYS — runtime HeavyKeeper-backed top-K (every keyspace
+  // mutation, downsampled). Distinct from metricsHotKeys which only
+  // tracks GET hits.
+  hotKeysTracker: (k = 25) =>
+    req<{
+      keys: { key: string; count: number }[];
+      stats: {
+        Enabled: boolean;
+        K: number;
+        Width: number;
+        Depth: number;
+        Decay: number;
+        SampleEvery: number;
+        Threshold: number;
+        Tracked: number;
+        Observations: number;
+        Events: number;
+        BytesApprox: number;
+      };
+    }>(`/api/hotkeys?k=${k}`),
 };

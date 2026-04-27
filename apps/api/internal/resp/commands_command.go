@@ -179,7 +179,7 @@ func commandKeySpec(name string) (first, last, step int) {
 		return 1, 1, 1
 	case "BLPOP", "BRPOP", "BZPOPMIN", "BZPOPMAX":
 		return 1, -2, 1
-	case "MIGRATE", "XREAD", "XREADGROUP", "WAIT", "WAITAOF":
+	case "MIGRATE", "XREAD", "XREADGROUP", "WAIT", "WAITAOF", "HOTKEYS":
 		return 0, 0, 0
 	}
 	if name == "" {

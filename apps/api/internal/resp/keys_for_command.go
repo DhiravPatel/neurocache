@@ -56,6 +56,11 @@ func keysForCommand(cmd string, args []string) []string {
 		// returning nil punts the check (XREAD permission already requires
 		// CatStream). Real Redis does the same imprecise gating.
 		return nil
+	case "HOTKEYS":
+		// Admin observability — no key arguments. Without this clause
+		// the default would treat subcommand keywords like RESET / STATS
+		// as keys, which the ACL gate would then check for read perms.
+		return nil
 	}
 	return args[:1]
 }
