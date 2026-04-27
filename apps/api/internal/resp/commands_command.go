@@ -170,6 +170,9 @@ func commandKeySpec(name string) (first, last, step int) {
 		return 1, -1, 1
 	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "GEOSEARCHSTORE":
 		return 1, 2, 1
+	case "GEORADIUS", "GEORADIUS_RO", "GEORADIUSBYMEMBER", "GEORADIUSBYMEMBER_RO",
+		"HGETDEL", "HGETEX", "HSETEX", "HEXPIRETIME", "HPEXPIRETIME":
+		return 1, 1, 1
 	case "BITOP":
 		return 2, -1, 1
 	case "ZADD", "XADD", "GEOADD", "PFADD", "PFMERGE", "SADD", "SREM", "HSET", "HDEL", "LPUSH", "RPUSH":

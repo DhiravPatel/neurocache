@@ -102,7 +102,7 @@ func ftSynUpdate(c *modules.Ctx, args []string) error {
 		c.Reply.Error("FT.SYNUPDATE index group term [term ...]")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -114,7 +114,7 @@ func ftSynUpdate(c *modules.Ctx, args []string) error {
 
 // FT.SYNDUMP index
 func ftSynDump(c *modules.Ctx, args []string) error {
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -138,7 +138,7 @@ func ftSpellCheck(c *modules.Ctx, args []string) error {
 		c.Reply.Error("FT.SPELLCHECK index query [DISTANCE n]")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -224,7 +224,7 @@ func ftProfile(c *modules.Ctx, args []string) error {
 		c.Reply.Error("FT.PROFILE index SEARCH|AGGREGATE QUERY ...")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil

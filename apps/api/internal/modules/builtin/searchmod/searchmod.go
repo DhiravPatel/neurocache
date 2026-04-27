@@ -99,6 +99,22 @@ func initModule(ctx *modules.RegisterCtx) error {
 
 		// Profile
 		{Name: "FT.PROFILE", Arity: -4, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftProfile},
+
+		// Aliases
+		{Name: "FT.ALIASADD", Arity: 3, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftAliasAdd},
+		{Name: "FT.ALIASUPDATE", Arity: 3, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftAliasUpdate},
+		{Name: "FT.ALIASDEL", Arity: 2, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftAliasDel},
+
+		// Custom dictionaries (for spellcheck INCLUDE/EXCLUDE)
+		{Name: "FT.DICTADD", Arity: -3, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftDictAdd},
+		{Name: "FT.DICTDEL", Arity: -3, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftDictDel},
+		{Name: "FT.DICTDUMP", Arity: 2, Categories: r, KeyPosition: modules.KeyNone, Run: ftDictDump},
+
+		// Tag enumeration
+		{Name: "FT.TAGVALS", Arity: 3, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftTagVals},
+
+		// Runtime config
+		{Name: "FT.CONFIG", Arity: -2, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftConfig},
 	} {
 		if err := ctx.RegisterCmd(c); err != nil {
 			return err
@@ -175,6 +191,16 @@ func ftDropIndex(c *modules.Ctx, args []string) error {
 		c.Reply.Error("Unknown index")
 		return nil
 	}
+	// Sweep dangling aliases — they would otherwise resolve to a
+	// non-existent index and surface a confusing "Unknown index"
+	// error on the next FT.SEARCH.
+	aliasMu.Lock()
+	for a, target := range aliases {
+		if target == name {
+			delete(aliases, a)
+		}
+	}
+	aliasMu.Unlock()
 	c.Reply.SimpleString("OK")
 	return nil
 }
@@ -185,7 +211,7 @@ func ftAlter(c *modules.Ctx, args []string) error {
 		c.Reply.Error("FT.ALTER index SCHEMA ADD field type [flags ...]")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -223,7 +249,7 @@ func ftAdd(c *modules.Ctx, args []string) error {
 		c.Reply.Error("wrong number of arguments for 'ft.add'")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -261,7 +287,7 @@ func ftAdd(c *modules.Ctx, args []string) error {
 
 // FT.DEL index docID
 func ftDel(c *modules.Ctx, args []string) error {
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Int(0)
 		return nil
@@ -276,7 +302,7 @@ func ftDel(c *modules.Ctx, args []string) error {
 
 // FT.GET index docID
 func ftGet(c *modules.Ctx, args []string) error {
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.NilArray()
 		return nil
@@ -301,7 +327,7 @@ func ftSearch(c *modules.Ctx, args []string) error {
 		c.Reply.Error("wrong number of arguments for 'ft.search'")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -440,7 +466,7 @@ func ftAggregate(c *modules.Ctx, args []string) error {
 		c.Reply.Error("wrong number of arguments for 'ft.aggregate'")
 		return nil
 	}
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -490,7 +516,7 @@ func ftAggregate(c *modules.Ctx, args []string) error {
 
 // FT.EXPLAIN index query
 func ftExplain(c *modules.Ctx, args []string) error {
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil
@@ -507,7 +533,7 @@ func ftExplain(c *modules.Ctx, args []string) error {
 
 // FT.INFO index
 func ftInfo(c *modules.Ctx, args []string) error {
-	idx, ok := getIndex(args[0])
+	idx, ok := resolveIndex(args[0])
 	if !ok {
 		c.Reply.Error("Unknown index")
 		return nil

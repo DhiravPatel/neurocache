@@ -1,5 +1,7 @@
 package resp
 
+import "strings"
+
 // keysForCommand returns the slice of args that the given command treats
 // as keys. The ACL layer uses this to enforce key-pattern permissions.
 // Conservative: when in doubt, return args[:1] so the user must have
@@ -30,6 +32,18 @@ func keysForCommand(cmd string, args []string) []string {
 			return args[:2]
 		}
 		return args
+	case "GEORADIUS", "GEORADIUS_RO", "GEORADIUSBYMEMBER", "GEORADIUSBYMEMBER_RO":
+		// args[0] is the source key. STORE / STOREDIST options carry an
+		// additional destination key — surface it so cluster routing
+		// rejects cross-slot writes.
+		out := []string{args[0]}
+		for i := 1; i < len(args); i++ {
+			if (strings.EqualFold(args[i], "STORE") || strings.EqualFold(args[i], "STOREDIST")) && i+1 < len(args) {
+				out = append(out, args[i+1])
+				i++
+			}
+		}
+		return out
 	case "ZADD", "XADD", "GEOADD", "PFADD", "PFMERGE":
 		return args[:1]
 	case "BLPOP", "BRPOP", "BZPOPMIN", "BZPOPMAX":

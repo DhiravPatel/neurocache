@@ -336,6 +336,133 @@ func scriptDispatch(c *conn, cmd string, args []string) (any, error) {
 		c.eng.RecordWrite("ZREMRANGEBYLEX", args)
 		return int64(n), err
 
+	// phase 2 hash extras — same shapes as the dispatcher handlers.
+	// The reply value is the bare Go object so the gopher-lua bridge
+	// translates it into a Lua table without an extra wrapper.
+	case "HGETDEL":
+		// Layout: HGETDEL key FIELDS n field [field ...]
+		if len(args) < 4 || !strings.EqualFold(args[1], "FIELDS") {
+			return nil, errors.New("HGETDEL key FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[2])
+		if err != nil || n <= 0 || 3+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		fields := args[3 : 3+n]
+		values, hits, err := c.eng.KV.HGetDel(args[0], fields)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HGETDEL", args)
+		out := make([]any, len(fields))
+		for i := range fields {
+			if hits[i] {
+				out[i] = values[i]
+			}
+		}
+		return out, nil
+	case "HEXPIRETIME", "HPEXPIRETIME":
+		if len(args) < 4 || !strings.EqualFold(args[1], "FIELDS") {
+			return nil, errors.New(cmd + " key FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[2])
+		if err != nil || n <= 0 || 3+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		ms := cmd == "HPEXPIRETIME"
+		out, err := c.eng.KV.HExpireTime(args[0], args[3:3+n], ms)
+		if err != nil {
+			return nil, err
+		}
+		flat := make([]any, len(out))
+		for i, v := range out {
+			flat[i] = v
+		}
+		return flat, nil
+	case "HGETEX":
+		// Layout: HGETEX key [EX|PX|EXAT|PXAT v|PERSIST] FIELDS n field [...]
+		if len(args) < 4 {
+			return nil, errors.New("HGETEX requires key + TTL clause + FIELDS")
+		}
+		mode, value := "", int64(0)
+		i := 1
+	hexLoop:
+		for ; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "EX", "PX", "EXAT", "PXAT":
+				if i+1 >= len(args) {
+					return nil, errors.New("syntax error")
+				}
+				mode = strings.ToUpper(args[i])
+				v, err := strconv.ParseInt(args[i+1], 10, 64)
+				if err != nil {
+					return nil, errors.New("value is not an integer")
+				}
+				value = v
+				i++
+			case "PERSIST":
+				mode = "PERSIST"
+			case "FIELDS":
+				break hexLoop
+			}
+		}
+		if i+2 >= len(args) || !strings.EqualFold(args[i], "FIELDS") {
+			return nil, errors.New("HGETEX FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err != nil || n <= 0 || i+2+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		fields := args[i+2 : i+2+n]
+		values, hits, err := c.eng.KV.HGetEx(args[0], fields, mode, value)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HGETEX", args)
+		out := make([]any, len(fields))
+		for j := range fields {
+			if hits[j] {
+				out[j] = values[j]
+			}
+		}
+		return out, nil
+	case "HSETEX":
+		// Layout: HSETEX key seconds [FNX|FXX] FIELDS n field value [...]
+		if len(args) < 5 {
+			return nil, errors.New("HSETEX key seconds [FNX|FXX] FIELDS n field value [...]")
+		}
+		secs, err := strconv.Atoi(args[1])
+		if err != nil || secs < 0 {
+			return nil, errors.New("invalid expire time in 'hsetex'")
+		}
+		cond := ""
+		i := 2
+		switch strings.ToUpper(args[i]) {
+		case "FNX", "FXX":
+			cond = strings.ToUpper(args[i])
+			i++
+		}
+		if i >= len(args) || !strings.EqualFold(args[i], "FIELDS") {
+			return nil, errors.New("HSETEX FIELDS clause required")
+		}
+		if i+2 >= len(args) {
+			return nil, errors.New("ERR FIELDS numfields field value [...]")
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err != nil || n <= 0 {
+			return nil, errors.New("ERR numfields must be a positive integer")
+		}
+		rest := args[i+2:]
+		if len(rest) != 2*n {
+			return nil, errors.New("ERR numfields does not match the supplied field/value count")
+		}
+		res, err := c.eng.KV.HSetEx(args[0], time.Duration(secs)*time.Second, cond, rest)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HSETEX", args)
+		return int64(res), nil
+
 	// pub/sub
 	case "PUBLISH":
 		return int64(c.eng.PubSub.Publish(args[0], args[1])), nil

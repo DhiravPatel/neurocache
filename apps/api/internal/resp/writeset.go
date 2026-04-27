@@ -67,6 +67,11 @@ var writeCommands = map[string]bool{
 	"GEOSEARCHSTORE": true,
 	// JSON.MERGE is module-write — module dispatch already records it
 	// via the writer hook; we do not list it here.
+
+	// phase 2: hash field TTL extras + deprecated geo family
+	"HGETDEL": true, "HGETEX": true, "HSETEX": true,
+	"GEORADIUS": true, "GEORADIUSBYMEMBER": true,
+	// _RO variants are reads; only the writing forms appear here.
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

@@ -251,6 +251,28 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "GEOSEARCHSTORE":
 		c.geosearchstoreCmd(args)
 
+	// ─── phase 2: hash field TTL extras ───────────────────────────
+	case "HGETDEL":
+		c.hgetdelCmd(args)
+	case "HGETEX":
+		c.hgetexCmd(args)
+	case "HSETEX":
+		c.hsetexCmd(args)
+	case "HEXPIRETIME":
+		c.hexpireTimeCmd(args, false)
+	case "HPEXPIRETIME":
+		c.hexpireTimeCmd(args, true)
+
+	// ─── phase 2: deprecated geo family ───────────────────────────
+	case "GEORADIUS":
+		c.georadiusCmd(args, false)
+	case "GEORADIUS_RO":
+		c.georadiusCmd(args, true)
+	case "GEORADIUSBYMEMBER":
+		c.georadiusByMemberCmd(args, false)
+	case "GEORADIUSBYMEMBER_RO":
+		c.georadiusByMemberCmd(args, true)
+
 	// ─── plumbing additions ────────────────────────────────────────
 	case "COMMAND":
 		c.commandCmd(args)

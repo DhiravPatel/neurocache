@@ -347,9 +347,32 @@ Commands every official driver calls by default. Each is a small, additive handl
 | `JSON.MERGE key path value` — RFC 7396 JSON Merge Patch (object-recurse, scalar-replace, null-deletes) | ✅ | `modules/builtin/jsonmod/extras.go` |
 | `JSON.ARRINDEX key path value [start [stop]]` — deep-equality search (works for nested objects/arrays + numeric int/float comparison) | ✅ | `modules/builtin/jsonmod/extras.go` |
 
+## Phase 2 — Production-relevant supporting commands
+
+Heavier than Phase 1, still no new types — mostly subcommands inside existing modules. These are the operational fillers that tooling, drivers, and operators reach for next.
+
+| Feature | Status | Where |
+|---|---|---|
+| `HGETDEL key FIELDS n field [...]` — atomic read+delete on hash fields; key dies when last field goes (Redis 8.0) | ✅ | `store/hash_extras.go`, `resp/commands_phase2.go` |
+| `HGETEX key [EX\|PX\|EXAT\|PXAT v\|PERSIST] FIELDS n field [...]` — atomic read + per-field TTL adjust | ✅ | `store/hash_extras.go`, `resp/commands_phase2.go` |
+| `HSETEX key seconds [FNX\|FXX] FIELDS n field value [...]` — atomic set + per-field TTL with FNX/FXX conditional gate (whole call rejected if any field fails) | ✅ | `store/hash_extras.go`, `resp/commands_phase2.go` |
+| `HEXPIRETIME / HPEXPIRETIME key FIELDS n field [...]` — absolute Unix expiry per field (s / ms) | ✅ | `store/hash_extras.go`, `resp/commands_phase2.go` |
+| `FT.ALIASADD / FT.ALIASUPDATE / FT.ALIASDEL` — alternate names that resolve to a canonical index; honoured by every FT.* read path; FT.DROPINDEX sweeps dangling aliases | ✅ | `modules/builtin/searchmod/admin.go`, `admin_commands.go` |
+| `FT.DICTADD / FT.DICTDEL / FT.DICTDUMP` — custom term dictionaries used by `FT.SPELLCHECK ... TERMS INCLUDE/EXCLUDE` | ✅ | `modules/builtin/searchmod/admin.go`, `admin_commands.go` |
+| `FT.TAGVALS index field` — distinct values present on a TAG field, sorted | ✅ | `modules/builtin/searchmod/admin.go`, `admin_commands.go` |
+| `FT.CONFIG GET\|SET\|RESETSTAT\|HELP` — runtime tunables; ships with `MAXEXPANSIONS / MAXSEARCHRESULTS / MAXAGGREGATERESULTS / DEFAULT_DIALECT / TIMEOUT / MIN_PHONETIC_TERM_LEN / FORK_GC_RUN_INTERVAL` defaults; unknown keys round-trip | ✅ | `modules/builtin/searchmod/admin.go`, `admin_commands.go` |
+| `CLUSTER REPLICAS / CLUSTER SLAVES <node-id>` — every replica pointing at the named master, formatted as CLUSTER NODES rows | ✅ | `resp/commands_cluster_admin.go` |
+| `CLUSTER MYSHARDID` — shard identifier (master's own ID, or master-id for a replica) | ✅ | `resp/commands_cluster_admin.go` |
+| `CLUSTER FLUSHSLOTS` — release every slot this node owns (re-shard prep) | ✅ | `resp/commands_cluster_admin.go` |
+| `CLUSTER SAVECONFIG` — bump epoch so the gossip subsystem snapshots on the next tick | ✅ | `resp/commands_cluster_admin.go` |
+| `CLUSTER SLOT-STATS [SLOTSRANGE start end] [ORDERBY field [ASC\|DESC] [LIMIT n]]` — per-slot key-count stats with optional range + ordering | ✅ | `resp/commands_cluster_admin.go` |
+| `GEORADIUS key lon lat r unit [WITHCOORD\|WITHDIST\|WITHHASH] [COUNT n [ANY]] [ASC\|DESC] [STORE\|STOREDIST dest]` — deprecated form retained for legacy drivers; STORE/STOREDIST routes through the same helper as `GEOSEARCHSTORE` | ✅ | `resp/commands_geo_legacy.go` |
+| `GEORADIUSBYMEMBER` — same shape but the centre is a member's coordinates; auto-excludes the centre from results | ✅ | `resp/commands_geo_legacy.go` |
+| `GEORADIUS_RO / GEORADIUSBYMEMBER_RO` — read-only variants; STORE/STOREDIST options return ERR | ✅ | `resp/commands_geo_legacy.go` |
+
 ## Total command count
 
-**~430 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~460 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 

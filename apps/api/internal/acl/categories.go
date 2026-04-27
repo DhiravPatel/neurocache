@@ -220,6 +220,19 @@ var registry = map[string]commandInfo{
 	"EVAL_RO":          {[]string{CatScripting, CatSlow, CatRead}},
 	"EVALSHA_RO":       {[]string{CatScripting, CatSlow, CatRead}},
 
+	// phase 2: hash field TTL extras
+	"HGETDEL":     {[]string{CatHash, CatWrite, CatFast}},
+	"HGETEX":      {[]string{CatHash, CatWrite, CatFast}},
+	"HSETEX":      {[]string{CatHash, CatWrite, CatFast}},
+	"HEXPIRETIME": {[]string{CatHash, CatRead, CatFast}},
+	"HPEXPIRETIME": {[]string{CatHash, CatRead, CatFast}},
+
+	// phase 2: deprecated geo family
+	"GEORADIUS":              {[]string{CatGeo, CatWrite, CatSlow}},
+	"GEORADIUS_RO":           {[]string{CatGeo, CatRead, CatSlow}},
+	"GEORADIUSBYMEMBER":      {[]string{CatGeo, CatWrite, CatSlow}},
+	"GEORADIUSBYMEMBER_RO":   {[]string{CatGeo, CatRead, CatSlow}},
+
 	// NeuroCache AI-native
 	"SEMANTIC_SET": {[]string{CatAI, CatWrite, CatFast}},
 	"SEMANTIC_GET": {[]string{CatAI, CatRead, CatFast}},
