@@ -12,11 +12,18 @@ func keysForCommand(cmd string, args []string) []string {
 	}
 	switch cmd {
 	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP",
-		"PFCOUNT", "TOUCH":
+		"PFCOUNT", "TOUCH", "DIGEST":
 		return args
 	case "MSET", "MSETNX":
 		out := []string{}
 		for i := 0; i+1 < len(args); i += 2 {
+			out = append(out, args[i])
+		}
+		return out
+	case "MSETEX":
+		// args[0] is the TTL — keys live in the (k, v, k, v, ...) tail.
+		out := []string{}
+		for i := 1; i+1 < len(args); i += 2 {
 			out = append(out, args[i])
 		}
 		return out

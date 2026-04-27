@@ -236,6 +236,14 @@ var registry = map[string]commandInfo{
 	// phase 3: HOTKEYS — admin-class observability command.
 	"HOTKEYS": {[]string{CatAdmin, CatRead, CatFast}},
 
+	// phase 4: niche 8.x-pattern additions
+	"DELEX":   {[]string{CatString, CatWrite, CatFast}},
+	"DIGEST":  {[]string{CatKeyspace, CatRead, CatFast}},
+	"MSETEX":  {[]string{CatString, CatWrite, CatSlow}},
+	"XACKDEL": {[]string{CatStream, CatWrite, CatFast}},
+	"XDELEX":  {[]string{CatStream, CatWrite, CatFast}},
+	"XCFGSET": {[]string{CatStream, CatWrite, CatFast}},
+
 	// NeuroCache AI-native
 	"SEMANTIC_SET": {[]string{CatAI, CatWrite, CatFast}},
 	"SEMANTIC_GET": {[]string{CatAI, CatRead, CatFast}},

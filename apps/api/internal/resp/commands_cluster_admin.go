@@ -125,6 +125,47 @@ func (c *conn) clusterSaveConfigCmd() {
 	writeSimple(c.bw, "OK")
 }
 
+// clusterMigrationCmd implements CLUSTER MIGRATION — list every slot
+// currently in MIGRATING or IMPORTING state, with the peer node ID
+// involved. This is the operator's window into "what re-shard is
+// running right now?" — answering it from CLUSTER NODES today
+// requires parsing the comma-separated migration suffixes per row.
+//
+// Reply: array of [slot, "migrating"|"importing", peer-id, peer-host:port]
+// tuples, sorted by slot.
+func (c *conn) clusterMigrationCmd() {
+	st := c.eng.Cluster
+	if st == nil {
+		writeError(c.bw, "ERR This instance has cluster support disabled")
+		return
+	}
+	type row struct {
+		slot   int
+		kind   string
+		peerID string
+	}
+	rows := []row{}
+	for slot := 0; slot < cluster.SlotCount; slot++ {
+		info := st.SlotInfo(slot)
+		switch info.State {
+		case cluster.SlotMigrating:
+			rows = append(rows, row{slot, "migrating", info.PeerID})
+		case cluster.SlotImporting:
+			rows = append(rows, row{slot, "importing", info.PeerID})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].slot < rows[j].slot })
+	out := make([]any, 0, len(rows))
+	for _, r := range rows {
+		peerAddr := ""
+		if n := st.Node(r.peerID); n != nil {
+			peerAddr = n.Addr()
+		}
+		out = append(out, []any{int64(r.slot), r.kind, r.peerID, peerAddr})
+	}
+	writeValue(c.bw, out)
+}
+
 // clusterSlotStatsCmd implements CLUSTER SLOT-STATS [SLOTSRANGE start
 // end | ORDERBY clause].
 //

@@ -93,6 +93,7 @@ export default function Commands() {
           { cmd: "EXPIRETIME key", desc: "Absolute expiry as Unix seconds. -1 no TTL, -2 missing." },
           { cmd: "PEXPIRETIME key", desc: "Absolute expiry in milliseconds." },
           { cmd: "TOUCH key [key ...]", desc: "Refresh last-read time on each existing key without reading the value. Returns count touched." },
+          { cmd: "DIGEST key [key ...]", desc: "40-char hex SHA1 of each key's content. Insertion-order independent for collections — drop-in for ETags, replication consistency probes, change detection." },
           { cmd: "KEYS pattern", desc: "Glob-matched key list. Supports *, ?, [abc]." },
           { cmd: "RENAME src dst", desc: "Atomic rename. Overwrites dst." },
           { cmd: "RENAMENX src dst", desc: "Rename only if dst doesn't exist." },
@@ -125,6 +126,8 @@ export default function Commands() {
           { cmd: "INCR key / DECR key", desc: "Atomic +/-1 integer counter." },
           { cmd: "INCRBY key delta / DECRBY key delta", desc: "Atomic counter by any int." },
           { cmd: "INCRBYFLOAT key delta", desc: "Atomic floating-point counter." },
+          { cmd: "DELEX key value", desc: "Compare-and-delete. Returns 1 (matched + deleted), 0 (mismatch / wrong type), -1 (missing). Safe lease-release pattern without a Lua script." },
+          { cmd: "MSETEX seconds key value [key value ...]", desc: "Atomic multi-set with shared TTL. All-or-nothing — either every pair lands with the expiry or none do." },
         ]}
       />
 
@@ -265,6 +268,9 @@ export default function Commands() {
           { cmd: "XCLAIM key group consumer min-idle-ms id [id ...] [IDLE ms] [TIME t] [RETRYCOUNT n] [FORCE] [JUSTID]", desc: "Re-assign pending entries to a new consumer." },
           { cmd: "XAUTOCLAIM key group consumer min-idle-ms start [COUNT n] [JUSTID]", desc: "Scan the PEL and bulk-claim idle entries. Returns cursor, claimed entries, and deleted IDs." },
           { cmd: "XINFO STREAM|GROUPS|CONSUMERS key [group]", desc: "Metadata: stream length + last-id, group cursors, per-consumer pending counts + idle time." },
+          { cmd: "XACKDEL key group id [id ...]", desc: "Atomic ACK + DEL — closes the race where a second consumer grabs the entry between a separate XACK / XDEL pair." },
+          { cmd: "XDELEX key [REF|KEEPREF|ACKED] id [id ...]", desc: "Reference-aware XDEL. KEEPREF (default) is classic XDEL; REF refuses to delete entries still pending in any group; ACKED removes only entries no group still references." },
+          { cmd: "XCFGSET key group [MAXDELIVERIES n] [MINIDLE ms]", desc: "Per-group runtime config (poison-message cap, XAUTOCLAIM idle floor). Returns the post-change values." },
         ]}
       />
 
@@ -661,6 +667,7 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "CLUSTER FLUSHSLOTS", desc: "Release every slot this node owns. Use before re-sharding." },
           { cmd: "CLUSTER SAVECONFIG", desc: "Bump epoch so gossip persists the latest cluster state on the next tick." },
           { cmd: "CLUSTER SLOT-STATS [SLOTSRANGE start end] [ORDERBY key-count [ASC|DESC] [LIMIT n]]", desc: "Per-slot key-count stats with optional range + ordering." },
+          { cmd: "CLUSTER MIGRATION", desc: "Slots currently in MIGRATING / IMPORTING state with peer node ID + address. Operator's window into in-flight re-shards without parsing CLUSTER NODES suffixes." },
           { cmd: "CLUSTER LINKS", desc: "Open gossip connections (peer ID, direction, age, ping/pong stats)." },
           { cmd: "ASKING", desc: "Single-shot — bypass an IMPORTING block on the very next command." },
           { cmd: "READONLY / READWRITE", desc: "Per-conn flag controlling reads on imported slots from a replica perspective." },
@@ -843,6 +850,7 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "FT.DICTADD / FT.DICTDEL / FT.DICTDUMP dict term [...]", desc: "Custom term dictionaries used by FT.SPELLCHECK ... TERMS INCLUDE/EXCLUDE." },
           { cmd: "FT.TAGVALS index field", desc: "Distinct values present on a TAG field, sorted." },
           { cmd: "FT.CONFIG GET pattern | SET key value | RESETSTAT", desc: "Runtime tunables. Ships with MAXEXPANSIONS / MAXSEARCHRESULTS / DEFAULT_DIALECT / TIMEOUT defaults; unknown keys round-trip." },
+          { cmd: "FT.HYBRID index \"<text>\" KNN k @field $vec [WEIGHTS sw dw] [NORMALIZE rrf|minmax|none] [LIMIT off n] [PARAMS n k v ...] [WITHSCORES] [RETURN n field ...]", desc: "Single-call hybrid retrieval: runs sparse (BM25) + dense (vector KNN) legs server-side and blends them. Default fusion is Reciprocal Rank Fusion (rank-based, no scale issues)." },
         ]}
       />
       <p>

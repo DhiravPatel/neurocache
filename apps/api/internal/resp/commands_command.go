@@ -166,8 +166,15 @@ func commandKeySpec(name string) (first, last, step int) {
 	switch name {
 	case "MSET", "MSETNX":
 		return 1, -1, 2
-	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT", "TOUCH":
+	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT", "TOUCH", "DIGEST":
 		return 1, -1, 1
+	case "MSETEX":
+		// TTL at args[0]; keys at 1, 3, 5, ... — last key sits at the
+		// penultimate slot (-2), step is 2.
+		return 1, -2, 2
+	case "DELEX", "XACKDEL", "XDELEX", "XCFGSET":
+		// All single-key, first-arg.
+		return 1, 1, 1
 	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "GEOSEARCHSTORE":
 		return 1, 2, 1
 	case "GEORADIUS", "GEORADIUS_RO", "GEORADIUSBYMEMBER", "GEORADIUSBYMEMBER_RO",

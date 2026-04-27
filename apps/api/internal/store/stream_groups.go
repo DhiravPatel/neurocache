@@ -18,6 +18,11 @@ type ConsumerGroup struct {
 	Consumers  map[string]*Consumer
 	Pending    map[StreamID]*PendingEntry // groupwide PEL
 	EntriesRead int64
+
+	// Operational tunables set via XCFGSET — both default to 0
+	// meaning "no limit", so existing groups are unaffected.
+	MaxDeliveries int64 // soft cap on per-ID retry count surfaced via XINFO
+	MinIdleMs     int64 // floor on XAUTOCLAIM idle gating
 }
 
 // Consumer is one named reader inside a group.

@@ -426,6 +426,83 @@ func scriptDispatch(c *conn, cmd string, args []string) (any, error) {
 			}
 		}
 		return out, nil
+	// phase 4 niche additions
+	case "DELEX":
+		if len(args) < 2 {
+			return nil, errors.New("DELEX key value")
+		}
+		n, err := c.eng.KV.DelEx(args[0], args[1])
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("DELEX", args)
+		return int64(n), nil
+	case "DIGEST":
+		out := make([]any, len(args))
+		for i, k := range args {
+			d, ok, err := c.eng.KV.Digest(k)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out[i] = d
+			}
+		}
+		return out, nil
+	case "MSETEX":
+		if len(args) < 3 {
+			return nil, errors.New("MSETEX seconds key value [...]")
+		}
+		secs, err := strconv.Atoi(args[0])
+		if err != nil || secs <= 0 {
+			return nil, errors.New("invalid expire time in 'msetex'")
+		}
+		rest := args[1:]
+		if len(rest)%2 != 0 {
+			return nil, errors.New("wrong number of arguments for MSETEX")
+		}
+		if err := c.eng.KV.MSetEx(time.Duration(secs)*time.Second, rest...); err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("MSETEX", args)
+		return "OK", nil
+	case "XACKDEL":
+		if len(args) < 3 {
+			return nil, errors.New("XACKDEL key group id [...]")
+		}
+		n, err := c.eng.KV.XAckDel(args[0], args[1], args[2:]...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("XACKDEL", args)
+		return int64(n), nil
+	case "XDELEX":
+		if len(args) < 2 {
+			return nil, errors.New("XDELEX key [REF|KEEPREF|ACKED] id [...]")
+		}
+		mode := store.XDelExKeepRef
+		rest := args[1:]
+		if len(rest) > 0 {
+			switch strings.ToUpper(rest[0]) {
+			case "KEEPREF", "REF", "ACKED":
+				m, err := store.ParseXDelExMode(rest[0])
+				if err != nil {
+					return nil, err
+				}
+				mode = m
+				rest = rest[1:]
+			}
+		}
+		if len(rest) == 0 {
+			return nil, errors.New("XDELEX requires at least one ID")
+		}
+		n, err := c.eng.KV.XDelEx(args[0], mode, rest...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("XDELEX", args)
+		return int64(n), nil
+
 	case "HSETEX":
 		// Layout: HSETEX key seconds [FNX|FXX] FIELDS n field value [...]
 		if len(args) < 5 {

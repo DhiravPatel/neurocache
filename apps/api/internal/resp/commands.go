@@ -277,6 +277,20 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "HOTKEYS":
 		c.hotkeysCmd(args)
 
+	// ─── phase 4: niche 8.x-pattern additions ─────────────────────
+	case "DELEX":
+		c.delexCmd(args)
+	case "DIGEST":
+		c.digestCmd(args)
+	case "MSETEX":
+		c.msetexCmd(args)
+	case "XACKDEL":
+		c.xackdelCmd(args)
+	case "XDELEX":
+		c.xdelexCmd(args)
+	case "XCFGSET":
+		c.xcfgsetCmd(args)
+
 	// ─── plumbing additions ────────────────────────────────────────
 	case "COMMAND":
 		c.commandCmd(args)

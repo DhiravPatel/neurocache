@@ -194,6 +194,8 @@ func (c *conn) clusterCmd(args []string) {
 		c.clusterSaveConfigCmd()
 	case "SLOT-STATS":
 		c.clusterSlotStatsCmd(args[1:])
+	case "MIGRATION":
+		c.clusterMigrationCmd()
 	default:
 		writeError(c.bw, "Unknown CLUSTER subcommand "+sub)
 	}

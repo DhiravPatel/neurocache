@@ -115,6 +115,9 @@ func initModule(ctx *modules.RegisterCtx) error {
 
 		// Runtime config
 		{Name: "FT.CONFIG", Arity: -2, Write: true, Categories: w, KeyPosition: modules.KeyNone, Run: ftConfig},
+
+		// Hybrid sparse+dense retrieval
+		{Name: "FT.HYBRID", Arity: -7, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftHybrid},
 	} {
 		if err := ctx.RegisterCmd(c); err != nil {
 			return err

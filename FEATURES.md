@@ -395,9 +395,26 @@ NeuroCache-native observability. Replaces the awkward `redis-cli --hotkeys` SCAN
 - Dashboard: new "Hot Keys (writes)" panel on the Analytics page sits alongside the existing GET-hits panel — they answer different questions (read popularity vs write churn).
 - Cluster-exempt (no key argument); single-node by design — each node tracks its own slot subset.
 
+## Phase 4 — Niche 8.x-pattern additions
+
+Small, high-value commands that close common operational pain points. Each is a NeuroCache-flavored extension inspired by patterns Redis 8.x is moving toward — useful in their own right rather than literal Redis 8.6 commands.
+
+| Feature | Status | Where |
+|---|---|---|
+| `DELEX key value` — compare-and-delete on a string key. Returns 1 (matched + deleted), 0 (mismatch / wrong type), -1 (missing). Makes safe "delete only if I still own this lease" patterns trivial without a Lua script | ✅ | `store/string_phase4.go`, `resp/commands_phase4.go` |
+| `DIGEST key [key ...]` — 40-char hex SHA1 of each key's content; insertion-order independent for collections. Drop-in for ETags, replication consistency probes, "did this change?" cache validation | ✅ | `store/string_phase4.go`, `resp/commands_phase4.go` |
+| `MSETEX seconds key value [key value ...]` — atomic multi-set with a shared TTL. Either every pair lands with the expiry or none do | ✅ | `store/string_phase4.go`, `resp/commands_phase4.go` |
+| `XACKDEL key group id [id ...]` — atomic ACK + DEL. Prevents the race where a second consumer grabs the entry between a separate XACK and XDEL pair | ✅ | `store/stream_phase4.go`, `resp/commands_phase4.go` |
+| `XDELEX key [REF\|KEEPREF\|ACKED] id [id ...]` — reference-aware XDEL. KEEPREF (default) is classic XDEL; REF refuses to delete entries still pending in any group; ACKED removes only entries no group still references | ✅ | `store/stream_phase4.go`, `resp/commands_phase4.go` |
+| `XCFGSET key group [MAXDELIVERIES n] [MINIDLE ms]` — per-group runtime config (poison-message cap, XAUTOCLAIM idle floor). Returns the post-change values so callers can confirm the apply | ✅ | `store/stream_phase4.go`, `resp/commands_phase4.go` |
+| `FT.HYBRID index "<text>" KNN k @field $vec [WEIGHTS sw dw] [NORMALIZE rrf\|minmax\|none] [LIMIT off n] [PARAMS n k v ...] [WITHSCORES] [RETURN ...]` — single-call hybrid retrieval. Runs the sparse (BM25) and dense (vector KNN) legs server-side and blends them with Reciprocal Rank Fusion (default), min-max normalization, or raw weighted sum | ✅ | `modules/builtin/searchmod/hybrid.go` |
+| `CLUSTER MIGRATION` — list every slot currently in MIGRATING or IMPORTING state with the peer node ID + address. The operator's window into "what re-shard is running right now?" without parsing CLUSTER NODES suffixes | ✅ | `resp/commands_cluster_admin.go` |
+
+**EVAL bridge**: `DELEX`, `DIGEST`, `MSETEX`, `XACKDEL`, `XDELEX` are all callable from Lua via `redis.call`.
+
 ## Total command count
 
-**~470 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~480 commands** across 11 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
 
 ## Known gaps
 

@@ -72,6 +72,13 @@ var writeCommands = map[string]bool{
 	"HGETDEL": true, "HGETEX": true, "HSETEX": true,
 	"GEORADIUS": true, "GEORADIUSBYMEMBER": true,
 	// _RO variants are reads; only the writing forms appear here.
+
+	// phase 4: niche 8.x-pattern additions. DIGEST is a pure read,
+	// XCFGSET only mutates group config (recoverable from XINFO),
+	// CLUSTER MIGRATION is admin observability — none of those land
+	// in AOF. The mutators below do.
+	"DELEX": true, "MSETEX": true,
+	"XACKDEL": true, "XDELEX": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.
