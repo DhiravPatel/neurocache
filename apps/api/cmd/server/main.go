@@ -21,6 +21,8 @@ import (
 	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/echo"
 	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/jsonmod"
 	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/probmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/searchmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/tsmod"
 )
 
 func main() {
