@@ -33,6 +33,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/sentinel"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
@@ -51,8 +52,10 @@ type Engine struct {
 	SlowLog  *introspect.SlowLog
 	Latency  *introspect.LatencyMonitor
 	Clients  *introspect.ClientRegistry
-	Scripts  *scripting.Cache
-	Blocker  *blocking.Hub
+	Monitor  *introspect.MonitorBroker
+	Scripts   *scripting.Cache
+	Functions *scripting.FunctionRegistry
+	Blocker   *blocking.Hub
 
 	Replication *replication.State
 	Backlog     *replication.Backlog
@@ -63,6 +66,10 @@ type Engine struct {
 	Bus     *cluster.Bus
 
 	Modules *modules.Registry
+
+	RuntimeCfg *config.Runtime
+
+	Sentinel *sentinel.Sentinel
 
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
@@ -117,7 +124,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		SlowLog:   introspect.NewSlowLog(cfg.SlowLogMaxLen, time.Duration(cfg.SlowLogThreshold)*time.Microsecond),
 		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
 		Clients:   introspect.NewClientRegistry(),
+		Monitor:   introspect.NewMonitorBroker(),
 		Scripts:   scripting.NewCache(),
+		Functions: scripting.NewFunctionRegistry(),
 		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
 
@@ -128,6 +137,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		versions:  map[string]uint64{},
 	}
 	e.Modules = modules.NewRegistry(&moduleHandle{e: e})
+	e.RuntimeCfg = config.NewRuntime(&e.Cfg)
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
@@ -224,6 +234,130 @@ func (e *Engine) Start() {
 		}
 	}
 	e.loadModulesFromConfig()
+	if e.Cfg.SentinelEnabled {
+		e.startSentinel()
+	}
+	if e.Cfg.ClusterAutoFailover && e.Cluster != nil && e.Cluster.Enabled() {
+		e.startAutoFailover()
+	}
+}
+
+// startSentinel boots the sentinel monitoring loop. Each entry in
+// NEUROCACHE_SENTINEL_MONITOR (`name=host:port:quorum`, comma-separated)
+// becomes a watched master.
+func (e *Engine) startSentinel() {
+	host, port := e.Cfg.Host, e.Cfg.RESPPort
+	id := e.Replication.ReplID() // reuse the replid as sentinel-id
+	s := sentinel.New(id, host, port, sentinel.Config{})
+	for _, entry := range strings.Split(e.Cfg.SentinelMonitor, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			e.Log.Warn("sentinel monitor: bad entry", "entry", entry)
+			continue
+		}
+		name := parts[0]
+		fields := strings.Split(parts[1], ":")
+		if len(fields) != 3 {
+			e.Log.Warn("sentinel monitor: expected host:port:quorum", "entry", entry)
+			continue
+		}
+		quorum, err := strconv.Atoi(fields[2])
+		if err != nil {
+			e.Log.Warn("sentinel monitor: bad quorum", "entry", entry, "err", err)
+			continue
+		}
+		if err := s.Monitor(name, fields[0], fields[1], quorum); err != nil {
+			e.Log.Warn("sentinel monitor failed", "name", name, "err", err)
+			continue
+		}
+		e.Log.Info("sentinel watching", "name", name, "addr", fields[0]+":"+fields[1], "quorum", quorum)
+	}
+	s.Start()
+	e.Sentinel = s
+}
+
+// startAutoFailover wires a callback into the cluster bus's FAIL
+// detection. When a master is declared FAIL, the surviving node with
+// the lowest ID among the master's replicas promotes itself. This is
+// the simple deterministic election scheme described in the sentinel
+// package — converges within one gossip round and avoids split-brain
+// by tying election to the gossip-confirmed FAIL flag.
+func (e *Engine) startAutoFailover() {
+	// We poll the cluster state once per gossip tick rather than
+	// hooking the bus directly — the bus already announces FAIL via
+	// AnnounceFail, and the local cluster state's flag is up to date
+	// before this runs.
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-e.stopCh:
+				return
+			case <-t.C:
+				e.evaluateAutoFailover()
+			}
+		}
+	}()
+}
+
+func (e *Engine) evaluateAutoFailover() {
+	myself := e.Cluster.Myself()
+	if myself == nil {
+		return
+	}
+	for _, n := range e.Cluster.Nodes() {
+		if !n.HasFlag(cluster.FlagFail) {
+			continue
+		}
+		if n.HasFlag(cluster.FlagReplica) {
+			continue
+		}
+		// We are a candidate iff we replicate this master + we have
+		// the lowest ID among active replicas of it.
+		if myself.MasterID != n.ID {
+			continue
+		}
+		if !lowestIDReplica(e.Cluster.Nodes(), n.ID, myself.ID) {
+			continue
+		}
+		e.Log.Warn("auto-failover: promoting self", "former_master", n.ID)
+		// Promote: take ownership of the failed master's slots.
+		for _, r := range n.SlotRanges() {
+			for s := r[0]; s <= r[1]; s++ {
+				_, _ = e.Cluster.AssignSlot(s, myself.ID)
+			}
+		}
+		myself.Role = cluster.RoleMaster
+		myself.SetFlag(cluster.FlagMaster)
+		myself.ClearFlag(cluster.FlagReplica)
+		myself.MasterID = ""
+		e.Cluster.BumpEpoch()
+		e.PromoteToMaster()
+		return // don't promote twice in one tick
+	}
+}
+
+// lowestIDReplica returns true if myID is the lowest-sorted among the
+// alive replicas of masterID. Used by the deterministic election.
+func lowestIDReplica(nodes []*cluster.Node, masterID, myID string) bool {
+	best := myID
+	for _, n := range nodes {
+		if n.MasterID != masterID {
+			continue
+		}
+		if n.HasFlag(cluster.FlagFail) {
+			continue
+		}
+		if n.ID < best {
+			best = n.ID
+		}
+	}
+	return best == myID
 }
 
 // startCluster builds the local node, plugs the slot counter into the

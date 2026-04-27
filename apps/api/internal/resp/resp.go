@@ -6,16 +6,20 @@ package resp
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
@@ -27,6 +31,7 @@ type Server struct {
 	addr string
 	eng  *engine.Engine
 	log  *slog.Logger
+	tls  *tls.Config // nil = plain TCP
 
 	mu   sync.Mutex
 	lis  net.Listener
@@ -34,13 +39,66 @@ type Server struct {
 }
 
 func NewServer(addr string, eng *engine.Engine, log *slog.Logger) *Server {
-	return &Server{addr: addr, eng: eng, log: log, quit: make(chan struct{})}
+	s := &Server{addr: addr, eng: eng, log: log, quit: make(chan struct{})}
+	if cfg, err := buildTLSConfig(eng.Cfg); err != nil {
+		log.Error("tls config build failed", "err", err)
+	} else if cfg != nil {
+		s.tls = cfg
+		log.Info("tls enabled for resp listener", "client_auth", eng.Cfg.TLSClientAuth)
+	}
+	return s
+}
+
+// buildTLSConfig assembles a *tls.Config from the engine's config
+// when a cert+key pair is provided. Returns (nil, nil) when TLS isn't
+// configured — callers fall back to plain TCP. Setting NEUROCACHE_TLS_CA
+// + a non-"none" client-auth mode opts into mTLS.
+func buildTLSConfig(c config.Config) (*tls.Config, error) {
+	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
+		return nil, nil
+	}
+	pair, err := tls.LoadX509KeyPair(c.TLSCertFile, c.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load tls keypair: %w", err)
+	}
+	out := &tls.Config{
+		Certificates: []tls.Certificate{pair},
+		MinVersion:   tls.VersionTLS12,
+	}
+	switch c.TLSClientAuth {
+	case "request":
+		out.ClientAuth = tls.RequestClientCert
+	case "require":
+		out.ClientAuth = tls.RequireAnyClientCert
+	case "verify":
+		out.ClientAuth = tls.RequireAndVerifyClientCert
+	default:
+		out.ClientAuth = tls.NoClientCert
+	}
+	if c.TLSCAFile != "" {
+		pool := x509.NewCertPool()
+		ca, err := os.ReadFile(c.TLSCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read ca file: %w", err)
+		}
+		if !pool.AppendCertsFromPEM(ca) {
+			return nil, errors.New("ca file held no PEM certificates")
+		}
+		out.ClientCAs = pool
+	}
+	return out, nil
 }
 
 func (s *Server) Addr() string { return s.addr }
 
 func (s *Server) ListenAndServe() error {
-	l, err := net.Listen("tcp", s.addr)
+	var l net.Listener
+	var err error
+	if s.tls != nil {
+		l, err = tls.Listen("tcp", s.addr, s.tls)
+	} else {
+		l, err = net.Listen("tcp", s.addr)
+	}
 	if err != nil {
 		return err
 	}
@@ -104,6 +162,18 @@ type conn struct {
 	asking   bool
 	readonly bool
 
+	// proto is the negotiated wire protocol: 2 (default) or 3. HELLO 3
+	// promotes to RESP3, which adds Map/Set/Bool/Double/BigNumber/Push
+	// reply types. proto stays at 2 for the connection's life otherwise.
+	proto int
+
+	// monitorID is non-zero when this conn is in MONITOR mode. Set by
+	// the MONITOR command, consumed by cleanup() on disconnect.
+	monitorID uint64
+
+	// shardSubs holds active SSUBSCRIBE handles keyed by channel name.
+	shardSubs map[string]*pubsub.Subscription
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -121,11 +191,13 @@ func (s *Server) handle(nc net.Conn) {
 		eng:  s.eng,
 		log:  s.log,
 		tx:   transaction.New(),
-		subs: map[string]*pubsub.Subscription{},
-		psub: map[string]*pubsub.Subscription{},
-		user: s.eng.ACL.DefaultUser(),
-		info: s.eng.Clients.Register(nc.RemoteAddr().String()),
-		done: make(chan struct{}),
+		subs:      map[string]*pubsub.Subscription{},
+		psub:      map[string]*pubsub.Subscription{},
+		shardSubs: map[string]*pubsub.Subscription{},
+		user:  s.eng.ACL.DefaultUser(),
+		info:  s.eng.Clients.Register(nc.RemoteAddr().String()),
+		proto: 2,
+		done:  make(chan struct{}),
 	}
 	if c.user != nil {
 		c.info.Username = c.user.Name
@@ -162,6 +234,8 @@ func (s *Server) handle(nc net.Conn) {
 		s.eng.Metrics.RecordCommand(strings.ToUpper(parts[0]), dur)
 		s.eng.SlowLog.Maybe(dur, parts, c.info.Addr)
 		s.eng.Latency.Record("command", dur)
+		// MONITOR fan-out: cheap when no subscribers are attached.
+		s.eng.Monitor.Broadcast(c.info.Addr, 0, strings.ToUpper(parts[0]), parts[1:])
 		c.writeMu.Lock()
 		// Honour CLIENT REPLY skip/off: silence the next reply or all replies.
 		switch c.info.ReplyMode {
@@ -187,6 +261,12 @@ func (c *conn) cleanup() {
 	}
 	for _, sub := range c.psub {
 		sub.Close()
+	}
+	for _, sub := range c.shardSubs {
+		sub.Close()
+	}
+	if c.monitorID != 0 {
+		c.eng.Monitor.Unsubscribe(c.monitorID)
 	}
 	if c.info != nil {
 		c.eng.Clients.Forget(c.info.ID)

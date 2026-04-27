@@ -134,6 +134,26 @@ func (c *conn) dispatch(cmd string, args []string) {
 	// ─── modules ───────────────────────────────────────────────────
 	case "MODULE":
 		c.moduleCmd(args)
+
+	// ─── operational extras ────────────────────────────────────────
+	case "CONFIG":
+		c.configCmd(args)
+	case "MONITOR":
+		c.monitorCmd()
+	case "SSUBSCRIBE":
+		c.ssubscribeCmd(args)
+	case "SUNSUBSCRIBE":
+		c.sunsubscribeCmd(args)
+	case "SPUBLISH":
+		c.spublishCmd(args)
+	case "FUNCTION":
+		c.functionCmd(args)
+	case "FCALL":
+		c.fcallCmd(args, false)
+	case "FCALL_RO":
+		c.fcallCmd(args, true)
+	case "SENTINEL":
+		c.sentinelCmd(args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{
@@ -1719,6 +1739,9 @@ func (c *conn) pubsubCmd(args []string) {
 		return
 	}
 	switch strings.ToUpper(args[0]) {
+	case "SHARDCHANNELS", "SHARDNUMSUB":
+		c.pubsubShardCmd(args)
+		return
 	case "CHANNELS":
 		pat := "*"
 		if len(args) >= 2 {

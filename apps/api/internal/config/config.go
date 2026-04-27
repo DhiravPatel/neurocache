@@ -52,6 +52,19 @@ type Config struct {
 
 	// Modules
 	ModulesLoad string // comma-separated list of modules to MODULE LOAD at boot
+
+	// TLS / mTLS for the RESP listener.
+	TLSCertFile   string // PEM-encoded server cert
+	TLSKeyFile    string // PEM-encoded private key
+	TLSCAFile     string // PEM-encoded CA bundle for client verification
+	TLSClientAuth string // none | request | require | verify
+
+	// Sentinel mode
+	SentinelEnabled bool   // run as a sentinel monitoring named masters
+	SentinelMonitor string // "name=host:port:quorum,name=host:port:quorum,..."
+
+	// Auto-failover via cluster gossip (data-plane nodes only)
+	ClusterAutoFailover bool
 }
 
 func Load() Config {
@@ -95,6 +108,15 @@ func Load() Config {
 		ClusterRequireFullCoverage: envBool("NEUROCACHE_CLUSTER_REQUIRE_FULL_COVERAGE", true),
 
 		ModulesLoad: env("NEUROCACHE_MODULES_LOAD", ""),
+
+		TLSCertFile:   env("NEUROCACHE_TLS_CERT", ""),
+		TLSKeyFile:    env("NEUROCACHE_TLS_KEY", ""),
+		TLSCAFile:     env("NEUROCACHE_TLS_CA", ""),
+		TLSClientAuth: strings.ToLower(env("NEUROCACHE_TLS_CLIENT_AUTH", "none")),
+
+		SentinelEnabled:     envBool("NEUROCACHE_SENTINEL_ENABLED", false),
+		SentinelMonitor:     env("NEUROCACHE_SENTINEL_MONITOR", ""),
+		ClusterAutoFailover: envBool("NEUROCACHE_CLUSTER_AUTO_FAILOVER", false),
 	}
 }
 

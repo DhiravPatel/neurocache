@@ -28,6 +28,17 @@ var clusterRoutingExempt = map[string]bool{
 	"SUBSCRIBE": true, "UNSUBSCRIBE": true, "PSUBSCRIBE": true,
 	"PUNSUBSCRIBE": true, "PUBLISH": true, "PUBSUB": true,
 
+	// sharded pub/sub does its own slot routing inside the handler.
+	"SSUBSCRIBE": true, "SUNSUBSCRIBE": true, "SPUBLISH": true,
+
+	// MONITOR / FUNCTION / FCALL re-enter the dispatcher per-call;
+	// those nested calls do their own routing.
+	"MONITOR": true, "FUNCTION": true, "FCALL": true, "FCALL_RO": true,
+
+	// SENTINEL targets a specific node and bypasses slot routing.
+	// (CONFIG is already in the connection-control block above.)
+	"SENTINEL": true,
+
 	// scripting is keyless from the dispatcher's perspective; the
 	// individual redis.call invocations re-enter the routing check.
 	"EVAL": true, "EVALSHA": true, "SCRIPT": true,

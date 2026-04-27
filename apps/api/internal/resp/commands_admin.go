@@ -591,9 +591,22 @@ func (c *conn) restoreCmd(args []string) {
 }
 
 // helloCmd implements HELLO [protover [AUTH user pass] [SETNAME name]].
-// We always respond with RESP2 metadata since we don't yet implement
-// RESP3 — clients fall back to RESP2 cleanly.
+// `HELLO 3` flips the per-conn `proto` flag so subsequent commands can
+// emit RESP3 reply types (Map/Set/Bool/Double/BigNumber/Push). RESP2
+// remains the default for back-compat.
 func (c *conn) helloCmd(args []string) {
+	// Optional protover comes first; if present and parses, we honour
+	// it. Anything other than 2 or 3 is rejected per the spec.
+	if len(args) > 0 {
+		if v, err := strconv.Atoi(args[0]); err == nil {
+			if v != 2 && v != 3 {
+				writeTypedError(c.bw, "NOPROTO", "unsupported protocol version")
+				return
+			}
+			c.proto = v
+			args = args[1:]
+		}
+	}
 	for i := 0; i < len(args); i++ {
 		switch strings.ToUpper(args[i]) {
 		case "AUTH":
@@ -618,17 +631,15 @@ func (c *conn) helloCmd(args []string) {
 			i++
 		}
 	}
-	out := []any{
+	pairs := []any{
 		"server", "neurocache",
 		"version", "0.4.0",
-		"proto", int64(2),
+		"proto", int64(c.proto),
 		"id", int64(c.info.ID),
 		"mode", "standalone",
 		"role", "master",
 		"modules", []any{},
 	}
-	fmt.Fprintf(c.bw, "*%d\r\n", len(out))
-	for _, v := range out {
-		writeValue(c.bw, v)
-	}
+	// RESP3 clients expect a Map; RESP2 fans out as an interleaved array.
+	c.writeMap(pairs)
 }

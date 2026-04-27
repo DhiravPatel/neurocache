@@ -16,7 +16,19 @@ type Caller func(cmd string, args []string) (any, error)
 // Run interprets src with KEYS / ARGV pre-bound, returning the script's
 // final value. The deadline aborts long-running scripts so a runaway
 // loop can't pin the connection forever.
+//
+// Run delegates to RunFull (gopher-lua) so callers get full Lua 5.1
+// semantics — string/math/table libraries, metatables, coroutines.
+// The original subset interpreter remains accessible as RunSubset for
+// the path-coverage test suite.
 func Run(src string, keys, argv []string, call Caller, deadline time.Time) (any, error) {
+	return RunFull(src, keys, argv, call, deadline)
+}
+
+// RunSubset is the hand-built interpreter from the early prototype.
+// Kept so the subset test suite still exercises its parser; production
+// scripts go through Run → RunFull.
+func RunSubset(src string, keys, argv []string, call Caller, deadline time.Time) (any, error) {
 	tokens, err := tokenize(src)
 	if err != nil {
 		return nil, fmt.Errorf("compile error: %w", err)
