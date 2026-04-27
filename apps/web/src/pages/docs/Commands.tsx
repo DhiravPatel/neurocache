@@ -37,8 +37,9 @@ export default function Commands() {
       </p>
 
       <div className="my-6 rounded-lg border border-border bg-white/5 px-4 py-3 text-sm">
-        <strong>~220 commands</strong> across <strong>7 data types</strong> +
-        AI-native extensions. Organized below by group. Jump to:{" "}
+        <strong>~290 commands</strong> across <strong>11 data types</strong> +
+        AI-native extensions + Stack modules. Organized below by group. Jump
+        to:{" "}
         <a href="#connection">Connection</a> · <a href="#keys">Keys/TTL</a> ·{" "}
         <a href="#strings">Strings</a> · <a href="#lists">Lists</a> ·{" "}
         <a href="#hashes">Hashes</a> · <a href="#sets">Sets</a> ·{" "}
@@ -49,6 +50,9 @@ export default function Commands() {
         <a href="#acl">Auth / ACL</a> · <a href="#scripting">Scripting</a> ·{" "}
         <a href="#introspect">Introspection</a> ·{" "}
         <a href="#replication">Replication</a> ·{" "}
+        <a href="#cluster">Cluster</a> · <a href="#modules">Modules</a> ·{" "}
+        <a href="#json">JSON</a> · <a href="#prob">Bloom / Cuckoo / CMS</a> ·{" "}
+        <a href="#timeseries">TimeSeries</a> · <a href="#search">Search</a> ·{" "}
         <a href="#persistence">Persistence</a> · <a href="#ai">AI-native</a> ·{" "}
         <a href="#http">HTTP API</a>
       </div>
@@ -592,37 +596,243 @@ curl -X POST http://localhost:8080/api/exec \\
         </li>
       </ul>
 
+      {/* ── cluster ──────────────────────────────────────────────── */}
+      <h2 id="cluster">Cluster</h2>
+      <p>
+        16384-slot hash space, gossip-driven membership, MOVED/ASK
+        redirection, MIGRATE for live rebalancing. Slot calculation is
+        bit-for-bit Redis-compatible (CRC16 + <code>{`{tag}`}</code>{" "}
+        extraction), so any cluster-aware client driver routes against
+        a NeuroCache cluster unchanged. Enable with{" "}
+        <code>NEUROCACHE_CLUSTER_ENABLED=true</code>; the gossip bus
+        defaults to the RESP port + 10000.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "CLUSTER MYID", desc: "Local node's 40-hex ID." },
+          { cmd: "CLUSTER INFO", desc: "Health summary (state, slots assigned, known nodes, current epoch)." },
+          { cmd: "CLUSTER NODES", desc: "Newline-separated peer table in the canonical Redis format (id host:port@bus flags master-id ping pong epoch state slot-ranges)." },
+          { cmd: "CLUSTER SLOTS", desc: "Slot ranges → owner. Drivers cache this for routing." },
+          { cmd: "CLUSTER SHARDS", desc: "Per-shard view (master + replicas + slot ranges)." },
+          { cmd: "CLUSTER KEYSLOT key", desc: "Compute the slot a key hashes into. Honours hashtags." },
+          { cmd: "CLUSTER COUNTKEYSINSLOT slot", desc: "Number of local keys in the slot." },
+          { cmd: "CLUSTER GETKEYSINSLOT slot count", desc: "Up to count local keys in the slot — used by MIGRATE batchers." },
+          { cmd: "CLUSTER MEET host bus-port", desc: "Open a gossip connection to a new peer." },
+          { cmd: "CLUSTER FORGET node-id", desc: "Drop a peer from the local view (not allowed for self)." },
+          { cmd: "CLUSTER ADDSLOTS slot [slot ...]", desc: "Claim ownership of one or more slots." },
+          { cmd: "CLUSTER ADDSLOTSRANGE start end [start end ...]", desc: "Claim contiguous slot ranges." },
+          { cmd: "CLUSTER DELSLOTS slot [slot ...]", desc: "Release ownership; slot becomes unassigned." },
+          { cmd: "CLUSTER SETSLOT slot MIGRATING|IMPORTING|STABLE|NODE [target]", desc: "Drive a slot migration or hand-off." },
+          { cmd: "CLUSTER REPLICATE node-id", desc: "Make this node a replica of node-id." },
+          { cmd: "CLUSTER FAILOVER", desc: "Promote this replica to master." },
+          { cmd: "CLUSTER RESET [HARD|SOFT]", desc: "Wipe peers + slots; HARD also mints a fresh node ID." },
+          { cmd: "CLUSTER BUMPEPOCH", desc: "Increment the current epoch (last-write-wins coordination)." },
+          { cmd: "CLUSTER COUNT-FAILURE-REPORTS node-id", desc: "Always 0 in this build (no quorum-based failure detection yet)." },
+          { cmd: "ASKING", desc: "Single-shot — bypass an IMPORTING block on the very next command." },
+          { cmd: "READONLY / READWRITE", desc: "Per-conn flag controlling reads on imported slots from a replica perspective." },
+          { cmd: "MIGRATE host port key|\"\" db timeout-ms [COPY] [REPLACE] [AUTH pw] [AUTH2 user pw] [KEYS key ...]", desc: "Cross-node key transfer via DUMP+RESTORE; deletes the source unless COPY." },
+        ]}
+      />
+
+      {/* ── modules ──────────────────────────────────────────────── */}
+      <h2 id="modules">Modules</h2>
+      <p>
+        Modules are Go packages compile-time linked into the binary and
+        activated by name via <code>MODULE LOAD</code>. They register
+        commands and custom data types through a stable ABI that
+        re-uses every engine path: ACL gating, cluster slot routing,
+        AOF + replication propagation, slowlog and latency capture all
+        apply automatically. Pre-load with{" "}
+        <code>NEUROCACHE_MODULES_LOAD=json,probabilistic,timeseries,search</code>.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "MODULE LOAD name [args ...]", desc: "Activate a compile-time-linked module by name. Init runs once; commands and types become live." },
+          { cmd: "MODULE LOADEX name", desc: "Alias of LOAD. Reserved for future option parsing." },
+          { cmd: "MODULE UNLOAD name", desc: "Stop a module and remove its commands + types from the dispatcher." },
+          { cmd: "MODULE LIST", desc: "Loaded modules with version, description, commands and types they registered." },
+        ]}
+      />
+      <p>
+        <strong>Built-in modules shipped:</strong>{" "}
+        <code>echo</code> (reference / smoke test),{" "}
+        <code>json</code> (RedisJSON-compatible),{" "}
+        <code>probabilistic</code> (BF / CF / CMS),{" "}
+        <code>timeseries</code> (RedisTimeSeries-compatible), and{" "}
+        <code>search</code> (RediSearch subset). Each is described in
+        its own section below.
+      </p>
+
+      {/* ── JSON ─────────────────────────────────────────────────── */}
+      <h2 id="json">JSON (module: <code>json</code>)</h2>
+      <p>
+        Document storage with a JSONPath subset matching Redis JSON v2.
+        Supports <code>$</code>, <code>$.field</code>,{" "}
+        <code>$["field"]</code>, <code>$.field.sub</code>,{" "}
+        <code>$[0]</code> (negatives ok), <code>$[*]</code>,{" "}
+        <code>$.*</code>, <code>$..field</code> (recursive descent).
+        Filter expressions like <code>[?(@.qty &gt; 0)]</code> are
+        deferred — use JSON.GET on a subtree and filter client-side.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "JSON.SET key path value [NX|XX]", desc: "Set the JSON value at path. NX inserts only if absent; XX only if present." },
+          { cmd: "JSON.GET key [INDENT i] [NEWLINE n] [SPACE s] [path ...]", desc: "Fetch one or more paths. Multi-path returns an object keyed by path." },
+          { cmd: "JSON.DEL key [path] / JSON.FORGET key [path]", desc: "Delete a path or the whole document." },
+          { cmd: "JSON.TYPE key [path]", desc: "Return null|boolean|integer|number|string|object|array." },
+          { cmd: "JSON.NUMINCRBY key path delta", desc: "Atomic numeric increment; preserves int/float shape." },
+          { cmd: "JSON.NUMMULTBY key path delta", desc: "Atomic numeric multiplication." },
+          { cmd: "JSON.STRAPPEND key [path] value", desc: "Append to a string value; returns the new length." },
+          { cmd: "JSON.STRLEN key [path]", desc: "Byte length of the string at path." },
+          { cmd: "JSON.ARRAPPEND key path value [value ...]", desc: "Push values onto the array at path." },
+          { cmd: "JSON.ARRINSERT key path index value [value ...]", desc: "Insert at a 0-based index (negatives ok)." },
+          { cmd: "JSON.ARRLEN key [path]", desc: "Array length per path." },
+          { cmd: "JSON.ARRPOP key [path [index]]", desc: "Pop and return one element (default: tail)." },
+          { cmd: "JSON.ARRTRIM key path start stop", desc: "Truncate the array to [start, stop]." },
+          { cmd: "JSON.OBJKEYS key [path]", desc: "Member names at the matched object(s)." },
+          { cmd: "JSON.OBJLEN key [path]", desc: "Member count per matched object." },
+          { cmd: "JSON.TOGGLE key path", desc: "Flip a boolean at path." },
+          { cmd: "JSON.CLEAR key [path]", desc: "Reset containers to empty / numerics to 0 / strings to \"\"." },
+          { cmd: "JSON.RESP key [path]", desc: "Return the value as a flattened RESP-shaped array." },
+          { cmd: "JSON.MGET key [key ...] path", desc: "Same path on multiple keys." },
+          { cmd: "JSON.MSET key path value [key path value ...]", desc: "Atomic multi-document set." },
+        ]}
+      />
+
+      {/* ── Probabilistic ───────────────────────────────────────── */}
+      <h2 id="prob">Bloom / Cuckoo / CMS (module: <code>probabilistic</code>)</h2>
+      <p>
+        Three space-efficient probabilistic structures sharing FNV-1a
+        hashing with double-hashing for k positions. All three persist
+        through AOF replay and DUMP / RESTORE via version-tagged binary
+        marshalers.
+      </p>
+      <h3>Bloom filter</h3>
+      <CmdTable
+        rows={[
+          { cmd: "BF.RESERVE key error_rate capacity [EXPANSION exp] [NONSCALING]", desc: "Allocate a filter sized for capacity items at the given error rate." },
+          { cmd: "BF.ADD key item", desc: "Insert one item. Returns 1 if probably new, 0 if probably already there." },
+          { cmd: "BF.MADD key item [item ...]", desc: "Bulk insert — one boolean per item." },
+          { cmd: "BF.EXISTS key item / BF.MEXISTS key item [item ...]", desc: "Membership test (1 = probably present, 0 = definitely absent)." },
+          { cmd: "BF.INSERT key [CAPACITY cap] [ERROR err] [EXPANSION exp] [NOCREATE] [NONSCALING] ITEMS item [item ...]", desc: "All-in-one create + insert with full option surface." },
+          { cmd: "BF.INFO key", desc: "Layer count, capacity, size, expansion rate, items inserted." },
+          { cmd: "BF.CARD key", desc: "Total items inserted (exact counter, not estimator)." },
+        ]}
+      />
+      <h3>Cuckoo filter</h3>
+      <CmdTable
+        rows={[
+          { cmd: "CF.RESERVE key capacity [BUCKETSIZE n] [MAXITERATIONS n] [EXPANSION n]", desc: "Allocate a cuckoo filter sized for capacity items." },
+          { cmd: "CF.ADD key item / CF.ADDNX key item", desc: "Insert; ADDNX rejects duplicates." },
+          { cmd: "CF.INSERT key [CAPACITY cap] [NOCREATE] ITEMS item [item ...] / CF.INSERTNX ...", desc: "Bulk insert with auto-create." },
+          { cmd: "CF.EXISTS key item / CF.MEXISTS key item [item ...]", desc: "Membership test." },
+          { cmd: "CF.DEL key item", desc: "Remove one matching fingerprint (cuckoo can over-delete on collisions — same as Redis)." },
+          { cmd: "CF.COUNT key item", desc: "Approximate occurrence count." },
+          { cmd: "CF.INFO key", desc: "Buckets, bucket size, items, expansion, max iterations." },
+        ]}
+      />
+      <h3>Count-Min Sketch</h3>
+      <CmdTable
+        rows={[
+          { cmd: "CMS.INITBYDIM key width depth", desc: "Allocate a sketch with explicit dimensions." },
+          { cmd: "CMS.INITBYPROB key error_rate probability", desc: "Allocate sized for the desired error guarantee." },
+          { cmd: "CMS.INCRBY key item delta [item delta ...]", desc: "Add to one or more item counters; returns the post-increment minimum row estimate." },
+          { cmd: "CMS.QUERY key item [item ...]", desc: "Estimated counts (over-counts; never under-counts)." },
+          { cmd: "CMS.MERGE dest numkeys src [src ...] [WEIGHTS w [w ...]]", desc: "Fold sources into dest with optional weights." },
+          { cmd: "CMS.INFO key", desc: "Width, depth, total events." },
+        ]}
+      />
+
+      {/* ── TimeSeries ──────────────────────────────────────────── */}
+      <h2 id="timeseries">TimeSeries (module: <code>timeseries</code>)</h2>
+      <p>
+        Sorted (timestamp, value) samples per key with retention,
+        labels, six duplicate-handling policies, and downsampling rules
+        that lazily flush at bucket close. Twelve aggregators including
+        Welford-based variance / std deviation.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "TS.CREATE key [RETENTION ms] [CHUNK_SIZE n] [DUPLICATE_POLICY p] [LABELS k v ...]", desc: "Allocate a series. Policies: BLOCK | FIRST | LAST | MIN | MAX | SUM." },
+          { cmd: "TS.ALTER key [RETENTION ms] [CHUNK_SIZE n] [DUPLICATE_POLICY p] [LABELS k v ...]", desc: "Update mutable settings on an existing series." },
+          { cmd: "TS.ADD key timestamp value [opts ...]", desc: "Append a sample. timestamp = '*' uses server clock. Auto-creates the series." },
+          { cmd: "TS.MADD key ts value [key ts value ...]", desc: "Bulk insert across many series." },
+          { cmd: "TS.INCRBY key delta [TIMESTAMP ts]", desc: "Add to the running value." },
+          { cmd: "TS.DECRBY key delta [TIMESTAMP ts]", desc: "Subtract from the running value." },
+          { cmd: "TS.GET key", desc: "Latest sample as [timestamp, value]." },
+          { cmd: "TS.MGET FILTER label-filter [...]", desc: "Latest sample per series matching label filters." },
+          { cmd: "TS.RANGE key from to [COUNT n] [AGGREGATION agg bucket-ms] [ALIGN ts]", desc: "Range scan; aggregators: AVG/SUM/MIN/MAX/RANGE/COUNT/FIRST/LAST/STD.P/STD.S/VAR.P/VAR.S." },
+          { cmd: "TS.REVRANGE key from to [...]", desc: "Reverse-order range." },
+          { cmd: "TS.MRANGE from to [LATEST] [COUNT n] [AGGREGATION agg bucket] [ALIGN ts] [WITHLABELS|SELECTED_LABELS l ...] FILTER label-filter [...]", desc: "Multi-series range with label filtering." },
+          { cmd: "TS.MREVRANGE from to [...]", desc: "Reverse-order multi-series range." },
+          { cmd: "TS.DEL key from to", desc: "Drop samples in [from, to]." },
+          { cmd: "TS.QUERYINDEX FILTER label-filter [...]", desc: "Series keys matching the filter (label=val, label!=val, label=, label!=, label=(v1,v2,...))." },
+          { cmd: "TS.INFO key", desc: "Sample count, memory, retention, labels, downsampling rules." },
+          { cmd: "TS.CREATERULE source dest AGGREGATION agg bucket-ms [alignTimestamp]", desc: "Compaction rule: aggregate source into dest at bucket close." },
+          { cmd: "TS.DELETERULE source dest", desc: "Drop a compaction rule." },
+        ]}
+      />
+
+      {/* ── Search ──────────────────────────────────────────────── */}
+      <h2 id="search">Search (module: <code>search</code>)</h2>
+      <p>
+        RediSearch-compatible subset: TEXT / NUMERIC / TAG fields,
+        recursive-descent query parser (boolean ops, field qualifiers,
+        numeric ranges, tag sets, phrases, prefix), full BM25 scoring
+        with per-field weights, and a streaming aggregation pipeline.
+        Deferred: GEO + VECTOR fields, fuzzy queries, suggestions,
+        synonyms, spellcheck, server-side cursors, profile.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "FT.CREATE index [ON HASH] [PREFIX n p1 ...] SCHEMA name TYPE [WEIGHT n] [SORTABLE] [NOINDEX] [NOSTEM] [SEPARATOR sep] ...", desc: "Define an index. Field types: TEXT | NUMERIC | TAG." },
+          { cmd: "FT.DROPINDEX index [DD]", desc: "Drop the index." },
+          { cmd: "FT.ALTER index SCHEMA ADD field type [flags ...]", desc: "Add fields to an existing index." },
+          { cmd: "FT.ADD index docID score [REPLACE] FIELDS field value [...]", desc: "Index a document." },
+          { cmd: "FT.DEL index docID", desc: "Remove a document from the index." },
+          { cmd: "FT.GET index docID", desc: "Fetch a stored document." },
+          { cmd: "FT.SEARCH index query [NOCONTENT] [WITHSCORES] [LIMIT off n] [SORTBY field [ASC|DESC]] [RETURN n field ...]", desc: "Run a query. Supports `term`, `term*`, `\"phrase\"`, `@field:term`, `@field:[lo hi]`, `@field:{tag1|tag2}`, `A B` (AND), `A | B` (OR), `-A` (NOT), parentheses." },
+          { cmd: "FT.AGGREGATE index query [LOAD ...] [pipeline-stages ...]", desc: "Stages: GROUPBY n key... REDUCE fn nargs args... [AS alias]; SORTBY n field [ASC|DESC] ...; LIMIT off n; APPLY expr AS alias." },
+          { cmd: "FT.EXPLAIN index query", desc: "Pretty-print the parsed query tree." },
+          { cmd: "FT.INFO index", desc: "Schema, field flags, document count." },
+          { cmd: "FT._LIST", desc: "Every defined index name." },
+        ]}
+      />
+      <p>
+        <strong>Reducers supported by FT.AGGREGATE:</strong>{" "}
+        <code>COUNT</code>, <code>SUM</code>, <code>MIN</code>,{" "}
+        <code>MAX</code>, <code>AVG</code>, <code>COUNT_DISTINCT</code>,{" "}
+        <code>FIRST_VALUE</code>, <code>TOLIST</code>.{" "}
+        <strong>APPLY expressions:</strong> field references{" "}
+        <code>@field</code>, numeric literals, <code>+ - * /</code>,
+        parentheses.
+      </p>
+
       <h2>Not yet implemented</h2>
       <p>
-        These remain on the Part 2 roadmap. Replication shipped — see{" "}
-        <a href="#replication">Replication</a> above. Open an issue if
-        any of the rest blocks you:
+        Open an issue if any of the rest blocks you:
       </p>
       <ul>
         <li>
-          <strong>Cluster:</strong> <code>CLUSTER *</code>,{" "}
-          <code>MIGRATE</code>, <code>READONLY</code> / <code>READWRITE</code>,
-          <code> ASKING</code>, 16384-slot keyslot routing
+          <strong>Search subset gaps:</strong> GEO + VECTOR fields,
+          fuzzy queries (<code>%term%</code>), <code>FT.SUGADD</code>{" "}
+          / <code>FT.SUGGET</code>, <code>FT.SYNUPDATE</code> /{" "}
+          <code>FT.SYNDUMP</code>, <code>FT.SPELLCHECK</code>,{" "}
+          <code>FT.CURSOR</code>, <code>FT.PROFILE</code>, the{" "}
+          <code>FILTER</code> aggregate stage, strict positional
+          phrase matching.
         </li>
         <li>
-          <strong>Modules:</strong> <code>MODULE LOAD</code> / <code>UNLOAD</code>{" "}
-          and a stable module ABI
+          <strong>Advanced sorted-set ops:</strong>{" "}
+          <code>ZUNIONSTORE</code>, <code>ZINTERSTORE</code>,{" "}
+          <code>ZDIFFSTORE</code>, <code>ZRANGEBYLEX</code>,{" "}
+          <code>ZRANGESTORE</code>, <code>ZMPOP</code> /{" "}
+          <code>BZMPOP</code>.
         </li>
         <li>
-          <strong>Redis Stack types:</strong> RedisJSON (<code>JSON.*</code>),
-          RediSearch (<code>FT.*</code>), TimeSeries (<code>TS.*</code>),
-          Bloom / Cuckoo / CMS
-        </li>
-        <li>
-          <strong>Advanced sorted-set ops:</strong> <code>ZUNIONSTORE</code>,{" "}
-          <code>ZINTERSTORE</code>, <code>ZDIFFSTORE</code>,{" "}
-          <code>ZRANGEBYLEX</code>, <code>ZRANGESTORE</code>,{" "}
-          <code>ZMPOP</code> / <code>BZMPOP</code>
-        </li>
-        <li>
-          <strong>Functions / FCALL:</strong> the stateful successor to EVAL.
-          EVAL itself is implemented via a Lua-subset interpreter (see{" "}
-          <a href="#scripting">Scripting</a>).
+          <strong>Functions / FCALL:</strong> the stateful successor
+          to EVAL. EVAL itself is implemented via a Lua-subset
+          interpreter (see <a href="#scripting">Scripting</a>).
         </li>
       </ul>
     </>

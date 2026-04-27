@@ -164,6 +164,64 @@ export default function Configuration() {
             </td>
           </tr>
           <tr>
+            <td><code>NEUROCACHE_CLUSTER_ENABLED</code></td>
+            <td><code>false</code></td>
+            <td>
+              Turn on the slot/gossip stack. When enabled, key-bearing
+              commands are routed via 16384-slot CRC16 keyslots; the
+              gossip bus listens on its own port.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_CLUSTER_BUS_PORT</code></td>
+            <td><code>RESP+10000</code></td>
+            <td>
+              Port the cluster bus listens on. Defaults to{" "}
+              <code>RESP_PORT + 10000</code> (matches Redis convention).
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_CLUSTER_ANNOUNCE_HOST</code></td>
+            <td><em>(uses HOST)</em></td>
+            <td>
+              Host advertised in MOVED/ASK redirects. Set to a
+              public-facing address when nodes sit behind NAT.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_CLUSTER_ANNOUNCE_PORT</code></td>
+            <td><em>(uses RESP_PORT)</em></td>
+            <td>Port advertised in MOVED/ASK redirects.</td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_CLUSTER_NODE_ID</code></td>
+            <td><em>(generated)</em></td>
+            <td>
+              Stable 40-hex node identity. Leave unset to mint a fresh
+              one on first boot; pin in production so peers don&apos;t
+              treat restarts as a new node.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_CLUSTER_REQUIRE_FULL_COVERAGE</code></td>
+            <td><code>true</code></td>
+            <td>
+              Refuse writes when not all 16384 slots are owned. Disable
+              for partial-cluster bring-up; turn back on once the slot
+              map is complete.
+            </td>
+          </tr>
+          <tr>
+            <td><code>NEUROCACHE_MODULES_LOAD</code></td>
+            <td><em>(unset)</em></td>
+            <td>
+              Comma-separated list of compile-time-linked modules to
+              activate at boot, e.g.{" "}
+              <code>json,probabilistic,timeseries,search</code>. Equivalent
+              to issuing <code>MODULE LOAD</code> for each.
+            </td>
+          </tr>
+          <tr>
             <td><code>NEUROCACHE_LOG_LEVEL</code></td>
             <td><code>info</code></td>
             <td><code>debug | info | warn | error</code>.</td>
