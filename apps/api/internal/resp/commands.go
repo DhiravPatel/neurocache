@@ -354,6 +354,22 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.eng.KV.FlushAll()
 		writeSimple(c.bw, "OK")
 
+	// ─── compat fillers (Redis / Valkey / DiceDB) ─────────────────
+	case "BRPOPLPUSH":
+		c.brpoplpushCmd(args)
+	case "MOVE":
+		c.moveCmd(args)
+	case "SWAPDB":
+		c.swapdbCmd(args)
+	case "EVICT":
+		c.evictCmd(args)
+	case "PFDEBUG":
+		c.pfdebugCmd(args)
+	case "PFSELFTEST":
+		c.pfselftestCmd()
+	case "RESTORE-ASKING", "RESTORE_ASKING":
+		c.restoreAskingCmd(args)
+
 	// ─── keys / TTL ─────────────────────────────────────────────────
 	case "DEL", "UNLINK":
 		writeInt(c.bw, int64(c.eng.KV.Del(args...)))

@@ -217,6 +217,28 @@ func (s *Store) PFMerge(dst string, srcs ...string) error {
 	return nil
 }
 
+// PFRegisters returns the 16384 register values backing the HLL at key,
+// or false when the key is missing or not an HLL. Used by PFDEBUG so
+// monitoring tools can inspect dense-encoding state without reaching
+// past the public store API.
+func (s *Store) PFRegisters(key string) ([]uint8, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok, err := s.get(key, TypeString)
+	if err != nil || !ok {
+		return nil, false
+	}
+	buf := []byte(e.Str)
+	if !isHLL(buf) {
+		return nil, false
+	}
+	out := make([]uint8, hllM)
+	for i := 0; i < hllM; i++ {
+		out[i] = getReg(buf, i)
+	}
+	return out, true
+}
+
 // hllEstimate applies the HyperLogLog formula with small- and
 // large-range corrections. Good enough to match Redis's estimates for
 // the dense encoding within single-digit percent error.

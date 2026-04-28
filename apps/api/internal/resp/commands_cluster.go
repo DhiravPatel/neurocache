@@ -117,6 +117,42 @@ func (c *conn) clusterCmd(args []string) {
 		}
 		st.BumpEpoch()
 		writeSimple(c.bw, "OK")
+	case "DELSLOTSRANGE":
+		if len(args) < 3 || (len(args)-1)%2 != 0 {
+			writeError(c.bw, "wrong number of arguments for 'cluster|delslotsrange'")
+			return
+		}
+		for i := 1; i+1 < len(args); i += 2 {
+			lo, errLo := strconv.Atoi(args[i])
+			hi, errHi := strconv.Atoi(args[i+1])
+			if errLo != nil || errHi != nil {
+				writeError(c.bw, "value is not an integer")
+				return
+			}
+			for s := lo; s <= hi; s++ {
+				_ = st.UnassignSlot(s)
+			}
+		}
+		st.BumpEpoch()
+		writeSimple(c.bw, "OK")
+	case "SET-CONFIG-EPOCH":
+		// CLUSTER SET-CONFIG-EPOCH <epoch>: operator-driven epoch reset
+		// used during fresh-cluster bootstrap. Setting bumps to exactly
+		// the supplied value (or one past it if a higher value is
+		// already cached locally — Redis's "monotonic only" rule).
+		if len(args) < 2 {
+			writeError(c.bw, "wrong number of arguments for 'cluster|set-config-epoch'")
+			return
+		}
+		want, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil || want < 0 {
+			writeError(c.bw, "value is not an integer")
+			return
+		}
+		for st.CurrentEpoch() < want {
+			st.BumpEpoch()
+		}
+		writeSimple(c.bw, "OK")
 	case "SETSLOT":
 		clusterSetSlot(c, st, args[1:])
 	case "MEET":

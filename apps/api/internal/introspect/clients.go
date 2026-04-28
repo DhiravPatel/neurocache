@@ -39,6 +39,12 @@ type ClientInfo struct {
 	// keyspace so the audit doesn't churn LRU/LFU statistics.
 	// Mirrors Redis 7.2's CLIENT NO-TOUCH.
 	NoTouch    bool
+
+	// LibName / LibVer are populated by CLIENT SETINFO (Valkey 7.2).
+	// Drivers send their identity here so operators can attribute load
+	// to specific applications via CLIENT LIST / INFO.
+	LibName string
+	LibVer  string
 }
 
 // NewClientRegistry returns an empty registry.
@@ -156,6 +162,12 @@ func (c *ClientInfo) FormatLine() string {
 	}
 	if c.NoTouch {
 		sb.add("no-touch=1")
+	}
+	if c.LibName != "" {
+		sb.add("lib-name=" + c.LibName)
+	}
+	if c.LibVer != "" {
+		sb.add("lib-ver=" + c.LibVer)
 	}
 	return sb.String()
 }

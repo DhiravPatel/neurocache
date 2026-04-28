@@ -35,10 +35,11 @@ Redis-compatible caching engine that understands meaning — with a built-in ana
 
 NeuroCache is a **single-binary, Redis-compatible in-memory data store with AI-native commands** — built for LLM applications.
 
-- **Drop-in Redis** — speaks RESP on `:6379`, so `redis-cli`, `ioredis`, `go-redis`, `redis-py` all work.
+- **Drop-in Redis / Valkey / DiceDB** — speaks RESP on `:6379`, so `redis-cli`, `ioredis`, `go-redis`, `redis-py` all work. Implements the full Redis 8.6 / Valkey 8.0 / DiceDB 1.0 user-facing surface (**~545 commands across 12 data types**) plus 5 stack modules (RedisJSON, RedisBloom, RedisTimeSeries, RediSearch, vector sets).
 - **Semantic cache** — `SEMANTIC_GET "how do I build an API"` retrieves a value stored under `"best backend language for APIs"` because it understands they mean the same thing.
 - **LLM response cache** — stop paying for the same OpenAI/Anthropic call twice.
 - **Per-user memory** — long-lived user context with semantic recall.
+- **Production primitives** — `IDEMPOTENT`, `LOCK` (with monotonic fencing tokens), `RATELIMIT` (GCRA), `DEDUP`, `KEY.TRACK` time-travel, `AI.RECOMMEND` collaborative filtering, `HOTKEYS` real-time top-K.
 - **Built-in dashboard** — real-time analytics at `http://localhost:8080`, served by the same binary.
 - **One install, one process** — no external Vite server, no separate dashboard deploy.
 
@@ -130,19 +131,42 @@ The Analytics page queries these endpoints on the engine:
 
 ## Commands
 
-### Redis-compatible
+**~545 commands** across **12 data types** — full Redis 8.6 / Valkey 8.0 / DiceDB 1.0 user-facing surface plus AI-native extensions and NeuroCache-only primitives. The complete reference with every subcommand, option, and example lives in [`FEATURES.md`](FEATURES.md) and on the [embedded docs site](http://localhost:8080/docs/commands).
+
+### Redis-compatible (every group)
 
 ```bash
-SET greeting "hello"            # → OK
-GET greeting                    # → "hello"
-DEL greeting                    # → (integer) 1
-EXISTS greeting                 # → (integer) 0
-EXPIRE session:abc 3600         # TTL
-TTL session:abc
-INCR counter                    # atomic
-KEYS *
-FLUSHDB / FLUSHALL
-PING                            # → PONG
+# Strings, hashes, lists, sets, zsets, streams, geo, bitmaps, HLL — all present
+SET greeting "hello" EX 3600    # TTL flags, NX/XX, GETEX/GETDEL/GETSET, MSET/MSETNX, APPEND, STRLEN, INCR/INCRBY/INCRBYFLOAT, BITFIELD/BITFIELD_RO, BITOP, BITCOUNT, BITPOS, GETRANGE, SETRANGE, LCS, SORT/SORT_RO …
+HSET user:1 name alice age 33   # HGET, HMGET, HGETALL, HKEYS, HVALS, HSCAN, HRANDFIELD, HEXPIRE/HTTL/HPERSIST per-field TTLs, HGETDEL, HGETEX, HSETEX …
+LPUSH q a b c                   # LMOVE, LMPOP/BLMPOP, LPOS, LINSERT, LREM, LSET, LTRIM, BRPOPLPUSH, BLMOVE …
+ZADD lb 100 alice 200 bob       # ZRANGEBYSCORE/LEX, ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE, ZRANGESTORE, ZMPOP/BZMPOP, ZRANDMEMBER …
+XADD events * type login        # XGROUP, XREADGROUP, XACK, XPENDING, XCLAIM, XAUTOCLAIM, XACKDEL, XDELEX, XCFGSET …
+GEOADD stores -73.98 40.74 nyc  # GEOSEARCH, GEOSEARCHSTORE, GEORADIUS/GEORADIUSBYMEMBER + _RO …
+PFADD uniq a b c                # PFCOUNT, PFMERGE, PFDEBUG, PFSELFTEST
+
+# Operations — replication, cluster, sentinel, modules, scripting, ACL, transactions, pub/sub
+EVAL "return redis.call('GET', KEYS[1])" 1 mykey
+SCRIPT LOAD/EXISTS/FLUSH/KILL/SHOW/DEBUG     # real Lua 5.1 (gopher-lua)
+FUNCTION LOAD/LIST/DELETE/DUMP/RESTORE/KILL
+ACL SETUSER alice on >pw ~cache:* +@read     # 22 categories, full rule grammar
+CLUSTER INFO/NODES/SHARDS/SLOTS/SETSLOT/MIGRATE  # 16384-slot CRC16-XMODEM
+SENTINEL MASTERS/MONITOR/FAILOVER/CKQUORUM   # full sentinel surface
+MULTI / EXEC / DISCARD / WATCH               # optimistic concurrency
+SUBSCRIBE / PSUBSCRIBE / PUBLISH             # pub/sub + sharded SSUBSCRIBE/SPUBLISH
+
+# Modules (compile-time linked, activate via MODULE LOAD)
+MODULE LOAD json | probabilistic | timeseries | search
+JSON.SET / JSON.GET / JSON.MERGE             # RedisJSON
+BF.ADD / CF.ADD / CMS.INCRBY / TOPK.ADD      # RedisBloom
+TS.CREATE / TS.ADD / TS.RANGE                # RedisTimeSeries (Gorilla compression)
+FT.CREATE / FT.SEARCH / FT.AGGREGATE         # RediSearch (BM25 + GEO + HNSW + hybrid)
+VADD / VSIM / VEMB / VINFO                   # native vector set type (12th data type)
+
+# Driver / ops fillers (Phase 7)
+BRPOPLPUSH / MOVE / SWAPDB / EVICT
+RESTORE-ASKING / CLUSTER DELSLOTSRANGE / SET-CONFIG-EPOCH
+LATENCY HISTOGRAM / CLIENT CAPA|SETINFO|CACHING / COMMAND GETKEYSANDFLAGS
 ```
 
 ### AI-native
@@ -163,6 +187,43 @@ MEMORY_ADD user:dhirav "Prefers Go + React + Tailwind"
 MEMORY_ADD user:dhirav "Building NeuroCache"
 MEMORY_QUERY user:dhirav "what is this user working on?"
 MEMORY_LIST user:dhirav
+```
+
+### NeuroCache-only primitives (no Redis equivalent)
+
+```bash
+# Run a command at-most-once per (key, ttl) window — replaces SETNX-then-execute
+IDEMPOTENT order:42 60000 INCR order:counter
+
+# Distributed lock with monotonic fencing tokens (Kleppmann-safe)
+LOCK ACQUIRE deploy 30000     # → fencing token, e.g. 17
+LOCK RELEASE deploy 17
+
+# GCRA token-bucket rate limit — constant memory per key
+RATELIMIT user:42 60000 100   # 100 requests / 60s; returns [allowed, remaining, retry-after-ms, reset-ms]
+
+# Exactly-once on the cheap — bounded memory even for unbounded id streams
+DEDUP webhooks evt-9f3b 86400000
+
+# Cost-aware caching for LLM responses
+CACHE.WEIGH gpt-key 0.05      # 5¢ to recompute → eviction prefers cheap entries
+CACHE.HIT gpt-key
+CACHE.STATS
+
+# Per-key version history with binary-search time-travel
+KEY.TRACK user:42:tier
+KEY.HISTORY user:42:tier 10
+KEY.AT user:42:tier 1735689600
+
+# Collaborative-filtering recommendations
+AI.LIKE alice book:42 1.0
+AI.RECOMMEND alice 10
+AI.SIMILAR alice 5
+
+# Real-time top-K key tracker (HeavyKeeper) — replaces redis-cli --hotkeys SCAN dance
+HOTKEYS 20
+HOTKEYS STATS
+HOTKEYS COUNT user:42
 ```
 
 ### HTTP API (for the dashboard and SDKs)

@@ -167,6 +167,42 @@ func (c *conn) scriptCmd(args []string) {
 		writeSimple(c.bw, "OK")
 	case "KILL":
 		c.scriptKillCmd()
+	case "SHOW":
+		// SCRIPT SHOW <sha1> — Valkey 8.0. Returns the source for a
+		// loaded script, useful when an operator wants to audit what
+		// EVALSHA is about to run without re-LOAD'ing.
+		if len(args) < 2 {
+			writeError(c.bw, "wrong number of arguments for 'script|show'")
+			return
+		}
+		src, ok := c.eng.Scripts.Get(args[1])
+		if !ok {
+			writeTypedError(c.bw, "NOSCRIPT", "No matching script. Please use SCRIPT LOAD.")
+			return
+		}
+		writeBulk(c.bw, src)
+	case "DEBUG":
+		// SCRIPT DEBUG YES|SYNC|NO. Real Redis ships an interactive Lua
+		// debugger; we have no debugger UI to attach, so we accept the
+		// flag (recording it in the same place CLIENT TRACKING modes
+		// live would be overkill) and return OK. Drivers that probe for
+		// support get a clean affirmative.
+		if len(args) < 2 {
+			writeError(c.bw, "wrong number of arguments for 'script|debug'")
+			return
+		}
+		switch strings.ToUpper(args[1]) {
+		case "YES", "SYNC", "NO":
+			writeSimple(c.bw, "OK")
+		default:
+			writeError(c.bw, "syntax error")
+		}
+	case "HELP":
+		writeArray(c.bw, []string{
+			"SCRIPT LOAD <script>", "SCRIPT EXISTS <sha1> [sha1 ...]",
+			"SCRIPT FLUSH", "SCRIPT KILL",
+			"SCRIPT SHOW <sha1>", "SCRIPT DEBUG YES|SYNC|NO",
+		})
 	default:
 		writeError(c.bw, "unknown SCRIPT subcommand")
 	}

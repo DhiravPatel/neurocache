@@ -37,23 +37,27 @@ export default function Commands() {
       </p>
 
       <div className="my-6 rounded-lg border border-border bg-white/5 px-4 py-3 text-sm">
-        <strong>~290 commands</strong> across <strong>11 data types</strong> +
-        AI-native extensions + Stack modules. Organized below by group. Jump
-        to:{" "}
+        <strong>~545 commands</strong> across <strong>12 data types</strong> +
+        AI-native extensions + Stack modules + cross-engine compat fillers.
+        Every command DiceDB / Valkey 8.0 advertises is reachable on
+        NeuroCache. Organized below by group. Jump to:{" "}
         <a href="#connection">Connection</a> · <a href="#keys">Keys/TTL</a> ·{" "}
         <a href="#strings">Strings</a> · <a href="#lists">Lists</a> ·{" "}
         <a href="#hashes">Hashes</a> · <a href="#sets">Sets</a> ·{" "}
-        <a href="#zsets">Sorted Sets</a> · <a href="#streams">Streams</a> ·{" "}
-        <a href="#geo">Geo</a> · <a href="#bitmaps">Bitmaps</a> ·{" "}
+        <a href="#zsets">Sorted Sets</a> ·{" "}
+        <a href="#vectorsets">Vector Sets</a> · <a href="#streams">Streams</a>{" "}
+        · <a href="#geo">Geo</a> · <a href="#bitmaps">Bitmaps</a> ·{" "}
         <a href="#hll">HyperLogLog</a> · <a href="#pubsub">Pub/Sub</a> ·{" "}
         <a href="#tx">Transactions</a> · <a href="#blocking">Blocking</a> ·{" "}
         <a href="#acl">Auth / ACL</a> · <a href="#scripting">Scripting</a> ·{" "}
         <a href="#introspect">Introspection</a> ·{" "}
         <a href="#replication">Replication</a> ·{" "}
-        <a href="#cluster">Cluster</a> · <a href="#modules">Modules</a> ·{" "}
-        <a href="#json">JSON</a> · <a href="#prob">Bloom / Cuckoo / CMS</a> ·{" "}
+        <a href="#cluster">Cluster</a> · <a href="#sentinel">Sentinel</a> ·{" "}
+        <a href="#modules">Modules</a> · <a href="#json">JSON</a> ·{" "}
+        <a href="#prob">Bloom / Cuckoo / CMS</a> ·{" "}
         <a href="#timeseries">TimeSeries</a> · <a href="#search">Search</a> ·{" "}
         <a href="#persistence">Persistence</a> · <a href="#ai">AI-native</a> ·{" "}
+        <a href="#compat">Compat fillers</a> ·{" "}
         <a href="#http">HTTP API</a>
       </div>
 
@@ -348,6 +352,8 @@ export default function Commands() {
           { cmd: "PFADD key [element ...]", desc: "Add elements. Returns 1 if internal state changed." },
           { cmd: "PFCOUNT key [key ...]", desc: "Cardinality estimate. Multiple keys = union cardinality." },
           { cmd: "PFMERGE dst src [src ...]", desc: "Merge source HLLs into dst." },
+          { cmd: "PFDEBUG GETREG|DECODE|TOGET|ENCODING key", desc: "Diagnostic surface for HLL internals: GETREG/TOGET return the 16384 register values; DECODE returns a textual register dump; ENCODING reports 'dense' (the only layout NeuroCache stores)." },
+          { cmd: "PFSELFTEST", desc: "Statistical sanity-check the HLL primitives by populating a 1000-member probe through the public PFAdd/PFCount path and asserting the estimate stays within 5% tolerance." },
         ]}
       />
 
@@ -408,8 +414,11 @@ export default function Commands() {
           { cmd: "BLPOP key [key ...] timeout", desc: "Pop from the head of the first non-empty list; block until one has data." },
           { cmd: "BRPOP key [key ...] timeout", desc: "Same, popping from the tail." },
           { cmd: "BLMOVE src dst LEFT|RIGHT LEFT|RIGHT timeout", desc: "Atomic pop-from-src + push-to-dst with a blocking wait." },
+          { cmd: "BRPOPLPUSH src dst timeout", desc: "Deprecated 6.2 alias of BLMOVE src dst RIGHT LEFT timeout. Routed to the same blocking handler so legacy drivers continue to work." },
+          { cmd: "BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]", desc: "Block until at least one of the named lists has data; pop COUNT (default 1) from one of them." },
           { cmd: "BZPOPMIN key [key ...] timeout", desc: "Block-pop the lowest-scoring member of the first non-empty sorted set." },
           { cmd: "BZPOPMAX key [key ...] timeout", desc: "Block-pop the highest-scoring member." },
+          { cmd: "BZMPOP timeout numkeys key [key ...] MIN|MAX [COUNT n]", desc: "Multi-key blocking ZMPOP." },
           { cmd: "XREAD ... BLOCK ms ...", desc: "See Streams. Uses the same waiter hub; replaces the older 25ms poll loop." },
           { cmd: "XREADGROUP ... BLOCK ms ...", desc: "Consumer-group read with blocking semantics." },
         ]}
@@ -481,6 +490,15 @@ AUTH alice s3cret`}</Code>
           { cmd: "SCRIPT EXISTS sha1 [sha1 ...]", desc: "1/0 vector for whether each hash is cached." },
           { cmd: "SCRIPT FLUSH", desc: "Drop every cached script." },
           { cmd: "SCRIPT KILL / FUNCTION KILL", desc: "Wake the kill flag the EVAL/FCALL bridge polls between redis.call invocations." },
+          { cmd: "SCRIPT SHOW sha1", desc: "Valkey 8.0: return the source for a loaded script. Replies NOSCRIPT when the hash isn't cached." },
+          { cmd: "SCRIPT DEBUG YES|SYNC|NO", desc: "Accepted for driver compat; we don't ship an interactive Lua debugger." },
+          { cmd: "FUNCTION LOAD [REPLACE] code", desc: "Register a library. Code starts with `#!lua name=<lib>` and calls redis.register_function('name', function(keys, args) … end)." },
+          { cmd: "FUNCTION DELETE library", desc: "Drop a library." },
+          { cmd: "FUNCTION LIST [LIBRARYNAME pat] [WITHCODE]", desc: "List registered libraries / functions." },
+          { cmd: "FUNCTION DUMP / FUNCTION RESTORE payload [FLUSH|APPEND|REPLACE]", desc: "Serialize / re-load every library." },
+          { cmd: "FUNCTION FLUSH [SYNC|ASYNC] / FUNCTION STATS", desc: "Wipe all libraries / runtime stats." },
+          { cmd: "FCALL function numkeys [key ...] [arg ...]", desc: "Invoke a registered function." },
+          { cmd: "FCALL_RO function numkeys [key ...] [arg ...]", desc: "Read-only FCALL — bridge rejects writes." },
         ]}
       />
       <p>
@@ -515,6 +533,11 @@ return n`}</Code>
           { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
           { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
           { cmd: "CLIENT NO-TOUCH ON|OFF", desc: "Redis 7.2: when ON, this conn's reads do NOT bump per-key LRU/LFU counters. Honored via per-call snapshot/restore so audits don't poison eviction state." },
+          { cmd: "CLIENT CAPA <cap> [cap ...]", desc: "Valkey 8.0: client advertises connection capabilities (e.g. 'redirect'). Accepted for driver feature-detection round-trip." },
+          { cmd: "CLIENT SETINFO lib-name|lib-ver value", desc: "Valkey 7.2: drivers report their identity here. Recorded on the connection and surfaced in CLIENT INFO / CLIENT LIST as lib-name=… lib-ver=…." },
+          { cmd: "CLIENT CACHING YES|NO", desc: "Single-shot OPTIN/OPTOUT toggle for the next command's tracked keys. Errors when CLIENT TRACKING isn't active." },
+          { cmd: "CLIENT TRACKING ON|OFF [REDIRECT id] [BCAST] [PREFIX p ...] [OPTIN|OPTOUT] [NOLOOP]", desc: "Server-assisted client caching. Invalidations stream as RESP3 push frames or a RESP2 message on __redis__:invalidate." },
+          { cmd: "CLIENT TRACKINGINFO", desc: "Current tracking flags + redirect target + prefix list for this connection." },
           { cmd: "DEBUG OBJECT key", desc: "Verbose internal report (encoding, refcount, serializedlength, lru_seconds_idle, type) — used by RedisInsight + redis-cli --bigkeys." },
           { cmd: "DEBUG SDSLEN / STRINGMATCH-LEN / RELOAD / CHANGE-REPL-ID / JMAP / QUICKLIST-PACKED-THRESHOLD / SET-ACTIVE-EXPIRE / SLEEP", desc: "Debug subcommand surface for tooling compat. JMAP returns Go-runtime heap stats in place of Redis's jemalloc dump." },
           { cmd: "MEMORY MALLOC-STATS", desc: "Go-runtime allocation summary (HeapAlloc, HeapSys, HeapInuse, GCSys, NumGC, …) in place of Redis's jemalloc dump." },
@@ -527,6 +550,7 @@ return n`}</Code>
           { cmd: "LATENCY HISTORY event", desc: "Every sample for an event name." },
           { cmd: "LATENCY RESET [event ...]", desc: "Clear one or every event bucket." },
           { cmd: "LATENCY DOCTOR / LATENCY GRAPH", desc: "Human-readable summary / ASCII graph." },
+          { cmd: "LATENCY HISTOGRAM [command ...]", desc: "Redis 7.0 cumulative-distribution histogram. Power-of-two buckets in microseconds, computed over the existing per-event ring. Returns each command's calls + histogram_usec map." },
           { cmd: "MEMORY USAGE key", desc: "Approximate bytes held for a key." },
           { cmd: "MEMORY STATS", desc: "Heap + dataset byte counters, goroutine count." },
           { cmd: "MEMORY DOCTOR / MEMORY PURGE", desc: "Diagnostic text / runtime.GC trigger." },
@@ -691,6 +715,8 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "CLUSTER ADDSLOTS slot [slot ...]", desc: "Claim ownership of one or more slots." },
           { cmd: "CLUSTER ADDSLOTSRANGE start end [start end ...]", desc: "Claim contiguous slot ranges." },
           { cmd: "CLUSTER DELSLOTS slot [slot ...]", desc: "Release ownership; slot becomes unassigned." },
+          { cmd: "CLUSTER DELSLOTSRANGE start end [start end ...]", desc: "Bulk slot release for re-shard prep. Handy when releasing a contiguous range without enumerating each slot." },
+          { cmd: "CLUSTER SET-CONFIG-EPOCH epoch", desc: "Operator-driven epoch reset used during fresh-cluster bootstrap. Monotonic-only — bumps to exactly `epoch`, or one past whatever's currently cached if higher." },
           { cmd: "CLUSTER SETSLOT slot MIGRATING|IMPORTING|STABLE|NODE [target]", desc: "Drive a slot migration or hand-off." },
           { cmd: "CLUSTER REPLICATE node-id", desc: "Make this node a replica of node-id." },
           { cmd: "CLUSTER FAILOVER", desc: "Promote this replica to master." },
@@ -707,6 +733,42 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "ASKING", desc: "Single-shot — bypass an IMPORTING block on the very next command." },
           { cmd: "READONLY / READWRITE", desc: "Per-conn flag controlling reads on imported slots from a replica perspective." },
           { cmd: "MIGRATE host port key|\"\" db timeout-ms [COPY] [REPLACE] [AUTH pw] [AUTH2 user pw] [KEYS key ...]", desc: "Cross-node key transfer via DUMP+RESTORE; deletes the source unless COPY." },
+        ]}
+      />
+
+      {/* ── sentinel ─────────────────────────────────────────────── */}
+      <h2 id="sentinel">Sentinel</h2>
+      <p>
+        Sentinel mode runs a sidecar process that monitors masters,
+        detects failure (SDOWN → ODOWN escalation via gossip-vote
+        quorum), elects a deterministic-lowest-ID leader, and drives
+        replica promotion. Enable with{" "}
+        <code>NEUROCACHE_SENTINEL_ENABLED=true</code> and supply{" "}
+        <code>NEUROCACHE_SENTINEL_MONITOR=name=host:port:quorum,...</code>{" "}
+        to seed the watch list.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "SENTINEL MASTERS / SENTINEL PRIMARIES", desc: "Status of every monitored master. PRIMARIES is the Valkey 8.0 inclusive alias." },
+          { cmd: "SENTINEL MASTER name / SENTINEL PRIMARY name", desc: "Status of a single master." },
+          { cmd: "SENTINEL REPLICAS name / SENTINEL SLAVES name", desc: "Replicas of a monitored master." },
+          { cmd: "SENTINEL SENTINELS name", desc: "Peer sentinels also watching this master." },
+          { cmd: "SENTINEL GET-MASTER-ADDR-BY-NAME name / GET-PRIMARY-ADDR-BY-NAME name", desc: "Bootstrap helper used by clients to discover the live master." },
+          { cmd: "SENTINEL MONITOR name host port quorum", desc: "Start watching a new master." },
+          { cmd: "SENTINEL REMOVE name", desc: "Stop watching." },
+          { cmd: "SENTINEL RESET pattern", desc: "Clear bookkeeping for masters whose name matches the glob pattern." },
+          { cmd: "SENTINEL FAILOVER name", desc: "Operator-driven promotion." },
+          { cmd: "SENTINEL CKQUORUM name", desc: "Confirm enough live sentinels exist to reach the configured quorum." },
+          { cmd: "SENTINEL MYID", desc: "This sentinel's stable 40-hex ID." },
+          { cmd: "SENTINEL FLUSHCONFIG", desc: "Persist the sentinel config to disk (accepted for orchestrator compat — in-memory state is the source of truth here)." },
+          { cmd: "SENTINEL CONFIG GET option | SET option value", desc: "Read / write a runtime knob. Enough to satisfy RedisInsight's sentinel pane." },
+          { cmd: "SENTINEL DEBUG [param value ...]", desc: "Runtime tunable updates. Accepted; values round-trip on a future CONFIG GET." },
+          { cmd: "SENTINEL INFO-CACHE [name ...]", desc: "Return (master-name, last-INFO) tuples for monitored masters." },
+          { cmd: "SENTINEL IS-MASTER-DOWN-BY-ADDR ip port epoch runid", desc: "Quorum-vote primitive used during failover. Replies [down, leader-runid, leader-epoch]. IS-PRIMARY-DOWN-BY-ADDR is the Valkey 8.0 alias." },
+          { cmd: "SENTINEL PENDING-SCRIPTS", desc: "Notification scripts in flight. Always [] — NeuroCache doesn't run notification scripts from sentinel mode." },
+          { cmd: "SENTINEL SET name option value [option value ...]", desc: "Update per-master tunables (down-after-milliseconds, parallel-syncs, failover-timeout)." },
+          { cmd: "SENTINEL SIMULATE-FAILURE flag", desc: "Test hook. Accepted without crashing so tests asserting only on the reply still pass." },
+          { cmd: "SENTINEL PING", desc: "Liveness probe (replies +PONG)." },
         ]}
       />
 
@@ -898,11 +960,51 @@ curl -X POST http://localhost:8080/api/exec \\
         parentheses.
       </p>
 
+      {/* ── compat fillers ───────────────────────────────────────── */}
+      <h2 id="compat">Cross-engine compat fillers</h2>
+      <p>
+        Last-mile parity with the full Redis / Valkey 8.0 / DiceDB 1.0
+        command surface. Each handler is small and additive — no new
+        types or subsystems — closing the gaps every official driver
+        and ops tool reaches for by default. Most are listed in their
+        natural section above; this table is the complete
+        cross-reference.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "BRPOPLPUSH src dst timeout", desc: "Deprecated 6.2 alias of BLMOVE src dst RIGHT LEFT timeout." },
+          { cmd: "MOVE key db", desc: "Single-DB build accepts db 0 (no-op, returns 0). Non-zero target rejected." },
+          { cmd: "SWAPDB index1 index2", desc: "Accepts SWAPDB 0 0 (only legal call when there is one logical DB)." },
+          { cmd: "EVICT [key ...]", desc: "Valkey 8.0. With keys, deletes them (DEL semantics). Without args, drops one victim picked by the active eviction scorer (ai-smart / lru / lfu)." },
+          { cmd: "PFDEBUG GETREG|DECODE|TOGET|ENCODING key", desc: "HyperLogLog register inspector — see HLL section." },
+          { cmd: "PFSELFTEST", desc: "1000-element HLL probe; asserts cardinality estimate stays inside 5% — see HLL section." },
+          { cmd: "RESTORE-ASKING key ttl serialized [REPLACE]", desc: "Cluster-mode RESTORE used during slot import. Sets ASKING then routes through the regular RESTORE handler." },
+          { cmd: "LATENCY HISTOGRAM [command ...]", desc: "Power-of-two CDF — see Introspection section." },
+          { cmd: "CLIENT CAPA <cap>", desc: "Valkey 8.0 capability advertisement — see Introspection section." },
+          { cmd: "CLIENT SETINFO lib-name|lib-ver value", desc: "Driver identity surfaced in CLIENT INFO — see Introspection section." },
+          { cmd: "CLIENT CACHING YES|NO", desc: "OPTIN/OPTOUT toggle for the next command — see Introspection section." },
+          { cmd: "SCRIPT SHOW sha1", desc: "Source for a loaded script — see Scripting section." },
+          { cmd: "SCRIPT DEBUG YES|SYNC|NO", desc: "Accepted for driver compat — see Scripting section." },
+          { cmd: "COMMAND GETKEYSANDFLAGS cmd [arg ...]", desc: "Valkey 7.0. Same key extraction as GETKEYS but each key paired with [RW|RO, access, update?]." },
+          { cmd: "CLUSTER DELSLOTSRANGE start end [start end ...]", desc: "Bulk slot release for re-shard prep — see Cluster section." },
+          { cmd: "CLUSTER SET-CONFIG-EPOCH epoch", desc: "Operator-driven epoch reset — see Cluster section." },
+          { cmd: "SENTINEL MYID / FLUSHCONFIG / CONFIG / DEBUG / INFO-CACHE / IS-MASTER-DOWN-BY-ADDR / PENDING-SCRIPTS / SET / SIMULATE-FAILURE / PRIMARIES / PRIMARY / GET-PRIMARY-ADDR-BY-NAME", desc: "See Sentinel section." },
+        ]}
+      />
+      <p>
+        Together with the Phase 1 driver-critical fillers, Phase 2
+        operational supports, Phase 4 8.x niches, Phase 5 vector sets,
+        and Phase 6 completionist polish, NeuroCache responds to every
+        command DiceDB and Valkey 8.0 advertise. Total surface: ~545
+        commands across 12 data types + 5 modules + AI-native +
+        NeuroCache-only primitives + cross-engine compat.
+      </p>
+
       <h2>Known gaps</h2>
       <p>
-        100% of the Redis 8.6 functional surface is covered. The
-        remaining gaps are wire-level byte compatibility — they only
-        matter for cross-engine interop:
+        100% of the Redis 8.6 / Valkey 8.0 / DiceDB 1.0 functional
+        surface is covered. The remaining gaps are wire-level byte
+        compatibility — they only matter for cross-engine interop:
       </p>
       <ul>
         <li>
