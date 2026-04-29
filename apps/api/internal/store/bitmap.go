@@ -19,10 +19,11 @@ func (s *Store) SetBit(key string, offset int64, value int) (int, error) {
 	if value != 0 && value != 1 {
 		return 0, errors.New("bit is not an integer or out of range")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 
-	e, ok, err := s.get(key, TypeString)
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil {
 		return 0, err
 	}
@@ -46,7 +47,7 @@ func (s *Store) SetBit(key string, offset int64, value int) (int, error) {
 	if !ok {
 		now := time.Now()
 		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
-		s.data[key] = e
+		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
 	}
@@ -58,9 +59,10 @@ func (s *Store) SetBit(key string, offset int64, value int) (int, error) {
 
 // GetBit reads bit at offset (0 if key missing or offset past end).
 func (s *Store) GetBit(key string, offset int64) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -75,9 +77,10 @@ func (s *Store) GetBit(key string, offset int64) (int, error) {
 // BitCount counts set bits in [start,end] (byte indices). Negative
 // indices count from the end. end < start returns 0.
 func (s *Store) BitCount(key string, start, end int, hasRange bool) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -106,9 +109,10 @@ func (s *Store) BitPos(key string, bit int, start, end int, hasEnd bool) (int, e
 	if bit != 0 && bit != 1 {
 		return 0, errors.New("bit must be 0 or 1")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return -1, err
 	}
@@ -135,7 +139,9 @@ func (s *Store) BitPos(key string, bit int, start, end int, hasEnd bool) (int, e
 }
 
 // BitOp performs AND / OR / XOR / NOT across source keys, storing the
-// result (padded to the longest source) into dst. Returns dst length.
+// result (padded to the longest source) into dst. Locks every involved
+// shard up front (in canonical order) so the read of every src and the
+// write of dst happen atomically with respect to other writers.
 func (s *Store) BitOp(op, dst string, keys []string) (int, error) {
 	op = strings.ToUpper(op)
 	if op == "NOT" && len(keys) != 1 {
@@ -144,12 +150,19 @@ func (s *Store) BitOp(op, dst string, keys []string) (int, error) {
 	if len(keys) == 0 {
 		return 0, errors.New("BITOP requires at least one source key")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Collect every shard the operation touches and lock them in
+	// canonical order — same mechanic as lockTwoW, generalized.
+	allKeys := append([]string{dst}, keys...)
+	involved := s.shardsFor(allKeys)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
+	shD := s.shardForKey(dst)
+
 	srcs := make([][]byte, len(keys))
 	maxLen := 0
 	for i, k := range keys {
-		e, ok, err := s.get(k, TypeString)
+		shS := s.shardForKey(k)
+		e, ok, err := shS.get(k, TypeString)
 		if err != nil {
 			return 0, err
 		}
@@ -202,12 +215,12 @@ func (s *Store) BitOp(op, dst string, keys []string) (int, error) {
 		return 0, errors.New("unknown BITOP operation")
 	}
 	// write dst
-	if old, ok := s.data[dst]; ok {
+	if old, ok := shD.data[dst]; ok {
 		s.bytes.Add(-int64(old.Bytes))
 	}
 	now := time.Now()
 	e := &Entry{Key: dst, Type: TypeString, Str: string(out), CreatedAt: now, LastRead: now, Bytes: len(dst) + len(out)}
-	s.data[dst] = e
+	shD.data[dst] = e
 	s.bytes.Add(int64(e.Bytes))
 	return maxLen, nil
 }

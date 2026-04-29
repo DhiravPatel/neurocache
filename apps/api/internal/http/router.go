@@ -66,6 +66,115 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("DELETE /api/prompts/{name}", h.promptDelete)
 	mux.HandleFunc("GET /api/prompts", h.promptList)
 
+	// AI-ops: agent tool cache
+	mux.HandleFunc("POST /api/agent", h.agentStore)
+	mux.HandleFunc("GET /api/agent", h.agentCall)
+	mux.HandleFunc("POST /api/agent/profile", h.agentProfile)
+	mux.HandleFunc("DELETE /api/agent", h.agentForget)
+	mux.HandleFunc("GET /api/agent/stats", h.agentStats)
+	mux.HandleFunc("POST /api/agent/purge", h.agentPurge)
+
+	// AI-ops: stream cache
+	mux.HandleFunc("POST /api/stream", h.streamSet)
+	mux.HandleFunc("GET /api/stream", h.streamGet)
+	mux.HandleFunc("GET /api/stream/replay", h.streamReplay)
+	mux.HandleFunc("DELETE /api/stream", h.streamForget)
+	mux.HandleFunc("POST /api/stream/purge", h.streamPurge)
+	mux.HandleFunc("GET /api/stream/stats", h.streamStats)
+
+	// AI-ops: cost budgets
+	mux.HandleFunc("POST /api/cost/{tenant}/budget", h.costBudget)
+	mux.HandleFunc("POST /api/cost/{tenant}/charge", h.costCharge)
+	mux.HandleFunc("GET /api/cost/{tenant}", h.costUsage)
+	mux.HandleFunc("POST /api/cost/{tenant}/reset", h.costReset)
+	mux.HandleFunc("GET /api/cost", h.costList)
+
+	// AI-ops: shadow cache
+	mux.HandleFunc("POST /api/shadow/{key}", h.shadowPut)
+	mux.HandleFunc("GET /api/shadow/{key}", h.shadowGet)
+	mux.HandleFunc("DELETE /api/shadow/{key}", h.shadowForget)
+	mux.HandleFunc("GET /api/shadow/stats", h.shadowStats)
+
+	// AI-ops: personas
+	mux.HandleFunc("POST /api/persona/{user}", h.personaSet)
+	mux.HandleFunc("GET /api/persona/{user}", h.personaGet)
+	mux.HandleFunc("GET /api/persona/{user}/list", h.personaList)
+	mux.HandleFunc("DELETE /api/persona/{user}", h.personaForget)
+
+	// AI-ops: moderation / safety
+	mux.HandleFunc("POST /api/safe", h.safeSet)
+	mux.HandleFunc("GET /api/safe", h.safeCheck)
+	mux.HandleFunc("GET /api/safe/inject", h.safeInject)
+	mux.HandleFunc("DELETE /api/safe", h.safeForget)
+	mux.HandleFunc("POST /api/safe/purge", h.safePurge)
+	mux.HandleFunc("GET /api/safe/stats", h.safeStats)
+
+	// AI-ops: lineage / provenance
+	mux.HandleFunc("POST /api/lineage", h.lineageRecord)
+	mux.HandleFunc("GET /api/lineage/stats", h.lineageStats)
+	mux.HandleFunc("GET /api/lineage/sources/{source_id}/consumers", h.lineageConsumers)
+	mux.HandleFunc("GET /api/lineage/{output_id}", h.lineageList)
+	mux.HandleFunc("GET /api/lineage/{output_id}/sources", h.lineageSources)
+	mux.HandleFunc("DELETE /api/lineage/{output_id}", h.lineageForget)
+
+	// AI-ops: SLO tracking
+	mux.HandleFunc("POST /api/slo/{cmd}", h.sloSet)
+	mux.HandleFunc("GET /api/slo", h.sloSnapshot)
+	mux.HandleFunc("POST /api/slo/reset", h.sloReset)
+
+	// AI-ops: A/B experiments
+	mux.HandleFunc("POST /api/ab", h.abDefine)
+	mux.HandleFunc("GET /api/ab", h.abList)
+	mux.HandleFunc("GET /api/ab/{name}/assign", h.abAssign)
+	mux.HandleFunc("POST /api/ab/{name}/expose", h.abExpose)
+	mux.HandleFunc("POST /api/ab/{name}/record", h.abRecord)
+	mux.HandleFunc("GET /api/ab/{name}", h.abStats)
+	mux.HandleFunc("POST /api/ab/{name}/reset", h.abReset)
+	mux.HandleFunc("DELETE /api/ab/{name}", h.abDelete)
+
+	// AI-ops: knowledge graph
+	mux.HandleFunc("POST /api/graph/link", h.graphLink)
+	mux.HandleFunc("POST /api/graph/unlink", h.graphUnlink)
+	mux.HandleFunc("GET /api/graph/neighbors", h.graphNeighbors)
+	mux.HandleFunc("GET /api/graph/in", h.graphIn)
+	mux.HandleFunc("GET /api/graph/path", h.graphPath)
+	mux.HandleFunc("GET /api/graph/subjects", h.graphSubjects)
+	mux.HandleFunc("GET /api/graph/stats", h.graphStats)
+
+	// AI-ops: scheduler
+	mux.HandleFunc("POST /api/schedule/at", h.scheduleAt)
+	mux.HandleFunc("POST /api/schedule/in", h.scheduleIn)
+	mux.HandleFunc("DELETE /api/schedule/{id}", h.scheduleCancel)
+	mux.HandleFunc("GET /api/schedule", h.scheduleList)
+	mux.HandleFunc("GET /api/schedule/stats", h.scheduleStats)
+
+	// AI-ops: event log
+	mux.HandleFunc("POST /api/event/{stream}", h.eventAppend)
+	mux.HandleFunc("POST /api/event/{stream}/project", h.eventProject)
+	mux.HandleFunc("GET /api/event/{stream}/projection/{name}", h.eventRead)
+	mux.HandleFunc("GET /api/event/{stream}/range", h.eventRange)
+	mux.HandleFunc("GET /api/event/{stream}/len", h.eventLen)
+
+	// AI-ops: policy verdict cache
+	mux.HandleFunc("POST /api/policy/allow", h.policyAllow)
+	mux.HandleFunc("POST /api/policy/set", h.policySet)
+	mux.HandleFunc("POST /api/policy/purge", h.policyPurge)
+	mux.HandleFunc("GET /api/policy/stats", h.policyStats)
+
+	// AI-ops: inference proxy
+	mux.HandleFunc("POST /api/infer", h.inferGenerate)
+	mux.HandleFunc("DELETE /api/infer", h.inferForget)
+	mux.HandleFunc("POST /api/infer/purge", h.inferPurge)
+	mux.HandleFunc("GET /api/infer/stats", h.inferStats)
+	mux.HandleFunc("POST /api/infer/default", h.inferDefault)
+
+	// AI-ops: MCP server
+	mux.HandleFunc("GET /api/mcp/tools", h.mcpTools)
+	mux.HandleFunc("GET /api/mcp/resources", h.mcpResources)
+	mux.HandleFunc("POST /api/mcp/call", h.mcpCall)
+	mux.HandleFunc("GET /api/mcp/read", h.mcpRead)
+	mux.HandleFunc("POST /api/mcp/rpc", h.mcpRPC)
+
 	// Raw command (like redis-cli EVAL)
 	mux.HandleFunc("POST /api/exec", h.exec)
 

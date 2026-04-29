@@ -257,6 +257,54 @@ export default function Configuration() {
         </tbody>
       </table>
 
+      <h2>Go runtime tuning</h2>
+      <p>
+        NeuroCache adjusts two Go runtime knobs at boot to fit the
+        long-running cache workload. Both honour operator overrides via
+        the standard env vars — set them yourself if you need a
+        different policy.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>NeuroCache default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>GOGC</code></td>
+            <td><code>200</code></td>
+            <td>
+              GC heap-growth target. Go's stock default is{" "}
+              <code>100</code> (collect when the heap doubles), which
+              fires more often than a stable cache working set
+              actually needs and inflates p99 tail latency. Doubling
+              it to <code>200</code> halves GC frequency and smooths
+              the tail. Lower it (e.g. <code>50</code>) if RSS is
+              tight; raise it (e.g. <code>400</code>) for the
+              latency-most-sensitive workloads.
+            </td>
+          </tr>
+          <tr>
+            <td><code>GOMEMLIMIT</code></td>
+            <td><code>NEUROCACHE_MAX_MEMORY × 1.25</code></td>
+            <td>
+              Go 1.19+ soft heap budget. When the heap approaches
+              this number, GC pressure ramps up so RSS stays in
+              check — dramatically smoother behaviour than letting{" "}
+              <code>GOGC</code> alone drive memory. The 25% slack
+              covers goroutine stacks, small allocs, and per-shard
+              map metadata; cache values themselves stay within{" "}
+              <code>NEUROCACHE_MAX_MEMORY</code> via the eviction
+              loop. Set this manually (e.g. <code>4GiB</code>) when
+              running outside Docker memory limits.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
       <h2>Example: production config</h2>
       <Code lang="bash">{`docker run -d --name neurocache \\
   -p 8080:8080 -p 6379:6379 \\
@@ -264,10 +312,20 @@ export default function Configuration() {
   -e NEUROCACHE_MAX_MEMORY=2gb \\
   -e NEUROCACHE_EVICTION_POLICY=ai-smart \\
   -e NEUROCACHE_SEMANTIC_THRESHOLD=0.80 \\
+  -e NEUROCACHE_AOF_ENABLED=true \\
+  -e NEUROCACHE_AOF_FSYNC=everysec \\
   -e NEUROCACHE_LOG_LEVEL=info \\
   -e NEUROCACHE_LOG_FORMAT=json \\
   -e NEUROCACHE_CORS_ORIGINS=https://app.example.com,https://admin.example.com \\
+  -e GOGC=200 \\
+  -e GOMEMLIMIT=2560MiB \\
   neurocache/engine:latest`}</Code>
+      <p>
+        The <code>GOGC</code> + <code>GOMEMLIMIT</code> values above
+        match what NeuroCache sets automatically; explicit values just
+        make the deployment self-documenting and survive a future
+        change in the runtime defaults.
+      </p>
 
       <h2>Eviction policies</h2>
       <p>

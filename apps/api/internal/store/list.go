@@ -11,10 +11,11 @@ func (s *Store) LPush(key string, values ...string) (int, error) {
 	if len(values) == 0 {
 		return 0, errors.New("LPUSH requires at least one value")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeList)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return 0, err
 	}
 	delta := 0
@@ -24,7 +25,7 @@ func (s *Store) LPush(key string, values ...string) (int, error) {
 	}
 	s.addBytes(e, delta)
 	n := e.List.Len()
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("lpush", key)
 	return n, nil
 }
@@ -34,10 +35,11 @@ func (s *Store) RPush(key string, values ...string) (int, error) {
 	if len(values) == 0 {
 		return 0, errors.New("RPUSH requires at least one value")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeList)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return 0, err
 	}
 	delta := 0
@@ -47,16 +49,17 @@ func (s *Store) RPush(key string, values ...string) (int, error) {
 	}
 	s.addBytes(e, delta)
 	n := e.List.Len()
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("rpush", key)
 	return n, nil
 }
 
 // LPushX prepends only if the key already exists. Returns 0 when missing.
 func (s *Store) LPushX(key, value string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -67,9 +70,10 @@ func (s *Store) LPushX(key, value string) (int, error) {
 
 // RPushX appends only if the key already exists.
 func (s *Store) RPushX(key, value string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -80,9 +84,10 @@ func (s *Store) RPushX(key, value string) (int, error) {
 
 // LPop removes and returns the head. (value, hit, err).
 func (s *Store) LPop(key string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -93,15 +98,16 @@ func (s *Store) LPop(key string) (string, bool, error) {
 	v := front.Value.(string)
 	e.List.Remove(front)
 	s.addBytes(e, -len(v))
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return v, true, nil
 }
 
 // RPop removes and returns the tail.
 func (s *Store) RPop(key string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -112,15 +118,16 @@ func (s *Store) RPop(key string) (string, bool, error) {
 	v := back.Value.(string)
 	e.List.Remove(back)
 	s.addBytes(e, -len(v))
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return v, true, nil
 }
 
 // LLen returns the list length, 0 if missing.
 func (s *Store) LLen(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -129,9 +136,10 @@ func (s *Store) LLen(key string) (int, error) {
 
 // LIndex returns the element at index (supports negatives).
 func (s *Store) LIndex(key string, index int) (string, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -151,9 +159,10 @@ func (s *Store) LIndex(key string, index int) (string, bool, error) {
 
 // LRange returns elements in [start,stop] with negative indices supported.
 func (s *Store) LRange(key string, start, stop int) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -176,9 +185,10 @@ func (s *Store) LRange(key string, start, stop int) ([]string, error) {
 
 // LSet overwrites the element at index. Errors when out of range.
 func (s *Store) LSet(key string, index int, value string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil {
 		return err
 	}
@@ -205,9 +215,10 @@ func (s *Store) LSet(key string, index int, value string) error {
 // LRem removes up to |count| occurrences of value. count > 0 from head,
 // count < 0 from tail, count == 0 removes all. Returns removed count.
 func (s *Store) LRem(key string, count int, value string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -246,15 +257,16 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 		walk(false)
 	}
 	s.addBytes(e, -bytesRemoved)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return removed, nil
 }
 
 // LTrim trims the list to the inclusive [start,stop] range.
 func (s *Store) LTrim(key string, start, stop int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return err
 	}
@@ -263,7 +275,7 @@ func (s *Store) LTrim(key string, start, stop int) error {
 	if empty {
 		e.List.Init()
 		s.recomputeBytes(e)
-		s.removeIfEmpty(e)
+		s.removeIfEmpty(sh, e)
 		return nil
 	}
 	keep := list.New()
@@ -277,16 +289,17 @@ func (s *Store) LTrim(key string, start, stop int) error {
 	}
 	e.List = keep
 	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return nil
 }
 
 // LInsert inserts value before/after pivot. Returns new length, or -1 if
 // pivot is not found, or 0 if the key is missing.
 func (s *Store) LInsert(key string, before bool, pivot, value string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil {
 		return 0, err
 	}
@@ -309,9 +322,9 @@ func (s *Store) LInsert(key string, before bool, pivot, value string) (int, erro
 
 // RPopLPush atomically pops from src's tail and pushes onto dst's head.
 func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	se, ok, err := s.get(src, TypeList)
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	se, ok, err := shS.get(src, TypeList)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -322,7 +335,7 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 	v := back.Value.(string)
 	se.List.Remove(back)
 
-	de, err := s.getOrCreate(dst, TypeList)
+	de, err := s.getOrCreate(shD, dst, TypeList)
 	if err != nil {
 		// restore on failure so the pop is observed only when the push succeeds
 		se.List.PushBack(v)
@@ -331,6 +344,6 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 	de.List.PushFront(v)
 	s.addBytes(se, -len(v))
 	s.addBytes(de, len(v))
-	s.removeIfEmpty(se)
+	s.removeIfEmpty(shS, se)
 	return v, true, nil
 }

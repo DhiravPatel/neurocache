@@ -11,9 +11,10 @@ import (
 func (s *Store) ZMScore(key string, members ...string) ([]float64, []bool, error) {
 	scores := make([]float64, len(members))
 	hits := make([]bool, len(members))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return scores, hits, err
 	}
@@ -36,9 +37,10 @@ func (s *Store) ZMScore(key string, members ...string) ([]float64, []bool, error
 // Returns (members, scores, ok). When the key is missing or empty the
 // result slices are empty and ok=false.
 func (s *Store) ZRandMember(key string, count int, withScores bool) ([]string, []float64, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return nil, nil, false, err
 	}
@@ -99,9 +101,10 @@ func (s *Store) ZRandMember(key string, count int, withScores bool) ([]string, [
 // [start, stop] (negatives count from the tail, inclusive stop).
 // Returns the number of removed members. Empty range is not an error.
 func (s *Store) ZRemRangeByRank(key string, start, stop int) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -127,7 +130,7 @@ func (s *Store) ZRemRangeByRank(key string, start, stop int) (int, error) {
 		e.ZSet.Remove(m)
 	}
 	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	s.fire("zrem", key)
 	return len(victims), nil
 }
@@ -144,9 +147,10 @@ func (s *Store) ZRemRangeByScore(key, minStr, maxStr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -169,7 +173,7 @@ func (s *Store) ZRemRangeByScore(key, minStr, maxStr string) (int, error) {
 		e.ZSet.Remove(m)
 	}
 	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	s.fire("zrem", key)
 	return len(victims), nil
 }
@@ -186,9 +190,10 @@ func (s *Store) ZRemRangeByLex(key, minStr, maxStr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -221,7 +226,7 @@ func (s *Store) ZRemRangeByLex(key, minStr, maxStr string) (int, error) {
 		e.ZSet.Remove(m)
 	}
 	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	s.fire("zrem", key)
 	return len(victims), nil
 }

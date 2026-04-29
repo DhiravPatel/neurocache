@@ -17,10 +17,11 @@ func (s *Store) ZAdd(key string, pairs ...ZPair) (int, error) {
 	if len(pairs) == 0 {
 		return 0, errors.New("ZADD requires at least one score/member pair")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeZSet)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return 0, err
 	}
 	added := 0
@@ -32,16 +33,17 @@ func (s *Store) ZAdd(key string, pairs ...ZPair) (int, error) {
 		}
 	}
 	s.addBytes(e, delta)
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("zadd", key)
 	return added, nil
 }
 
 // ZScore returns the score for a member.
 func (s *Store) ZScore(key, member string) (float64, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -51,9 +53,10 @@ func (s *Store) ZScore(key, member string) (float64, bool, error) {
 
 // ZRem deletes members; returns the count actually removed.
 func (s *Store) ZRem(key string, members ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -66,15 +69,16 @@ func (s *Store) ZRem(key string, members ...string) (int, error) {
 		}
 	}
 	s.addBytes(e, delta)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return removed, nil
 }
 
 // ZCard returns the number of members.
 func (s *Store) ZCard(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -83,9 +87,10 @@ func (s *Store) ZCard(key string) (int, error) {
 
 // ZIncrBy adds delta to member's score and returns the new score.
 func (s *Store) ZIncrBy(key string, delta float64, member string) (float64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.getOrCreate(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, err := s.getOrCreate(sh, key, TypeZSet)
 	if err != nil {
 		return 0, err
 	}
@@ -99,9 +104,10 @@ func (s *Store) ZIncrBy(key string, delta float64, member string) (float64, erro
 
 // ZRank returns member's 0-based rank (ascending).
 func (s *Store) ZRank(key, member string) (int, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -111,9 +117,10 @@ func (s *Store) ZRank(key, member string) (int, bool, error) {
 
 // ZRevRank returns member's 0-based rank (descending).
 func (s *Store) ZRevRank(key, member string) (int, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -123,9 +130,10 @@ func (s *Store) ZRevRank(key, member string) (int, bool, error) {
 
 // ZRange returns [start,stop] by index; reverse walks from the tail.
 func (s *Store) ZRange(key string, start, stop int, withScores, reverse bool) ([]ZRangeResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return []ZRangeResult{}, err
 	}
@@ -143,9 +151,10 @@ func (s *Store) ZRangeByScore(key, minStr, maxStr string, offset, count int, rev
 	if err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return []ZRangeResult{}, err
 	}
@@ -162,9 +171,10 @@ func (s *Store) ZCount(key, minStr, maxStr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -173,9 +183,10 @@ func (s *Store) ZCount(key, minStr, maxStr string) (int, error) {
 
 // ZPopMin / ZPopMax remove and return ends.
 func (s *Store) ZPopMin(key string) (string, float64, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return "", 0, false, err
 	}
@@ -184,14 +195,15 @@ func (s *Store) ZPopMin(key string) (string, float64, bool, error) {
 		return "", 0, false, nil
 	}
 	s.addBytes(e, -(len(m) + 8))
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return m, sc, true, nil
 }
 
 func (s *Store) ZPopMax(key string) (string, float64, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return "", 0, false, err
 	}
@@ -200,7 +212,7 @@ func (s *Store) ZPopMax(key string) (string, float64, bool, error) {
 		return "", 0, false, nil
 	}
 	s.addBytes(e, -(len(m) + 8))
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return m, sc, true, nil
 }
 

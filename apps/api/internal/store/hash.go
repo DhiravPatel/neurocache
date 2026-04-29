@@ -11,10 +11,11 @@ func (s *Store) HSet(key string, pairs ...string) (int, error) {
 	if len(pairs) == 0 || len(pairs)%2 != 0 {
 		return 0, errors.New("HSET requires field/value pairs")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeHash)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return 0, err
 	}
 	added := 0
@@ -30,16 +31,17 @@ func (s *Store) HSet(key string, pairs ...string) (int, error) {
 		e.Hash[f] = v
 	}
 	s.addBytes(e, delta)
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("hset", key)
 	return added, nil
 }
 
 // HSetNX sets a field only if it does not exist.
 func (s *Store) HSetNX(key, field, value string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.getOrCreate(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, err := s.getOrCreate(sh, key, TypeHash)
 	if err != nil {
 		return false, err
 	}
@@ -53,9 +55,10 @@ func (s *Store) HSetNX(key, field, value string) (bool, error) {
 
 // HGet fetches a single field.
 func (s *Store) HGet(key, field string) (string, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -65,11 +68,12 @@ func (s *Store) HGet(key, field string) (string, bool, error) {
 
 // HMGet returns values for a list of fields; miss[i] is zero-value.
 func (s *Store) HMGet(key string, fields ...string) ([]string, []bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
 	vals := make([]string, len(fields))
 	hits := make([]bool, len(fields))
-	e, ok, err := s.get(key, TypeHash)
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -89,9 +93,10 @@ func (s *Store) HMGet(key string, fields ...string) ([]string, []bool, error) {
 // HGetAll returns all fields as alternating field/value pairs — callers
 // can pair them up or flatten depending on wire protocol needs.
 func (s *Store) HGetAll(key string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -104,9 +109,10 @@ func (s *Store) HGetAll(key string) ([]string, error) {
 
 // HDel removes fields; returns the number actually removed.
 func (s *Store) HDel(key string, fields ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -120,15 +126,16 @@ func (s *Store) HDel(key string, fields ...string) (int, error) {
 		}
 	}
 	s.addBytes(e, delta)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	return removed, nil
 }
 
 // HExists reports whether the field is present.
 func (s *Store) HExists(key, field string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -138,9 +145,10 @@ func (s *Store) HExists(key, field string) (bool, error) {
 
 // HLen returns the field count, 0 if missing.
 func (s *Store) HLen(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -149,9 +157,10 @@ func (s *Store) HLen(key string) (int, error) {
 
 // HKeys returns all field names.
 func (s *Store) HKeys(key string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -164,9 +173,10 @@ func (s *Store) HKeys(key string) ([]string, error) {
 
 // HVals returns all field values.
 func (s *Store) HVals(key string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -179,9 +189,10 @@ func (s *Store) HVals(key string) ([]string, error) {
 
 // HIncrBy adds delta to a numeric field; creates it at 0 if missing.
 func (s *Store) HIncrBy(key, field string, delta int64) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.getOrCreate(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, err := s.getOrCreate(sh, key, TypeHash)
 	if err != nil {
 		return 0, err
 	}
@@ -210,9 +221,10 @@ func (s *Store) HIncrBy(key, field string, delta int64) (int64, error) {
 
 // HIncrByFloat adds a float delta; mirrors HIncrBy for float semantics.
 func (s *Store) HIncrByFloat(key, field string, delta float64) (float64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.getOrCreate(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, err := s.getOrCreate(sh, key, TypeHash)
 	if err != nil {
 		return 0, err
 	}
@@ -237,9 +249,10 @@ func (s *Store) HIncrByFloat(key, field string, delta float64) (float64, error) 
 
 // HStrLen returns the byte length of the field's value.
 func (s *Store) HStrLen(key, field string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return 0, err
 	}

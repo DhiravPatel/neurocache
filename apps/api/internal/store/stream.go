@@ -224,15 +224,16 @@ func (s *Store) XAdd(key, id string, fields []string, maxLen int) (string, error
 	if len(fields) == 0 || len(fields)%2 != 0 {
 		return "", errors.New("XADD requires at least one field/value pair")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeStream)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return "", err
 	}
 	assigned, err := e.Stream.generateID(id)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return "", err
 	}
 	e.Stream.append(assigned, fields)
@@ -240,16 +241,17 @@ func (s *Store) XAdd(key, id string, fields []string, maxLen int) (string, error
 		e.Stream.trim(maxLen)
 	}
 	s.recomputeBytes(e)
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("xadd", key)
 	return assigned.String(), nil
 }
 
 // XLen returns stream length (0 if missing).
 func (s *Store) XLen(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -259,9 +261,10 @@ func (s *Store) XLen(key string) (int, error) {
 // XRange returns entries whose IDs fall in [startStr,endStr]. count == 0
 // means unlimited.
 func (s *Store) XRange(key, startStr, endStr string, count int, reverse bool) ([]StreamEntry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -285,9 +288,10 @@ func (s *Store) XRange(key, startStr, endStr string, count int, reverse bool) ([
 
 // XDel removes entries by ID; returns removed count.
 func (s *Store) XDel(key string, ids ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -306,9 +310,10 @@ func (s *Store) XDel(key string, ids ...string) (int, error) {
 
 // XTrim caps the stream at maxLen; returns number of deleted entries.
 func (s *Store) XTrim(key string, maxLen int) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -325,10 +330,12 @@ func (s *Store) XRead(keys, lastIDs []string, count int) (map[string][]StreamEnt
 		return nil, errors.New("XREAD: keys and IDs must be the same length")
 	}
 	out := map[string][]StreamEntry{}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	for i, k := range keys {
-		e, ok, err := s.get(k, TypeStream)
+		sh := s.shardForKey(k)
+		e, ok, err := sh.get(k, TypeStream)
 		if err != nil {
 			return nil, err
 		}
@@ -365,9 +372,10 @@ func (s *Store) XSetID(key, idStr string) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return err
 	}
@@ -384,9 +392,10 @@ func (s *Store) XTrimMinID(key, minIDStr string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -408,9 +417,10 @@ func (s *Store) XTrimMinID(key, minIDStr string) (int, error) {
 
 // XLast returns the latest ID for a stream (for XREAD "$" bookkeeping).
 func (s *Store) XLast(key string) (string, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return "", false, err
 	}

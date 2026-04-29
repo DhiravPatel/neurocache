@@ -18,8 +18,8 @@ import (
 // Returns (lcsString, length, matches). matches is non-nil only when
 // idx mode is requested.
 func (s *Store) LCS(keyA, keyB string, mode string, minMatchLen int) (string, int, []LCSMatch, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	_, _, unlock := s.lockTwoR(keyA, keyB)
+	defer unlock()
 	a, _ := s.stringValue(keyA)
 	b, _ := s.stringValue(keyB)
 	if a == "" && b == "" {
@@ -44,8 +44,11 @@ type LCSMatch struct {
 	Length       int
 }
 
+// stringValue reads the raw string at key. Caller must hold a read
+// or write lock on the shard owning `key`.
 func (s *Store) stringValue(key string) (string, bool) {
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	e, ok := sh.data[key]
 	if !ok {
 		return "", false
 	}
@@ -139,9 +142,10 @@ type BitFieldOp struct {
 // BitField runs a sequence of ops on key. Returns one reply per op
 // (nil for OVERFLOW switches; integer for GET/SET/INCRBY).
 func (s *Store) BitField(key string, ops []BitFieldOp, readOnly bool) ([]any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	var raw []byte
 	if ok && e.Type == TypeString {
 		raw = []byte(e.Str)
@@ -205,7 +209,7 @@ func (s *Store) BitField(key string, ops []BitFieldOp, readOnly bool) ([]any, er
 		}
 	}
 	if !readOnly && raw != nil {
-		newE, err := s.getOrCreate(key, TypeString)
+		newE, err := s.getOrCreate(sh, key, TypeString)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +351,10 @@ type SortOpts struct {
 // and the function returns nil for the slice (caller writes the count
 // reply via SortStored).
 func (s *Store) Sort(key string, opts SortOpts) ([]string, error) {
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
 	src, err := s.collectSortSource(key)
+	sh.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +420,10 @@ func (s *Store) Sort(key string, opts SortOpts) ([]string, error) {
 }
 
 // collectSortSource enumerates the elements of a list / set / zset.
+// Caller must hold a read lock on the shard owning `key`.
 func (s *Store) collectSortSource(key string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	e, ok := sh.data[key]
 	if !ok {
 		return nil, nil
 	}
@@ -441,7 +448,8 @@ func (s *Store) collectSortSource(key string) ([]string, error) {
 
 // lookupSortBy resolves a `pattern->*` style indirection. The pattern
 // may be a hash key with `*` standing in for the element ("weight_*")
-// or a hash-field reference ("user_*->name").
+// or a hash-field reference ("user_*->name"). Acquires its own read
+// lock on the resolved key's shard — Sort holds no global lock.
 func (s *Store) lookupSortBy(pattern, element string) string {
 	if !strings.Contains(pattern, "*") {
 		return pattern
@@ -452,9 +460,10 @@ func (s *Store) lookupSortBy(pattern, element string) string {
 		field = key[idx+2:]
 		key = key[:idx]
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok {
 		return ""
 	}
@@ -471,16 +480,17 @@ func (s *Store) lookupSortBy(pattern, element string) string {
 }
 
 func (s *Store) replaceList(key string, items []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old, ok := s.data[key]; ok {
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if old, ok := sh.data[key]; ok {
 		s.bytes.Add(-int64(old.Bytes))
-		delete(s.data, key)
+		delete(sh.data, key)
 	}
 	if len(items) == 0 {
 		return nil
 	}
-	e, err := s.getOrCreate(key, TypeList)
+	e, err := s.getOrCreate(sh, key, TypeList)
 	if err != nil {
 		return err
 	}

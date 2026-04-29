@@ -8,26 +8,31 @@ import "time"
 type SlotHasher func(key string) int
 
 // KeysInSlot returns up to count live keys hashing to slot. count<=0
-// returns every match.
+// returns every match. Walks all shards under read locks; cluster slot
+// queries are a low-frequency observability path (called by SETSLOT
+// during re-shards), not on the hot path.
 func (s *Store) KeysInSlot(slot, count int, hasher SlotHasher) []string {
 	if hasher == nil {
 		return nil
 	}
 	now := time.Now()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	out := make([]string, 0, 16)
-	for k, e := range s.data {
-		if e.expired(now) {
-			continue
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		for k, e := range sh.data {
+			if e.expired(now) {
+				continue
+			}
+			if hasher(k) != slot {
+				continue
+			}
+			out = append(out, k)
+			if count > 0 && len(out) >= count {
+				sh.mu.RUnlock()
+				return out
+			}
 		}
-		if hasher(k) != slot {
-			continue
-		}
-		out = append(out, k)
-		if count > 0 && len(out) >= count {
-			break
-		}
+		sh.mu.RUnlock()
 	}
 	return out
 }
@@ -38,16 +43,18 @@ func (s *Store) CountKeysInSlot(slot int, hasher SlotHasher) int {
 		return 0
 	}
 	now := time.Now()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	n := 0
-	for k, e := range s.data {
-		if e.expired(now) {
-			continue
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		for k, e := range sh.data {
+			if e.expired(now) {
+				continue
+			}
+			if hasher(k) == slot {
+				n++
+			}
 		}
-		if hasher(k) == slot {
-			n++
-		}
+		sh.mu.RUnlock()
 	}
 	return n
 }

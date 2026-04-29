@@ -350,6 +350,43 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.convCmd(strings.TrimPrefix(cmd, "CONV."), args)
 	case "PROMPT.SET", "PROMPT.GET", "PROMPT.RENDER", "PROMPT.LIST", "PROMPT.DELETE", "PROMPT.VERSIONS":
 		c.promptCmd(strings.TrimPrefix(cmd, "PROMPT."), args)
+
+	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
+	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
+	case "AGENT.CALL", "AGENT.STORE", "AGENT.PROFILE", "AGENT.FORGET", "AGENT.STATS", "AGENT.PURGE":
+		c.agentCmd(strings.TrimPrefix(cmd, "AGENT."), args)
+	case "STREAM.SET", "STREAM.GET", "STREAM.REPLAY", "STREAM.FORGET", "STREAM.PURGE", "STREAM.STATS":
+		c.streamCmd(strings.TrimPrefix(cmd, "STREAM."), args)
+	case "COST.BUDGET", "COST.CHARGE", "COST.USAGE", "COST.RESET", "COST.LIST":
+		c.costCmd(strings.TrimPrefix(cmd, "COST."), args)
+	case "SHADOW.PUT", "SHADOW.GET", "SHADOW.FORGET", "SHADOW.STATS":
+		c.shadowCmd(strings.TrimPrefix(cmd, "SHADOW."), args)
+	case "PERSONA.SET", "PERSONA.GET", "PERSONA.LIST", "PERSONA.FORGET":
+		c.personaCmd(strings.TrimPrefix(cmd, "PERSONA."), args)
+	case "SAFE.SET", "SAFE.CHECK", "SAFE.INJECT", "SAFE.FORGET", "SAFE.PURGE", "SAFE.STATS":
+		c.safeCmd(strings.TrimPrefix(cmd, "SAFE."), args)
+	case "LINEAGE.RECORD", "LINEAGE.LIST", "LINEAGE.SOURCES", "LINEAGE.CONSUMERS", "LINEAGE.FORGET", "LINEAGE.STATS":
+		c.lineageCmd(strings.TrimPrefix(cmd, "LINEAGE."), args)
+	case "SLO.SET", "SLO.SNAPSHOT", "SLO.RESET":
+		c.sloCmd(strings.TrimPrefix(cmd, "SLO."), args)
+	case "AB.DEFINE", "AB.ASSIGN", "AB.EXPOSE", "AB.RECORD", "AB.STATS", "AB.LIST", "AB.RESET", "AB.DELETE":
+		c.abCmd(strings.TrimPrefix(cmd, "AB."), args)
+	case "GRAPH.LINK", "GRAPH.UNLINK", "GRAPH.NEIGHBORS", "GRAPH.IN", "GRAPH.PATH", "GRAPH.SUBJECTS", "GRAPH.STATS":
+		c.graphCmd(strings.TrimPrefix(cmd, "GRAPH."), args)
+	case "SCHEDULE.AT", "SCHEDULE.IN", "SCHEDULE.CANCEL", "SCHEDULE.LIST", "SCHEDULE.STATS":
+		c.scheduleCmd(strings.TrimPrefix(cmd, "SCHEDULE."), args)
+	case "EVENT.APPEND", "EVENT.PROJECT", "EVENT.READ", "EVENT.RANGE", "EVENT.LEN":
+		c.eventCmd(strings.TrimPrefix(cmd, "EVENT."), args)
+	case "POLICY.ALLOW", "POLICY.SET", "POLICY.PURGE", "POLICY.STATS":
+		c.policyCmd(strings.TrimPrefix(cmd, "POLICY."), args)
+	case "INFER.GENERATE", "INFER.FORGET", "INFER.PURGE", "INFER.STATS", "INFER.DEFAULT":
+		c.inferCmd(strings.TrimPrefix(cmd, "INFER."), args)
+	case "MCP.TOOLS", "MCP.RESOURCES", "MCP.CALL", "MCP.READ", "MCP.RPC":
+		c.mcpCmd(strings.TrimPrefix(cmd, "MCP."), args)
+	case "KV.SUBSCRIBE":
+		c.kvSubscribeCmd(args)
+	case "KV.UNSUBSCRIBE":
+		c.kvUnsubscribeCmd(args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{

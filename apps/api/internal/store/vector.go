@@ -35,9 +35,10 @@ type VectorSet struct {
 //	1 — id was new
 //	0 — id already existed (vector was replaced)
 func (s *Store) VAdd(key, id string, vec []float32, opts vectorindex.Options) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	if ok && !e.expired(time.Now()) {
 		if e.Type != TypeVector || e.Vector == nil {
 			return 0, ErrWrongType
@@ -55,7 +56,7 @@ func (s *Store) VAdd(key, id string, vec []float32, opts vectorindex.Options) (i
 			CreatedAt: time.Now(), LastRead: time.Now(),
 			Vector: &VectorSet{Index: idx},
 		}
-		s.data[key] = e
+		sh.data[key] = e
 	}
 	_, hadBefore := e.Vector.Index.Get(id)
 	if err := e.Vector.Index.Set(id, vec); err != nil {
@@ -73,9 +74,10 @@ func (s *Store) VAdd(key, id string, vec []float32, opts vectorindex.Options) (i
 // ids that were actually present and removed. The set itself stays
 // alive even when emptied — clients tear it down via DEL.
 func (s *Store) VRem(key string, ids ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -94,9 +96,10 @@ func (s *Store) VRem(key string, ids ...string) (int, error) {
 // ascending by distance (i.e., descending by similarity). count <= 0
 // returns the entire set.
 func (s *Store) VSim(key string, query []float32, count int) ([]vectorindex.Result, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -106,9 +109,10 @@ func (s *Store) VSim(key string, query []float32, count int) ([]vectorindex.Resu
 // VEmb returns the stored vector for id (snapshot copy — safe to
 // retain). ok=false when the id is not present.
 func (s *Store) VEmb(key, id string) ([]float32, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -125,9 +129,10 @@ func (s *Store) VEmb(key, id string) ([]float32, bool, error) {
 // blob attached to each id. The store treats the value as opaque —
 // callers serialize whatever JSON they like.
 func (s *Store) VSetAttr(key, id, json string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -137,9 +142,10 @@ func (s *Store) VSetAttr(key, id, json string) (bool, error) {
 }
 
 func (s *Store) VGetAttr(key, id string) (string, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -148,9 +154,10 @@ func (s *Store) VGetAttr(key, id string) (string, bool, error) {
 }
 
 func (s *Store) VDelAttr(key, id string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -162,9 +169,10 @@ func (s *Store) VDelAttr(key, id string) (bool, error) {
 // VLinks returns the HNSW neighbour lists per layer for id. Empty
 // slice on FLAT indexes or when id is missing.
 func (s *Store) VLinks(key, id string) ([][]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -184,9 +192,10 @@ type VectorInfo struct {
 }
 
 func (s *Store) VInfo(key string) (VectorInfo, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return VectorInfo{}, false, err
 	}
@@ -205,9 +214,10 @@ func (s *Store) VInfo(key string) (VectorInfo, bool, error) {
 
 // VCard returns the member count.
 func (s *Store) VCard(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -216,9 +226,10 @@ func (s *Store) VCard(key string) (int, error) {
 
 // VDim returns the configured vector dimension.
 func (s *Store) VDim(key string) (int, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -232,9 +243,10 @@ func (s *Store) VDim(key string) (int, bool, error) {
 //	count > 0  → unique ids, capped at the set size
 //	count < 0  → may repeat; |count| samples drawn with replacement
 func (s *Store) VRandMember(key string, count int) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -277,14 +289,15 @@ func (s *Store) VScan(key string, cursor int, pattern string, count int) (int, [
 	if count <= 0 {
 		count = 10
 	}
-	s.mu.RLock()
-	e, ok, err := s.get(key, TypeVector)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	e, ok, err := sh.get(key, TypeVector)
 	if err != nil || !ok {
-		s.mu.RUnlock()
+		sh.mu.RUnlock()
 		return 0, nil, err
 	}
 	all := e.Vector.Index.IDs()
-	s.mu.RUnlock()
+	sh.mu.RUnlock()
 	sortStrings(all)
 	if cursor < 0 || cursor >= len(all) {
 		return 0, nil, nil

@@ -1,8 +1,15 @@
-// Package store implements the NeuroCache keyspace: a single thread-safe
+// Package store implements the NeuroCache keyspace: a sharded thread-safe
 // registry that holds strings, lists, hashes, sets, and sorted sets, plus
 // per-key TTLs and hit counters. The typed Entry makes a key exclusively
 // hold one value type at a time, matching Redis semantics — a GET on a
 // list key returns WRONGTYPE, an LPUSH on a string key does the same.
+//
+// Concurrency model: 256 shards, each with its own RWMutex + map. A key's
+// owning shard is determined by FNV-1a(key) & 255. Single-key operations
+// take exactly one shard's lock; cross-key operations (RENAME, COPY,
+// MGET-across-shards, etc.) take the involved shards in canonical
+// (lowest-index-first) order to avoid deadlock. Range operations (KEYS,
+// SCAN, FLUSHALL, eviction snapshot) iterate every shard.
 package store
 
 import (
@@ -10,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -58,15 +64,15 @@ type Entry struct {
 	Key  string
 	Type ValueType
 
-	Str      string
-	List     *list.List // elements are strings
-	Hash     map[string]string
-	HashTTL  map[string]time.Time // optional per-field expiries (Redis 7.4)
-	Set      map[string]struct{}
-	ZSet     *ZSet
-	Stream   *Stream
-	Module   *ModuleValue // populated when Type == TypeModule
-	Vector   *VectorSet   // populated when Type == TypeVector
+	Str     string
+	List    *list.List // elements are strings
+	Hash    map[string]string
+	HashTTL map[string]time.Time // optional per-field expiries (Redis 7.4)
+	Set     map[string]struct{}
+	ZSet    *ZSet
+	Stream  *Stream
+	Module  *ModuleValue // populated when Type == TypeModule
+	Vector  *VectorSet   // populated when Type == TypeVector
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -79,18 +85,22 @@ func (e *Entry) expired(now time.Time) bool {
 	return !e.ExpireAt.IsZero() && now.After(e.ExpireAt)
 }
 
-// Store is a concurrent multi-type keyspace.
+// Store is a sharded multi-type keyspace. The 256 shards each own a
+// disjoint slice of the keyspace; concurrent operations on different
+// keys typically don't contend.
 type Store struct {
-	mu    sync.RWMutex
-	data  map[string]*Entry
-	bytes atomic.Int64
+	shards [numShards]*shard
+	bytes  atomic.Int64
 
 	// keyspace notifications fan out on mutations.
 	notify func(event, key string)
 }
 
 func New() *Store {
-	s := &Store{data: make(map[string]*Entry)}
+	s := &Store{}
+	for i := 0; i < numShards; i++ {
+		s.shards[i] = &shard{data: make(map[string]*Entry)}
+	}
 	go s.ttlLoop()
 	return s
 }
@@ -114,16 +124,21 @@ func (s *Store) ttlLoop() {
 	for range t.C {
 		now := time.Now()
 		var expired []string
-		s.mu.Lock()
-		for k, e := range s.data {
-			if e.expired(now) {
-				s.bytes.Add(-int64(e.Bytes))
-				delete(s.data, k)
-				expired = append(expired, k)
+		// Sweep each shard independently — never holds more than one
+		// shard lock at a time, so the loop doesn't block writers on
+		// the other 255 shards.
+		for _, sh := range s.shards {
+			sh.mu.Lock()
+			for k, e := range sh.data {
+				if e.expired(now) {
+					s.bytes.Add(-int64(e.Bytes))
+					delete(sh.data, k)
+					expired = append(expired, k)
+				}
 			}
+			s.sweepHashFieldsShard(sh, now)
+			sh.mu.Unlock()
 		}
-		s.sweepHashFields(now)
-		s.mu.Unlock()
 		for _, k := range expired {
 			s.fire("expired", k)
 		}
@@ -134,9 +149,10 @@ func (s *Store) ttlLoop() {
 
 // Type returns the kind of value at key, or TypeNone if missing/expired.
 func (s *Store) Type(key string) ValueType {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return TypeNone
 	}
@@ -144,15 +160,19 @@ func (s *Store) Type(key string) ValueType {
 }
 
 // Exists counts how many of the given keys exist (duplicates count).
+// Buckets keys by shard so we take one lock per shard, not one per key.
 func (s *Store) Exists(keys ...string) int {
 	now := time.Now()
 	n := 0
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, k := range keys {
-		if e, ok := s.data[k]; ok && !e.expired(now) {
-			n++
+	buckets := s.bucketKeysByShard(keys)
+	for sh, ks := range buckets {
+		sh.mu.RLock()
+		for _, k := range ks {
+			if e, ok := sh.data[k]; ok && !e.expired(now) {
+				n++
+			}
 		}
+		sh.mu.RUnlock()
 	}
 	return n
 }
@@ -160,15 +180,18 @@ func (s *Store) Exists(keys ...string) int {
 // Del removes keys; returns how many were actually deleted.
 func (s *Store) Del(keys ...string) int {
 	var removed []string
-	s.mu.Lock()
-	for _, k := range keys {
-		if e, ok := s.data[k]; ok {
-			s.bytes.Add(-int64(e.Bytes))
-			delete(s.data, k)
-			removed = append(removed, k)
+	buckets := s.bucketKeysByShard(keys)
+	for sh, ks := range buckets {
+		sh.mu.Lock()
+		for _, k := range ks {
+			if e, ok := sh.data[k]; ok {
+				s.bytes.Add(-int64(e.Bytes))
+				delete(sh.data, k)
+				removed = append(removed, k)
+			}
 		}
+		sh.mu.Unlock()
 	}
-	s.mu.Unlock()
 	for _, k := range removed {
 		s.fire("del", k)
 	}
@@ -177,37 +200,40 @@ func (s *Store) Del(keys ...string) int {
 
 // Expire sets TTL. Returns false if the key does not exist.
 func (s *Store) Expire(key string, ttl time.Duration) bool {
-	s.mu.Lock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, ok := sh.data[key]
 	if !ok {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return false
 	}
 	e.ExpireAt = time.Now().Add(ttl)
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("expire", key)
 	return true
 }
 
 // ExpireAt sets an absolute expiry time. Returns false if missing.
 func (s *Store) ExpireAt(key string, at time.Time) bool {
-	s.mu.Lock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, ok := sh.data[key]
 	if !ok {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return false
 	}
 	e.ExpireAt = at
-	s.mu.Unlock()
+	sh.mu.Unlock()
 	s.fire("expireat", key)
 	return true
 }
 
 // Persist clears the TTL. Returns false if there was no TTL to clear.
 func (s *Store) Persist(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	if !ok || e.ExpireAt.IsZero() {
 		return false
 	}
@@ -217,9 +243,10 @@ func (s *Store) Persist(key string) bool {
 
 // TTL returns time until expiry. -1 = no expiry, -2 = missing.
 func (s *Store) TTL(key string) time.Duration {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok {
 		return -2
 	}
@@ -237,16 +264,18 @@ func (s *Store) TTL(key string) time.Duration {
 // pattern ("*" matches everything). Pass "" or "*" for a full list.
 func (s *Store) Keys(pattern string) []string {
 	now := time.Now()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.data))
-	for k, e := range s.data {
-		if e.expired(now) {
-			continue
+	out := []string{}
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		for k, e := range sh.data {
+			if e.expired(now) {
+				continue
+			}
+			if pattern == "" || pattern == "*" || globMatch(pattern, k) {
+				out = append(out, k)
+			}
 		}
-		if pattern == "" || pattern == "*" || globMatch(pattern, k) {
-			out = append(out, k)
-		}
+		sh.mu.RUnlock()
 	}
 	return out
 }
@@ -254,52 +283,61 @@ func (s *Store) Keys(pattern string) []string {
 // Rename moves a key's value to a new name. Returns false if source missing.
 // If dst exists it is overwritten (matches RENAME semantics).
 func (s *Store) Rename(src, dst string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[src]
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	e, ok := shS.data[src]
 	if !ok || e.expired(time.Now()) {
 		return false
 	}
-	if old, ok := s.data[dst]; ok {
+	if old, ok := shD.data[dst]; ok {
 		s.bytes.Add(-int64(old.Bytes))
 	}
-	delete(s.data, src)
+	delete(shS.data, src)
 	e.Key = dst
-	s.data[dst] = e
+	shD.data[dst] = e
 	return true
 }
 
 // RenameNX renames only if dst does not already exist. Returns false if
 // the source was missing or the destination was taken.
 func (s *Store) RenameNX(src, dst string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, taken := s.data[dst]; taken {
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	if _, taken := shD.data[dst]; taken {
 		return false
 	}
-	e, ok := s.data[src]
+	e, ok := shS.data[src]
 	if !ok || e.expired(time.Now()) {
 		return false
 	}
-	delete(s.data, src)
+	delete(shS.data, src)
 	e.Key = dst
-	s.data[dst] = e
+	shD.data[dst] = e
 	return true
 }
 
+// Size returns the number of live keys across every shard. Walks all
+// 256 shards under read locks; cheap relative to a typical traffic
+// pattern (DBSIZE is a low-frequency observation command).
 func (s *Store) Size() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.data)
+	n := 0
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		n += len(sh.data)
+		sh.mu.RUnlock()
+	}
+	return n
 }
 
 func (s *Store) BytesUsed() int64 { return s.bytes.Load() }
 
 func (s *Store) FlushAll() {
-	s.mu.Lock()
-	s.data = make(map[string]*Entry)
+	unlock := s.lockAllW()
+	for _, sh := range s.shards {
+		sh.data = make(map[string]*Entry)
+	}
 	s.bytes.Store(0)
-	s.mu.Unlock()
+	unlock()
 	s.fire("flushdb", "")
 }
 
@@ -307,13 +345,15 @@ func (s *Store) FlushAll() {
 // sharing pointers for list/hash/set is safe (they are never mutated).
 func (s *Store) Snapshot() []Entry {
 	now := time.Now()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]Entry, 0, len(s.data))
-	for _, e := range s.data {
-		if !e.expired(now) {
-			out = append(out, *e)
+	out := []Entry{}
+	for _, sh := range s.shards {
+		sh.mu.RLock()
+		for _, e := range sh.data {
+			if !e.expired(now) {
+				out = append(out, *e)
+			}
 		}
+		sh.mu.RUnlock()
 	}
 	return out
 }
@@ -323,12 +363,16 @@ func (s *Store) Snapshot() []Entry {
 func (s *Store) Evict(keys []string) int { return s.Del(keys...) }
 
 // ─── internal helpers shared by typed operations ────────────────────────
+//
+// `get` and `getOrCreate` are methods on *shard so they operate on the
+// right map without re-deriving the shard. Callers that already hold
+// the shard's lock invoke them directly.
 
 // get returns the live entry if it exists and matches want. Missing
 // entries return (nil, false, nil). Mismatched types return ErrWrongType.
 // Passing TypeNone disables the type check.
-func (s *Store) get(key string, want ValueType) (*Entry, bool, error) {
-	e, ok := s.data[key]
+func (sh *shard) get(key string, want ValueType) (*Entry, bool, error) {
+	e, ok := sh.data[key]
 	if !ok {
 		return nil, false, nil
 	}
@@ -343,8 +387,10 @@ func (s *Store) get(key string, want ValueType) (*Entry, bool, error) {
 
 // getOrCreate returns the entry at key, allocating a new one of the given
 // type when missing. A type mismatch on an existing entry is an error.
-func (s *Store) getOrCreate(key string, t ValueType) (*Entry, error) {
-	e, ok := s.data[key]
+// Callers must already hold sh.mu.Lock(); the function itself doesn't
+// touch the global byte counter (the caller orchestrates via Store.addBytes).
+func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) {
+	e, ok := sh.data[key]
 	if ok && !e.expired(time.Now()) {
 		if e.Type != t {
 			return nil, ErrWrongType
@@ -367,13 +413,13 @@ func (s *Store) getOrCreate(key string, t ValueType) (*Entry, error) {
 	case TypeStream:
 		e.Stream = newStream()
 	}
-	s.data[key] = e
+	sh.data[key] = e
 	return e, nil
 }
 
-// removeIfEmpty deletes the entry when its collection becomes empty,
-// mirroring Redis's "empty key = no key" invariant.
-func (s *Store) removeIfEmpty(e *Entry) {
+// removeIfEmpty deletes the entry from its shard when its collection is
+// empty, mirroring Redis's "empty key = no key" invariant.
+func (s *Store) removeIfEmpty(sh *shard, e *Entry) {
 	empty := false
 	switch e.Type {
 	case TypeList:
@@ -396,12 +442,10 @@ func (s *Store) removeIfEmpty(e *Entry) {
 	}
 	if empty {
 		s.bytes.Add(-int64(e.Bytes))
-		delete(s.data, e.Key)
+		delete(sh.data, e.Key)
 	}
 }
 
-// recomputeBytes is a best-effort byte-size recalculation. Kept cheap —
-// metrics and eviction only need ballpark numbers, not exact cardinality.
 // addBytes adjusts an entry's byte count by a signed delta and mirrors
 // the change into the global byte counter. O(1) — preferred over
 // recomputeBytes on the hot path (every list/hash/set/zset push is
@@ -414,6 +458,8 @@ func (s *Store) addBytes(e *Entry, delta int) {
 	s.bytes.Add(int64(delta))
 }
 
+// recomputeBytes is a best-effort byte-size recalculation. Kept cheap —
+// metrics and eviction only need ballpark numbers, not exact cardinality.
 func (s *Store) recomputeBytes(e *Entry) {
 	old := e.Bytes
 	var n int
@@ -545,19 +591,15 @@ func normalizeRange(start, stop, n int) (int, int, bool) {
 	return start, stop, false
 }
 
-// Lock / Unlock helpers exposed so higher-level orchestration (WATCH,
-// MULTI) can coordinate without re-opening the Store internals.
-func (s *Store) Lock()   { s.mu.Lock() }
-func (s *Store) Unlock() { s.mu.Unlock() }
-
 // PeekTouchState reads (Hits, LastRead) without bumping either —
 // used by CLIENT NO-TOUCH to snapshot per-key touch state before a
 // read so it can be restored afterward. ok=false when the key is
 // missing (or expired) at peek time.
 func (s *Store) PeekTouchState(key string) (uint64, time.Time, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return 0, time.Time{}, false
 	}
@@ -569,9 +611,10 @@ func (s *Store) PeekTouchState(key string) (uint64, time.Time, bool) {
 // type-changed entries (a concurrent writer may have replaced the
 // value between the snapshot and the restore).
 func (s *Store) RestoreTouchState(key string, hits uint64, lastRead time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	if !ok {
 		return
 	}

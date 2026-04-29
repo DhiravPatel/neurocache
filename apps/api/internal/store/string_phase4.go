@@ -24,9 +24,10 @@ import (
 // hash/set/zset key returns ErrWrongType so callers don't accidentally
 // nuke a different data type.
 func (s *Store) DelEx(key, value string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return -1, nil
 	}
@@ -37,7 +38,7 @@ func (s *Store) DelEx(key, value string) (int, error) {
 		return 0, nil
 	}
 	s.bytes.Add(-int64(e.Bytes))
-	delete(s.data, key)
+	delete(sh.data, key)
 	s.fire("del", key)
 	return 1, nil
 }
@@ -53,9 +54,10 @@ func (s *Store) DelEx(key, value string) (int, error) {
 // operators want: identical content → identical digest, regardless of
 // how it got there.
 func (s *Store) Digest(key string) (string, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return "", false, nil
 	}
@@ -125,13 +127,19 @@ func (s *Store) MSetEx(ttl time.Duration, pairs ...string) error {
 	if len(pairs) == 0 || len(pairs)%2 != 0 {
 		return errors.New("MSETEX requires key/value pairs")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	keys := make([]string, 0, len(pairs)/2)
+	for i := 0; i < len(pairs); i += 2 {
+		keys = append(keys, pairs[i])
+	}
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
 	now := time.Now()
 	exp := now.Add(ttl)
 	for i := 0; i < len(pairs); i += 2 {
 		k, v := pairs[i], pairs[i+1]
-		if old, ok := s.data[k]; ok {
+		sh := s.shardForKey(k)
+		if old, ok := sh.data[k]; ok {
 			s.bytes.Add(-int64(old.Bytes))
 		}
 		e := &Entry{
@@ -143,7 +151,7 @@ func (s *Store) MSetEx(ttl time.Duration, pairs ...string) error {
 			ExpireAt:  exp,
 			Bytes:     len(k) + len(v),
 		}
-		s.data[k] = e
+		sh.data[k] = e
 		s.bytes.Add(int64(e.Bytes))
 	}
 	return nil

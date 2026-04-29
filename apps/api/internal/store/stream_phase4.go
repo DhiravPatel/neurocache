@@ -31,9 +31,10 @@ func (s *Store) XAckDel(key, group string, ids ...string) (int, error) {
 		}
 		parsed = append(parsed, id)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -135,9 +136,10 @@ func (s *Store) XDelEx(key string, mode XDelExMode, ids ...string) (int, error) 
 		}
 		parsed = append(parsed, id)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -228,9 +230,10 @@ type GroupConfig struct {
 // locks for the brief read-modify-write without the deadlock the
 // XAckDel / XDelEx paths had to dodge.
 func (s *Store) XCfgSet(key, group string, cfg GroupConfig) (GroupConfig, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return GroupConfig{}, err
 	}
@@ -254,9 +257,10 @@ func (s *Store) XCfgSet(key, group string, cfg GroupConfig) (GroupConfig, error)
 
 // XCfgGet reports the current per-group config (for XINFO + tests).
 func (s *Store) XCfgGet(key, group string) (GroupConfig, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return GroupConfig{}, err
 	}

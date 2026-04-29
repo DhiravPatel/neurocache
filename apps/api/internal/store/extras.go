@@ -11,9 +11,10 @@ import (
 // Missing keys behave as empty sets (every result false).
 func (s *Store) SMIsMember(key string, members ...string) ([]bool, error) {
 	out := make([]bool, len(members))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return out, err
 	}
@@ -31,8 +32,9 @@ func (s *Store) SInterCard(keys []string, limit int) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	sets, err := s.loadSets(keys)
 	if err != nil {
 		return 0, err
@@ -68,15 +70,16 @@ next:
 // GetDel atomically reads + deletes a key. Returns (value, true) on
 // hit, ("", false) when missing.
 func (s *Store) GetDel(key string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return "", false, err
 	}
 	v := e.Str
 	s.bytes.Add(-int64(e.Bytes))
-	delete(s.data, key)
+	delete(sh.data, key)
 	s.fire("del", key)
 	return v, true, nil
 }
@@ -89,9 +92,10 @@ func (s *Store) GetDel(key string) (string, bool, error) {
 //   "EXAT unix-sec" / "PXAT unix-ms" — set absolute expiry
 //   "PERSIST"    — clear TTL
 func (s *Store) GetEx(key string, mode string, value int64) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -121,9 +125,10 @@ func (s *Store) LPos(key, value string, rank, count, maxlen int) ([]int, bool, e
 	if rank == 0 {
 		return nil, false, errors.New("RANK can't be zero")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeList)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
 		return nil, false, err
 	}

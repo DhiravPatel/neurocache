@@ -19,9 +19,10 @@ import (
 //   GT — only set when the new TTL is greater than the current one
 //   LT — only set when the new TTL is less than the current one
 func (s *Store) HExpire(key string, ttl time.Duration, fields []string, cond string) ([]int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil {
 		return nil, err
 	}
@@ -79,10 +80,11 @@ func (s *Store) HExpireAt(key string, at time.Time, fields []string, cond string
 // HTTL returns the per-field remaining seconds. -2 = field missing,
 // -1 = field exists with no TTL.
 func (s *Store) HTTL(key string, fields []string, ms bool) ([]int64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
 	out := make([]int64, len(fields))
-	e, ok, err := s.get(key, TypeHash)
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil {
 		return nil, err
 	}
@@ -120,10 +122,11 @@ func (s *Store) HTTL(key string, fields []string, ms bool) ([]int64, error) {
 // HPersist clears the TTL on selected fields. Returns 1 per field
 // whose TTL was actually cleared, 0 otherwise, -2 when missing.
 func (s *Store) HPersist(key string, fields []string) ([]int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 	out := make([]int, len(fields))
-	e, ok, err := s.get(key, TypeHash)
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil {
 		return nil, err
 	}
@@ -148,10 +151,10 @@ func (s *Store) HPersist(key string, fields []string) ([]int, error) {
 	return out, nil
 }
 
-// hashFieldExpired is the per-field sweep — called from the TTL loop on
-// every tick. Caller holds s.mu.Lock().
-func (s *Store) sweepHashFields(now time.Time) {
-	for _, e := range s.data {
+// sweepHashFieldsShard is the per-field sweep — called from the TTL loop on
+// every tick for one shard. Caller holds sh.mu.Lock().
+func (s *Store) sweepHashFieldsShard(sh *shard, now time.Time) {
+	for _, e := range sh.data {
 		if e.Type != TypeHash || len(e.HashTTL) == 0 {
 			continue
 		}
@@ -163,7 +166,7 @@ func (s *Store) sweepHashFields(now time.Time) {
 		}
 		if len(e.Hash) == 0 {
 			s.bytes.Add(-int64(e.Bytes))
-			delete(s.data, e.Key)
+			delete(sh.data, e.Key)
 		}
 	}
 }
@@ -172,9 +175,10 @@ func (s *Store) sweepHashFields(now time.Time) {
 // distinct fields; count < 0 allows duplicates. withValues bundles the
 // matching values alongside.
 func (s *Store) HRandFieldCount(key string, count int, withValues bool) ([]string, []string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return nil, nil, err
 	}

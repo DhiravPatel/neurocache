@@ -25,6 +25,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/cluster"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/aiops"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/llmstack"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
@@ -90,6 +91,29 @@ type Engine struct {
 	EmbCache      *llmstack.EmbCache
 	Conversations *llmstack.Conversations
 	Prompts       *llmstack.Prompts
+
+	// Phase 11 — extended AI-ops primitives. Each replaces a layer
+	// every team rebuilds: agent tool caches, streaming-replay,
+	// per-tenant cost budgets, stale-while-revalidate, multi-persona
+	// memory, moderation cache + injection detector, provenance
+	// tracking, SLO breach signal, A/B experiments, knowledge graph,
+	// scheduler, event log + projections, RBAC verdict cache, LLM
+	// proxy, and an MCP server.
+	AgentCache  *aiops.AgentToolCache
+	StreamCache *aiops.StreamCache
+	CostBudgets *aiops.CostBudgets
+	Shadow      *aiops.Shadow
+	Personas    *aiops.Personas
+	Moderation  *aiops.Moderation
+	Lineage     *aiops.Lineage
+	SLOTracker  *aiops.SLOTracker
+	Experiments *aiops.Experiments
+	Graph       *aiops.Graph
+	Scheduler   *aiops.Scheduler
+	EventLog    *aiops.EventLog
+	Policies    *aiops.Policies
+	Inference   *aiops.Inference
+	MCP         *aiops.MCP
 
 	// HotKeys is the runtime top-K access tracker driven by the
 	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
@@ -175,6 +199,25 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.EmbCache = llmstack.NewEmbCache()
 	e.Conversations = llmstack.NewConversations()
 	e.Prompts = llmstack.NewPrompts()
+
+	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
+	// inference proxy take engine-level wiring after construction so
+	// they can call back into the dispatcher / register providers.
+	e.AgentCache = aiops.NewAgentToolCache()
+	e.StreamCache = aiops.NewStreamCache()
+	e.CostBudgets = aiops.NewCostBudgets()
+	e.Shadow = aiops.NewShadow(nil)
+	e.Personas = aiops.NewPersonas()
+	e.Moderation = aiops.NewModeration()
+	e.Lineage = aiops.NewLineage()
+	e.SLOTracker = aiops.NewSLOTracker()
+	e.Experiments = aiops.NewExperiments()
+	e.Graph = aiops.NewGraph()
+	e.Scheduler = aiops.NewScheduler()
+	e.EventLog = aiops.NewEventLog()
+	e.Policies = aiops.NewPolicies(nil)
+	e.Inference = aiops.NewInference()
+	e.MCP = aiops.NewMCP()
 	e.HotKeys = introspect.NewHotKeys(introspect.HotKeysOptions{
 		K:           cfg.HotKeysK,
 		SampleEvery: cfg.HotKeysSample,
@@ -286,6 +329,26 @@ func (e *Engine) Start() {
 	go e.evictLoop()
 	if e.RDB != nil {
 		e.RDB.Start()
+	}
+	// Scheduler runs delayed commands via the same dispatch path as
+	// regular RESP clients — wire the runner here once the replay
+	// path is available, then start the dispatcher goroutine.
+	if e.Scheduler != nil && e.replayRunner != nil {
+		e.Scheduler.SetRunner(func(cmd string, args []string) error {
+			return e.replayRunner(cmd, args)
+		})
+		e.Scheduler.Start()
+	}
+	// SLO breach notifier — fan out to a well-known pub/sub channel
+	// so dashboards / alerting can pick it up. Cheap when no
+	// subscribers are attached because Publish short-circuits on the
+	// empty subscriber set.
+	if e.SLOTracker != nil {
+		e.SLOTracker.SetNotifier(func(cmd, percentile string, observedMs, targetMs float64) {
+			payload := fmt.Sprintf(`{"cmd":%q,"pct":%q,"observed_ms":%.3f,"target_ms":%.3f}`,
+				cmd, percentile, observedMs, targetMs)
+			e.PubSub.Publish("__slo__:breach", payload)
+		})
 	}
 	e.StartMaster()
 	if host, port, ok := ParseReplicaOf(e.Cfg.ReplicaOf); ok {
@@ -470,6 +533,9 @@ func (e *Engine) KeysInSlot(slot, count int) []string {
 func (e *Engine) Stop() {
 	close(e.stopCh)
 	e.Metrics.Stop()
+	if e.Scheduler != nil {
+		e.Scheduler.Stop()
+	}
 	if e.AOF != nil {
 		_ = e.AOF.Close()
 	}

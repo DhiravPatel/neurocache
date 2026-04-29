@@ -332,6 +332,8 @@ Benchmarked head-to-head vs. Redis 7.x on Apple M4 (100k ops × 50 concurrent cl
 
 **~70-80% of Redis throughput on every command** — exactly the expected gap for a Go reimplementation vs. hand-tuned C. For most apps that aren't themselves hyperscalers, this is plenty of headroom.
 
+For the deep architectural comparison — concurrency model, hot-key contention, p99 tail latency, large-value behavior, 1000-client connection scaling, persistence + replication overhead, and a list of every architectural risk we audited and either fixed or accepted — see **[docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md)**.
+
 Reproduce on your hardware:
 
 ```bash

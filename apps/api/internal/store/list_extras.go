@@ -9,14 +9,14 @@ import "time"
 // Returns ("", false) when src is missing or empty. Returns
 // ErrWrongType if either key holds a non-list value.
 //
-// Atomicity: a single Store.mu critical section spans the pop and the
-// push so concurrent observers never see the value in neither list.
-// src == dst is supported (rotation): LMove("a", "a", true, false)
-// behaves like a single-element rotate from tail to head.
+// Atomicity: a single critical section spans the pop and the push so
+// concurrent observers never see the value in neither list. src == dst
+// is supported (rotation): LMove("a", "a", true, false) behaves like a
+// single-element rotate from tail to head.
 func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	se, ok, err := s.get(src, TypeList)
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	se, ok, err := shS.get(src, TypeList)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -36,7 +36,7 @@ func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, e
 	}
 	// push to destination — must succeed before we settle src bookkeeping;
 	// otherwise a wrong-type dst would silently swallow the popped value.
-	de, err := s.getOrCreate(dst, TypeList)
+	de, err := s.getOrCreate(shD, dst, TypeList)
 	if err != nil {
 		// restore the popped value so callers don't see a half-applied op
 		if srcRight {
@@ -55,7 +55,7 @@ func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, e
 	if se != de {
 		s.recomputeBytes(de)
 	}
-	s.removeIfEmpty(se)
+	s.removeIfEmpty(shS, se)
 	return v, true, nil
 }
 
@@ -64,17 +64,20 @@ func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, e
 // a key's idle time matters for an LRU policy and the caller wants to
 // say "this key is hot" without reading its value.
 func (s *Store) Touch(keys ...string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now()
 	n := 0
-	for _, k := range keys {
-		e, ok := s.data[k]
-		if !ok || e.expired(now) {
-			continue
+	buckets := s.bucketKeysByShard(keys)
+	for sh, ks := range buckets {
+		sh.mu.Lock()
+		for _, k := range ks {
+			e, ok := sh.data[k]
+			if !ok || e.expired(now) {
+				continue
+			}
+			e.LastRead = now
+			n++
 		}
-		e.LastRead = now
-		n++
+		sh.mu.Unlock()
 	}
 	return n
 }
@@ -85,9 +88,10 @@ func (s *Store) Touch(keys ...string) int {
 //   -1 → key exists, no TTL
 //    n → expiry as Unix epoch seconds
 func (s *Store) ExpireTime(key string) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return -2
 	}
@@ -99,9 +103,10 @@ func (s *Store) ExpireTime(key string) int64 {
 
 // PExpireTime is ExpireTime in milliseconds.
 func (s *Store) PExpireTime(key string) int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return -2
 	}
