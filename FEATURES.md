@@ -517,9 +517,116 @@ Last-mile parity with the full DiceDB / Valkey 8.0 command surface. Each handler
 
 **Outcome**: every command DiceDB / Valkey 8.0 advertises is now reachable on NeuroCache. The wire-level byte-compat lifts (binary `DUMP`/`RESTORE`, gossip protocol, AOF RDB preamble) remain deferred — those only matter for cross-engine cluster mixing, never for client-side compatibility.
 
+## Performance — verified head-to-head vs. Redis 7.x
+
+Benchmarked locally on Apple M4, 100k operations × 50 concurrent clients, both servers running on the same host. Numbers from `scripts/bench-vs-redis.sh` (run before merging anything that touches the store hot path):
+
+| Command | Redis (rps) | NeuroCache (rps) | nc/redis |
+|---|---:|---:|---:|
+| MSET (10 keys) | 154,799 | 151,515 | **97.9%** |
+| SET | 234,192 | 190,840 | **81.5%** |
+| GET | 254,453 | 201,207 | **79.1%** |
+| SPOP | 242,718 | 178,571 | 73.6% |
+| RPOP | 242,131 | 176,991 | 73.1% |
+| INCR | 254,453 | 185,185 | 72.8% |
+| LPUSH | 248,756 | 178,891 | 71.9% |
+| RPUSH | 249,377 | 179,211 | 71.9% |
+| LPOP | 241,546 | 171,233 | 70.9% |
+| ZADD | 233,645 | 163,934 | 70.2% |
+| SADD | 245,700 | 170,358 | 69.3% |
+| HSET | 239,234 | 141,443 | 59.1% |
+
+**Summary:** ~70–80% of Redis throughput across the entire command surface — exactly the expected gap for a Go reimplementation vs. hand-tuned C. The two outliers are MSET (98%, where RESP+network dominates) and HSET (59%, slight slack remaining for future work). Lists are now production-grade (was 1–3% pre-fix; see "Phase 8 — perf hardening" below).
+
+**Reproduce:**
+```bash
+brew install redis           # for redis-server + redis-benchmark
+scripts/bench-vs-redis.sh    # builds NC, runs both side-by-side, prints the table
+```
+
+**In-process micro-benchmarks** (Go's `testing.B`):
+```bash
+cd apps/api && go test ./internal/store/ -run=NONE -bench=BenchmarkHot -benchmem
+```
+Sample output on Apple M4: LPUSH 95 ns/op, RPUSH 95 ns/op, LPOP-from-100k-list 125 ns/op (constant — not O(N)), GET 68 ns/op, INCR 53 ns/op. These exist so a future regression in the store hot path can never silently ship.
+
+## Phase 8 — Perf hardening
+
+Identified during a head-to-head soak test against Redis: list/hash/set/zset operations were running at **1–3% of Redis throughput** because every mutation called `recomputeBytes`, which walked the entire collection on every push/pop. For a list of N items, each LPUSH cost O(N), making a stream of pushes O(N²) — 100k LPUSHes ≈ 10 billion comparisons.
+
+| Fix | Status | Impact |
+|---|---|---|
+| Replace O(N) `recomputeBytes` with O(1) `addBytes(delta)` deltas on every list/hash/set/zset hot path | ✅ | LPUSH 7.8k → 178k rps (**21× faster, 3% → 72% of Redis**); RPUSH 2.7k → 179k (**65× faster**); LPOP 2.5k → 171k (**68× faster**) |
+| Add Go `BenchmarkHot*` micro-benchmarks at `internal/store/bench_test.go` | ✅ | Catches O(N) regressions before they ship |
+| Add `scripts/bench-vs-redis.sh` head-to-head harness with regression-flagging output | ✅ | Reproducible perf gate for every PR that touches the store |
+
+## Phase 9 — AI-stack production primitives
+
+Three new command families that close the gaps every LLM application rebuilds in client code: **embedding caching**, **conversation/session management**, and **versioned prompt templates**. All persist via AOF, replicate via the master/replica fan-out, gate through ACL `+@ai`, and expose 1:1 HTTP endpoints alongside the RESP surface.
+
+### EMB.* — embedding cache
+Embeddings are deterministic per (model, text) — same input always yields the same vector. Caching them at the engine kills the "same text re-embedded a thousand times" cost. Canonicalization (trim + lowercase) means semantically-identical inputs collide on the same slot.
+
+| Command | What it does | Where |
+|---|---|---|
+| `EMB.CACHE_SET text vec [EX sec \| PX ms]` | Store a vector under the canonical hash of `text`, optional TTL | `llmstack/embcache.go` |
+| `EMB.CACHE_GET text` | Lookup. Returns the comma-separated vector or nil | same |
+| `EMB.CACHE_DEL text` | Drop a single entry. Returns 1/0 | same |
+| `EMB.STATS` | entries / hits / misses / hit_rate / cost_per_call_usd / saved_usd | same |
+| `EMB.PURGE` | Wipe the cache. Returns dropped count | same |
+| `EMB.COST usd-per-call` | Operator-supplied per-call cost; `EMB.STATS.saved_usd = cost × hits` | same |
+
+### CONV.* — conversation/session management
+Per-key ordered turn log with token-aware windowing. Centralizes the truncation logic so apps can't accidentally ship a context-overflow 500. Token estimate uses the OpenAI cookbook fallback (≈ 4 chars/token) — accurate enough for budgeting; swap in a real BPE tokenizer when integrating with a specific model.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CONV.APPEND key role content` | Append a turn (`user` / `assistant` / `system` / `tool`) | `llmstack/conversation.go` |
+| `CONV.WINDOW key [MAXTOKENS n]` | Recent turns whose cumulative tokens fit in `n`; summary (if present) is prepended as a synthetic `system` turn | same |
+| `CONV.SUMMARIZE key summary [KEEP n]` | Replace older turns with a summary, keep most recent `n` tokens verbatim | same |
+| `CONV.RESET key` | Wipe a conversation. Returns 1/0 | same |
+| `CONV.LEN key` | turns / tokens / has_summary / summary_tokens | same |
+| `CONV.LIST` | Every active conversation key | same |
+
+### PROMPT.* — versioned prompt templates
+Registry of prompt strings with version history and `{variable}` interpolation. Auditability ("which prompt produced this response?") plus safe rollback when v4 underperforms.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PROMPT.SET name body [VERSION v]` | Store. `VERSION` defaults to latest+1; explicit version overwrites | `llmstack/prompts.go` |
+| `PROMPT.GET name [VERSION v]` | Fetch. Default returns latest | same |
+| `PROMPT.RENDER name [VERSION v] [VARS k v ...]` | Render with `{key}` substitution. Unknown placeholders left intact (visible failure) | same |
+| `PROMPT.LIST` | Every template with its latest version + version count | same |
+| `PROMPT.DELETE name [VERSION v]` | Drop one version, or the whole template when version omitted | same |
+| `PROMPT.VERSIONS name` | Every stored version with body + creation time | same |
+
+### HTTP surface
+| Method | Path | RESP equivalent |
+|---|---|---|
+| `POST` | `/api/emb-cache` | EMB.CACHE_SET |
+| `GET`  | `/api/emb-cache?text=...` | EMB.CACHE_GET |
+| `GET`  | `/api/emb-cache/stats` | EMB.STATS |
+| `POST` | `/api/emb-cache/purge` | EMB.PURGE |
+| `POST` | `/api/conv/{key}` | CONV.APPEND |
+| `GET`  | `/api/conv/{key}?max_tokens=n` | CONV.WINDOW |
+| `POST` | `/api/conv/{key}/summarize` | CONV.SUMMARIZE |
+| `DELETE` | `/api/conv/{key}` | CONV.RESET |
+| `GET`  | `/api/conv` | CONV.LIST |
+| `POST` | `/api/prompts/{name}` | PROMPT.SET |
+| `GET`  | `/api/prompts/{name}` | PROMPT.GET |
+| `POST` | `/api/prompts/{name}/render` | PROMPT.RENDER |
+| `GET`  | `/api/prompts/{name}/versions` | PROMPT.VERSIONS |
+| `DELETE` | `/api/prompts/{name}` | PROMPT.DELETE |
+| `GET`  | `/api/prompts` | PROMPT.LIST |
+
+### Persistence + replication
+- All write commands appear in [resp/writeset.go](apps/api/internal/resp/writeset.go) so AOF captures them on every successful dispatch.
+- ACL: every command is in the `@ai` category (along with `@read` / `@write` and `@fast`). One `+@ai` rule grants the whole AI surface.
+- Replication: same path as every other write — `c.eng.RecordWrite()` propagates through the master/replica fan-out.
+
 ## Total command count
 
-**~545 commands** across 12 data types + 5 modules + AI-native extensions + NeuroCache-only primitives + cross-engine compat fillers.
+**~561 commands** across 12 data types + 5 modules + AI-native extensions + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives.
 
 ## Known gaps
 

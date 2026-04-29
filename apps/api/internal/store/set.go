@@ -17,13 +17,15 @@ func (s *Store) SAdd(key string, members ...string) (int, error) {
 		return 0, err
 	}
 	added := 0
+	delta := 0
 	for _, m := range members {
 		if _, exists := e.Set[m]; !exists {
 			e.Set[m] = struct{}{}
 			added++
+			delta += len(m)
 		}
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.mu.Unlock()
 	s.fire("sadd", key)
 	return added, nil
@@ -38,13 +40,15 @@ func (s *Store) SRem(key string, members ...string) (int, error) {
 		return 0, err
 	}
 	removed := 0
+	delta := 0
 	for _, m := range members {
 		if _, exists := e.Set[m]; exists {
 			delete(e.Set, m)
 			removed++
+			delta -= len(m)
 		}
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.removeIfEmpty(e)
 	return removed, nil
 }
@@ -97,7 +101,7 @@ func (s *Store) SPop(key string) (string, bool, error) {
 	}
 	for m := range e.Set {
 		delete(e.Set, m)
-		s.recomputeBytes(e)
+		s.addBytes(e, -len(m))
 		s.removeIfEmpty(e)
 		return m, true, nil
 	}
@@ -153,9 +157,11 @@ func (s *Store) SMove(src, dst, member string) (bool, error) {
 		return false, err
 	}
 	delete(se.Set, member)
-	de.Set[member] = struct{}{}
-	s.recomputeBytes(se)
-	s.recomputeBytes(de)
+	s.addBytes(se, -len(member))
+	if _, dup := de.Set[member]; !dup {
+		de.Set[member] = struct{}{}
+		s.addBytes(de, len(member))
+	}
 	s.removeIfEmpty(se)
 	return true, nil
 }

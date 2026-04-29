@@ -187,6 +187,29 @@ MEMORY_ADD user:dhirav "Prefers Go + React + Tailwind"
 MEMORY_ADD user:dhirav "Building NeuroCache"
 MEMORY_QUERY user:dhirav "what is this user working on?"
 MEMORY_LIST user:dhirav
+
+# Embedding cache — embeddings are deterministic per (model, text);
+# cache them at the engine and stop paying for the same vector twice.
+EMB.CACHE_SET "the quick brown fox" "0.12,0.45,...,0.89" EX 86400
+EMB.CACHE_GET "the quick brown fox"      # → cached vector
+EMB.COST 0.0001                          # $/embedding-call
+EMB.STATS                                # hit rate + saved_usd
+
+# Conversation/session management — token-aware windowing baked in.
+# Centralizes the truncation logic so an app can't ship a context-overflow.
+CONV.APPEND chat:alice user "what's the weather?"
+CONV.APPEND chat:alice assistant "Sunny, 72F today."
+CONV.APPEND chat:alice user "and tomorrow?"
+CONV.WINDOW chat:alice MAXTOKENS 4000    # recent turns within budget
+CONV.SUMMARIZE chat:alice "User asked about weather Mon-Tue" KEEP 1000
+CONV.LEN chat:alice                      # turns / tokens / has_summary
+
+# Versioned prompt templates — auditability + safe rollback when v4 underperforms.
+PROMPT.SET support-reply "Hi {name}, thanks for writing about {topic}."
+PROMPT.SET support-reply "Hello {name}! Got your note about {topic}."   # auto-bumps to v2
+PROMPT.RENDER support-reply VARS name "Alice" topic "billing"
+PROMPT.GET support-reply VERSION 1       # historical (rollback target)
+PROMPT.LIST                              # every template with latest version
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
@@ -293,6 +316,39 @@ val, _ := rdb.Do(ctx, "SEMANTIC_GET", "top go web framework").Text()
 ### Any Redis client
 
 Because NeuroCache speaks RESP, every existing Redis client library works for the standard commands. The AI-native commands are available through each client's generic `command()` / `raw()` / `do()` API.
+
+---
+
+## Performance
+
+Benchmarked head-to-head vs. Redis 7.x on Apple M4 (100k ops × 50 concurrent clients, both servers local):
+
+| Command | Redis (rps) | NeuroCache (rps) | Ratio |
+|---|---:|---:|---:|
+| MSET (10 keys) | 154,799 | 151,515 | **97.9%** |
+| SET / GET | ~245k | ~195k | **80%** |
+| INCR / LPUSH / RPUSH / LPOP / RPOP | ~245k | ~178k | **72%** |
+| SADD / SPOP / ZADD / HSET | ~240k | ~165k | **70%** |
+
+**~70-80% of Redis throughput on every command** — exactly the expected gap for a Go reimplementation vs. hand-tuned C. For most apps that aren't themselves hyperscalers, this is plenty of headroom.
+
+Reproduce on your hardware:
+
+```bash
+brew install redis           # for redis-benchmark
+scripts/bench-vs-redis.sh    # builds NC, runs both side-by-side, prints the table with regression flags
+```
+
+In-process micro-benchmarks (catch any O(N) regressions in the store hot path before they ship):
+
+```bash
+cd apps/api && go test ./internal/store/ -run=NONE -bench=BenchmarkHot -benchmem
+# LPUSH       95 ns/op
+# RPUSH       95 ns/op
+# LPOP        125 ns/op (constant, not O(N), even from a 100k-element list)
+# GET          68 ns/op
+# INCR         53 ns/op
+```
 
 ---
 

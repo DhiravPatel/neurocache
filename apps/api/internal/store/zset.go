@@ -24,12 +24,14 @@ func (s *Store) ZAdd(key string, pairs ...ZPair) (int, error) {
 		return 0, err
 	}
 	added := 0
+	delta := 0
 	for _, p := range pairs {
 		if e.ZSet.AddNew(p.Score, p.Member) {
 			added++
+			delta += len(p.Member) + 8
 		}
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.mu.Unlock()
 	s.fire("zadd", key)
 	return added, nil
@@ -56,12 +58,14 @@ func (s *Store) ZRem(key string, members ...string) (int, error) {
 		return 0, err
 	}
 	removed := 0
+	delta := 0
 	for _, m := range members {
 		if e.ZSet.Remove(m) {
 			removed++
+			delta -= len(m) + 8
 		}
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.removeIfEmpty(e)
 	return removed, nil
 }
@@ -85,8 +89,11 @@ func (s *Store) ZIncrBy(key string, delta float64, member string) (float64, erro
 	if err != nil {
 		return 0, err
 	}
+	_, existed := e.ZSet.Score(member)
 	sc := e.ZSet.IncrBy(delta, member)
-	s.recomputeBytes(e)
+	if !existed {
+		s.addBytes(e, len(member)+8)
+	}
 	return sc, nil
 }
 
@@ -176,7 +183,7 @@ func (s *Store) ZPopMin(key string) (string, float64, bool, error) {
 	if !had {
 		return "", 0, false, nil
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, -(len(m) + 8))
 	s.removeIfEmpty(e)
 	return m, sc, true, nil
 }
@@ -192,7 +199,7 @@ func (s *Store) ZPopMax(key string) (string, float64, bool, error) {
 	if !had {
 		return "", 0, false, nil
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, -(len(m) + 8))
 	s.removeIfEmpty(e)
 	return m, sc, true, nil
 }

@@ -18,14 +18,18 @@ func (s *Store) HSet(key string, pairs ...string) (int, error) {
 		return 0, err
 	}
 	added := 0
+	delta := 0
 	for i := 0; i < len(pairs); i += 2 {
 		f, v := pairs[i], pairs[i+1]
-		if _, exists := e.Hash[f]; !exists {
+		if old, exists := e.Hash[f]; exists {
+			delta += len(v) - len(old)
+		} else {
 			added++
+			delta += len(f) + len(v)
 		}
 		e.Hash[f] = v
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.mu.Unlock()
 	s.fire("hset", key)
 	return added, nil
@@ -43,7 +47,7 @@ func (s *Store) HSetNX(key, field, value string) (bool, error) {
 		return false, nil
 	}
 	e.Hash[field] = value
-	s.recomputeBytes(e)
+	s.addBytes(e, len(field)+len(value))
 	return true, nil
 }
 
@@ -107,13 +111,15 @@ func (s *Store) HDel(key string, fields ...string) (int, error) {
 		return 0, err
 	}
 	removed := 0
+	delta := 0
 	for _, f := range fields {
-		if _, exists := e.Hash[f]; exists {
+		if v, exists := e.Hash[f]; exists {
+			delta -= len(f) + len(v)
 			delete(e.Hash, f)
 			removed++
 		}
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	s.removeIfEmpty(e)
 	return removed, nil
 }
@@ -187,8 +193,18 @@ func (s *Store) HIncrBy(key, field string, delta int64) (int64, error) {
 		}
 	}
 	cur += delta
-	e.Hash[field] = strconv.FormatInt(cur, 10)
-	s.recomputeBytes(e)
+	old := e.Hash[field]
+	wasMissing := old == ""
+	if _, present := e.Hash[field]; !present {
+		wasMissing = true
+	}
+	newVal := strconv.FormatInt(cur, 10)
+	e.Hash[field] = newVal
+	if wasMissing {
+		s.addBytes(e, len(field)+len(newVal))
+	} else {
+		s.addBytes(e, len(newVal)-len(old))
+	}
 	return cur, nil
 }
 
@@ -208,8 +224,14 @@ func (s *Store) HIncrByFloat(key, field string, delta float64) (float64, error) 
 		}
 	}
 	cur += delta
-	e.Hash[field] = strconv.FormatFloat(cur, 'f', -1, 64)
-	s.recomputeBytes(e)
+	old, wasPresent := e.Hash[field]
+	newVal := strconv.FormatFloat(cur, 'f', -1, 64)
+	e.Hash[field] = newVal
+	if wasPresent {
+		s.addBytes(e, len(newVal)-len(old))
+	} else {
+		s.addBytes(e, len(field)+len(newVal))
+	}
 	return cur, nil
 }
 

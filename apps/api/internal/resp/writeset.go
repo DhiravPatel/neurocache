@@ -83,6 +83,13 @@ var writeCommands = map[string]bool{
 	// phase 5: vector set type — every state-changing V* command.
 	"VADD": true, "VREM": true,
 	"VSETATTR": true, "VDELATTR": true,
+
+	// AI-stack: embedding cache, conversation management, prompt
+	// templates. Each mutates in-memory state that needs to survive
+	// restart, so they all flow through AOF + replication.
+	"EMB.CACHE_SET": true, "EMB.CACHE_DEL": true, "EMB.PURGE": true, "EMB.COST": true,
+	"CONV.APPEND": true, "CONV.SUMMARIZE": true, "CONV.RESET": true,
+	"PROMPT.SET": true, "PROMPT.DELETE": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

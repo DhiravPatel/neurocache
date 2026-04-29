@@ -26,6 +26,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/eviction"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/llmstack"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/modules"
@@ -81,6 +82,14 @@ type Engine struct {
 	CostTable   *primitives.CostTable
 	History     *primitives.HistoryStore
 	Recommender *primitives.Recommender
+
+	// LLM-stack primitives — embedding cache, conversation/session
+	// management, versioned prompt templates. Each closes a real gap
+	// every LLM app rebuilds in client code; centralizing them here
+	// gives uniform persistence (AOF), replication, ACL, and metrics.
+	EmbCache      *llmstack.EmbCache
+	Conversations *llmstack.Conversations
+	Prompts       *llmstack.Prompts
 
 	// HotKeys is the runtime top-K access tracker driven by the
 	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
@@ -163,6 +172,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.CostTable = primitives.NewCostTable()
 	e.History = primitives.NewHistoryStore(64, 24*time.Hour)
 	e.Recommender = primitives.NewRecommender()
+	e.EmbCache = llmstack.NewEmbCache()
+	e.Conversations = llmstack.NewConversations()
+	e.Prompts = llmstack.NewPrompts()
 	e.HotKeys = introspect.NewHotKeys(introspect.HotKeysOptions{
 		K:           cfg.HotKeysK,
 		SampleEvery: cfg.HotKeysSample,

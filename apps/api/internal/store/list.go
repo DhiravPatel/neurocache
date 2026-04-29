@@ -17,10 +17,12 @@ func (s *Store) LPush(key string, values ...string) (int, error) {
 		s.mu.Unlock()
 		return 0, err
 	}
+	delta := 0
 	for _, v := range values {
 		e.List.PushFront(v)
+		delta += len(v)
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	n := e.List.Len()
 	s.mu.Unlock()
 	s.fire("lpush", key)
@@ -38,10 +40,12 @@ func (s *Store) RPush(key string, values ...string) (int, error) {
 		s.mu.Unlock()
 		return 0, err
 	}
+	delta := 0
 	for _, v := range values {
 		e.List.PushBack(v)
+		delta += len(v)
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, delta)
 	n := e.List.Len()
 	s.mu.Unlock()
 	s.fire("rpush", key)
@@ -57,7 +61,7 @@ func (s *Store) LPushX(key, value string) (int, error) {
 		return 0, err
 	}
 	e.List.PushFront(value)
-	s.recomputeBytes(e)
+	s.addBytes(e, len(value))
 	return e.List.Len(), nil
 }
 
@@ -70,7 +74,7 @@ func (s *Store) RPushX(key, value string) (int, error) {
 		return 0, err
 	}
 	e.List.PushBack(value)
-	s.recomputeBytes(e)
+	s.addBytes(e, len(value))
 	return e.List.Len(), nil
 }
 
@@ -88,7 +92,7 @@ func (s *Store) LPop(key string) (string, bool, error) {
 	}
 	v := front.Value.(string)
 	e.List.Remove(front)
-	s.recomputeBytes(e)
+	s.addBytes(e, -len(v))
 	s.removeIfEmpty(e)
 	return v, true, nil
 }
@@ -107,7 +111,7 @@ func (s *Store) RPop(key string) (string, bool, error) {
 	}
 	v := back.Value.(string)
 	e.List.Remove(back)
-	s.recomputeBytes(e)
+	s.addBytes(e, -len(v))
 	s.removeIfEmpty(e)
 	return v, true, nil
 }
@@ -192,8 +196,9 @@ func (s *Store) LSet(key string, index int, value string) error {
 	for i := 0; i < index; i++ {
 		el = el.Next()
 	}
+	old := el.Value.(string)
 	el.Value = value
-	s.recomputeBytes(e)
+	s.addBytes(e, len(value)-len(old))
 	return nil
 }
 
@@ -211,6 +216,7 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 	if count < 0 {
 		limit = -count
 	}
+	bytesRemoved := 0
 	walk := func(fwd bool) {
 		var next func(*list.Element) *list.Element
 		var start *list.Element
@@ -224,6 +230,7 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 		for el := start; el != nil; {
 			n := next(el)
 			if el.Value.(string) == value {
+				bytesRemoved += len(value)
 				e.List.Remove(el)
 				removed++
 				if count != 0 && removed >= limit {
@@ -238,7 +245,7 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 	} else {
 		walk(false)
 	}
-	s.recomputeBytes(e)
+	s.addBytes(e, -bytesRemoved)
 	s.removeIfEmpty(e)
 	return removed, nil
 }
@@ -293,7 +300,7 @@ func (s *Store) LInsert(key string, before bool, pivot, value string) (int, erro
 			} else {
 				e.List.InsertAfter(value, el)
 			}
-			s.recomputeBytes(e)
+			s.addBytes(e, len(value))
 			return e.List.Len(), nil
 		}
 	}
@@ -322,8 +329,8 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 		return "", false, err
 	}
 	de.List.PushFront(v)
-	s.recomputeBytes(se)
-	s.recomputeBytes(de)
+	s.addBytes(se, -len(v))
+	s.addBytes(de, len(v))
 	s.removeIfEmpty(se)
 	return v, true, nil
 }

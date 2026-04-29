@@ -402,6 +402,18 @@ func (s *Store) removeIfEmpty(e *Entry) {
 
 // recomputeBytes is a best-effort byte-size recalculation. Kept cheap —
 // metrics and eviction only need ballpark numbers, not exact cardinality.
+// addBytes adjusts an entry's byte count by a signed delta and mirrors
+// the change into the global byte counter. O(1) — preferred over
+// recomputeBytes on the hot path (every list/hash/set/zset push is
+// otherwise O(N) because recomputeBytes walks the whole collection).
+func (s *Store) addBytes(e *Entry, delta int) {
+	if delta == 0 {
+		return
+	}
+	e.Bytes += delta
+	s.bytes.Add(int64(delta))
+}
+
 func (s *Store) recomputeBytes(e *Entry) {
 	old := e.Bytes
 	var n int

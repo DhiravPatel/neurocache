@@ -344,6 +344,12 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.keyHistoryCmd(splitDottedSubcommand(cmd, args))
 	case "AI.LIKE", "AI.RECOMMEND", "AI.SIMILAR", "AI.STATS", "AI.FORGET":
 		c.aiCmd(splitDottedSubcommand(cmd, args))
+	case "EMB.CACHE_SET", "EMB.CACHE_GET", "EMB.CACHE_DEL", "EMB.STATS", "EMB.PURGE", "EMB.COST":
+		c.embCmd(strings.TrimPrefix(cmd, "EMB."), args)
+	case "CONV.APPEND", "CONV.WINDOW", "CONV.SUMMARIZE", "CONV.RESET", "CONV.LEN", "CONV.LIST":
+		c.convCmd(strings.TrimPrefix(cmd, "CONV."), args)
+	case "PROMPT.SET", "PROMPT.GET", "PROMPT.RENDER", "PROMPT.LIST", "PROMPT.DELETE", "PROMPT.VERSIONS":
+		c.promptCmd(strings.TrimPrefix(cmd, "PROMPT."), args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{

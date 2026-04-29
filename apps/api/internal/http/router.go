@@ -45,6 +45,27 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/memory/{user}", h.memoryQueryOrList)
 	mux.HandleFunc("DELETE /api/memory/{user}/{id}", h.memoryDel)
 
+	// AI-stack: embedding cache
+	mux.HandleFunc("POST /api/emb-cache", h.embSet)
+	mux.HandleFunc("GET /api/emb-cache", h.embGet)
+	mux.HandleFunc("GET /api/emb-cache/stats", h.embStats)
+	mux.HandleFunc("POST /api/emb-cache/purge", h.embPurge)
+
+	// AI-stack: conversation/session management
+	mux.HandleFunc("POST /api/conv/{key}", h.convAppend)
+	mux.HandleFunc("GET /api/conv/{key}", h.convWindow)
+	mux.HandleFunc("POST /api/conv/{key}/summarize", h.convSummarize)
+	mux.HandleFunc("DELETE /api/conv/{key}", h.convReset)
+	mux.HandleFunc("GET /api/conv", h.convList)
+
+	// AI-stack: versioned prompt templates
+	mux.HandleFunc("POST /api/prompts/{name}", h.promptSet)
+	mux.HandleFunc("GET /api/prompts/{name}", h.promptGet)
+	mux.HandleFunc("POST /api/prompts/{name}/render", h.promptRender)
+	mux.HandleFunc("GET /api/prompts/{name}/versions", h.promptVersions)
+	mux.HandleFunc("DELETE /api/prompts/{name}", h.promptDelete)
+	mux.HandleFunc("GET /api/prompts", h.promptList)
+
 	// Raw command (like redis-cli EVAL)
 	mux.HandleFunc("POST /api/exec", h.exec)
 

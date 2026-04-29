@@ -37,10 +37,10 @@ export default function Commands() {
       </p>
 
       <div className="my-6 rounded-lg border border-border bg-white/5 px-4 py-3 text-sm">
-        <strong>~545 commands</strong> across <strong>12 data types</strong> +
-        AI-native extensions + Stack modules + cross-engine compat fillers.
-        Every command DiceDB / Valkey 8.0 advertises is reachable on
-        NeuroCache. Organized below by group. Jump to:{" "}
+        <strong>~561 commands</strong> across <strong>12 data types</strong> +
+        AI-native extensions + Stack modules + cross-engine compat fillers
+        + LLM-stack primitives. Every command DiceDB / Valkey 8.0 advertises
+        is reachable on NeuroCache. Organized below by group. Jump to:{" "}
         <a href="#connection">Connection</a> · <a href="#keys">Keys/TTL</a> ·{" "}
         <a href="#strings">Strings</a> · <a href="#lists">Lists</a> ·{" "}
         <a href="#hashes">Hashes</a> · <a href="#sets">Sets</a> ·{" "}
@@ -57,6 +57,9 @@ export default function Commands() {
         <a href="#prob">Bloom / Cuckoo / CMS</a> ·{" "}
         <a href="#timeseries">TimeSeries</a> · <a href="#search">Search</a> ·{" "}
         <a href="#persistence">Persistence</a> · <a href="#ai">AI-native</a> ·{" "}
+        <a href="#emb">Embedding cache</a> ·{" "}
+        <a href="#conv">Conversations</a> ·{" "}
+        <a href="#prompts">Prompt templates</a> ·{" "}
         <a href="#compat">Compat fillers</a> ·{" "}
         <a href="#http">HTTP API</a>
       </div>
@@ -640,6 +643,98 @@ redis-cli -p 6379 WAIT 1 5000           # → (integer) 1`}</Code>
         ]}
       />
 
+      {/* ── Embedding cache ───────────────────────────────────────── */}
+      <h2 id="emb">Embedding cache</h2>
+      <p>
+        Embeddings are deterministic per (model, text) — same input
+        always yields the same vector. Caching them at the engine
+        kills the "same text re-embedded a thousand times" cost.
+        Inputs are canonicalized (trim + lowercase) so cosmetic
+        variations collide on the same slot. Persists via AOF;
+        replicates via the master/replica fan-out.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "EMB.CACHE_SET text vec [EX sec | PX ms]", desc: "Store a vector under the canonical hash of text. vec is a comma-separated decimal list. Optional TTL." },
+          { cmd: "EMB.CACHE_GET text", desc: "Return the cached vector or nil. Counts towards hit/miss stats." },
+          { cmd: "EMB.CACHE_DEL text", desc: "Drop a single entry. Returns 1 if it existed, 0 otherwise." },
+          { cmd: "EMB.STATS", desc: "entries / hits / misses / hit_rate / cost_per_call_usd / saved_usd. Saved-USD = cost_per_call × hits — give a real $$ figure to dashboards." },
+          { cmd: "EMB.PURGE", desc: "Wipe the cache. Returns the count of dropped entries." },
+          { cmd: "EMB.COST usd-per-call", desc: "Operator-supplied per-call cost. Stored as a float; multiplied by hit count to compute EMB.STATS.saved_usd." },
+        ]}
+      />
+      <Code lang="bash">{`# Cache an embedding the first time it's computed
+EMB.CACHE_SET "the quick brown fox" "0.12,0.45,0.89,..." EX 86400
+
+# Subsequent lookups hit the cache regardless of whitespace / case
+EMB.CACHE_GET "  THE QUICK BROWN FOX  "        # → cached vector
+
+# Tell the engine what each call costs so EMB.STATS can compute savings
+EMB.COST 0.0001
+EMB.STATS
+# entries 1   hits 1   misses 0   hit_rate 1.0
+# cost_per_call_usd 0.000100   saved_usd 0.000100`}</Code>
+
+      {/* ── Conversation management ───────────────────────────────── */}
+      <h2 id="conv">Conversation / session management</h2>
+      <p>
+        Per-key ordered turn log with token-aware windowing. Centralizes
+        the truncation logic so applications can't accidentally ship a
+        context-overflow 500 by feeding too much history to the model.
+        The token estimate uses the OpenAI-cookbook fallback of
+        ~4 chars/token — accurate enough for budgeting; swap in a
+        real BPE tokenizer when integrating with a specific model.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "CONV.APPEND key role content", desc: "Append a turn (role: user | assistant | system | tool). Returns the new total turn count." },
+          { cmd: "CONV.WINDOW key [MAXTOKENS n]", desc: "Recent turns whose cumulative tokens fit in n. The summary (set via SUMMARIZE) is prepended as a synthetic system turn so callers can splice the result straight into a model's messages array." },
+          { cmd: "CONV.SUMMARIZE key summary [KEEP n]", desc: "Replace older turns with a summary string (typically produced by an LLM call). Keep the most recent KEEP-tokens-worth verbatim. Returns dropped_turns + tokens_remaining." },
+          { cmd: "CONV.RESET key", desc: "Wipe a conversation. Returns 1/0." },
+          { cmd: "CONV.LEN key", desc: "turns / tokens / has_summary / summary_tokens snapshot." },
+          { cmd: "CONV.LIST", desc: "Every active conversation key." },
+        ]}
+      />
+      <Code lang="bash">{`CONV.APPEND chat:alice user "what's the weather?"
+CONV.APPEND chat:alice assistant "Sunny, 72F today."
+CONV.APPEND chat:alice user "and tomorrow?"
+CONV.APPEND chat:alice assistant "Rain expected."
+
+# Splice straight into your model's messages array
+CONV.WINDOW chat:alice MAXTOKENS 4000
+
+# When the log gets too long, fold older turns into a summary
+CONV.SUMMARIZE chat:alice "Discussed weather Mon-Tue; user is in NYC." KEEP 1000`}</Code>
+
+      {/* ── Prompt templates ──────────────────────────────────────── */}
+      <h2 id="prompts">Versioned prompt templates</h2>
+      <p>
+        Registry of prompt strings with version history and{" "}
+        <code>{`{variable}`}</code> substitution. Auditability ("which
+        prompt produced this response?") plus safe rollback when v4
+        underperforms — flip back to v3 by name without redeploy.
+        Unknown placeholders are left intact in the rendered output so
+        misspellings are visible to humans rather than silently dropped.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "PROMPT.SET name body [VERSION v]", desc: "Store a template version. VERSION defaults to latest+1; an explicit existing version overwrites (the documented way to fix a typo without forking version numbers)." },
+          { cmd: "PROMPT.GET name [VERSION v]", desc: "Fetch (version, body, created_at). Default returns the latest version." },
+          { cmd: "PROMPT.RENDER name [VERSION v] [VARS k v ...]", desc: "Render with {key}-style substitution. Unknown placeholders are left intact." },
+          { cmd: "PROMPT.LIST", desc: "Every template name with its latest version + version count." },
+          { cmd: "PROMPT.DELETE name [VERSION v]", desc: "Drop one version, or the entire template when version omitted. Returns the count of versions removed." },
+          { cmd: "PROMPT.VERSIONS name", desc: "Every stored version with its body + creation time." },
+        ]}
+      />
+      <Code lang="bash">{`PROMPT.SET support-reply "Hi {name}, thanks for writing about {topic}."
+PROMPT.SET support-reply "Hello {name}! Got your note about {topic}."   # auto-bumps to v2
+PROMPT.RENDER support-reply VARS name "Alice" topic "billing"
+# → "Hello Alice! Got your note about billing."
+
+# Pin to v1 if v2 underperforms — no redeploy needed
+PROMPT.GET support-reply VERSION 1
+PROMPT.RENDER support-reply VERSION 1 VARS name "Alice" topic "billing"`}</Code>
+
       {/* ── HTTP ─────────────────────────────────────────────────── */}
       <h2 id="http">HTTP API</h2>
       <p>Every command is also available as JSON. A few examples:</p>
@@ -665,7 +760,37 @@ curl -X POST http://localhost:8080/api/exec \\
 
 curl -X POST http://localhost:8080/api/exec \\
   -H 'Content-Type: application/json' \\
-  -d '{"command":"GEOADD","args":["stores","-73.9857","40.7484","nyc"]}'`}</Code>
+  -d '{"command":"GEOADD","args":["stores","-73.9857","40.7484","nyc"]}'
+
+# AI-stack: embedding cache
+curl -X POST http://localhost:8080/api/emb-cache \\
+  -H 'Content-Type: application/json' \\
+  -d '{"text":"the quick brown fox","vector":[0.12,0.45,0.89],"ttl_sec":86400}'
+
+curl "http://localhost:8080/api/emb-cache?text=the+quick+brown+fox"
+curl "http://localhost:8080/api/emb-cache/stats"
+
+# AI-stack: conversation management
+curl -X POST http://localhost:8080/api/conv/chat:alice \\
+  -H 'Content-Type: application/json' \\
+  -d '{"role":"user","content":"what is the weather?"}'
+
+curl "http://localhost:8080/api/conv/chat:alice?max_tokens=4000"
+
+curl -X POST http://localhost:8080/api/conv/chat:alice/summarize \\
+  -H 'Content-Type: application/json' \\
+  -d '{"summary":"User asked about weather; lives in NYC.","keep_tokens":1000}'
+
+# AI-stack: versioned prompt templates
+curl -X POST http://localhost:8080/api/prompts/support-reply \\
+  -H 'Content-Type: application/json' \\
+  -d '{"body":"Hi {name}, thanks for writing about {topic}."}'
+
+curl -X POST http://localhost:8080/api/prompts/support-reply/render \\
+  -H 'Content-Type: application/json' \\
+  -d '{"vars":{"name":"Alice","topic":"billing"}}'
+
+curl "http://localhost:8080/api/prompts/support-reply/versions"`}</Code>
 
       <h2>Metrics endpoints</h2>
       <p>

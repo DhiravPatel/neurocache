@@ -272,6 +272,30 @@ var registry = map[string]commandInfo{
 	"MEMORY_ADD":   {[]string{CatAI, CatWrite, CatFast}},
 	"MEMORY_QUERY": {[]string{CatAI, CatRead, CatFast}},
 	"MEMORY_LIST":  {[]string{CatAI, CatRead, CatFast}},
+
+	// NeuroCache AI-stack — embedding cache, conversation management,
+	// versioned prompt templates. All scoped under @ai so a single
+	// `+@ai` rule grants the whole AI surface.
+	"EMB.CACHE_SET":  {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.CACHE_GET":  {[]string{CatAI, CatRead, CatFast}},
+	"EMB.CACHE_DEL":  {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.STATS":      {[]string{CatAI, CatRead, CatFast}},
+	"EMB.PURGE":      {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.COST":       {[]string{CatAI, CatWrite, CatFast}},
+
+	"CONV.APPEND":    {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.WINDOW":    {[]string{CatAI, CatRead, CatFast}},
+	"CONV.SUMMARIZE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.LEN":       {[]string{CatAI, CatRead, CatFast}},
+	"CONV.LIST":      {[]string{CatAI, CatRead, CatFast}},
+
+	"PROMPT.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"PROMPT.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.RENDER":  {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.DELETE":  {[]string{CatAI, CatWrite, CatFast}},
+	"PROMPT.VERSIONS": {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
