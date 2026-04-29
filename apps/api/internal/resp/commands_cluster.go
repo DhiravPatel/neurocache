@@ -182,6 +182,8 @@ func (c *conn) clusterCmd(args []string) {
 		writeInt(c.bw, 0)
 	case "BUMPEPOCH":
 		writeBulk(c.bw, "BUMPED "+strconv.FormatInt(st.BumpEpoch(), 10))
+	case "LINKS":
+		c.clusterLinksCmd()
 	default:
 		writeError(c.bw, "Unknown CLUSTER subcommand "+sub)
 	}

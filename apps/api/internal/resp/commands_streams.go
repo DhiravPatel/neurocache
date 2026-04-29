@@ -398,11 +398,41 @@ func (c *conn) xinfoCmd(args []string) {
 	}
 	switch strings.ToUpper(args[0]) {
 	case "STREAM":
+		// XINFO STREAM key [FULL [COUNT n]] — when FULL is given, we
+		// emit the standard flat map plus a per-group + per-consumer
+		// breakdown including the PEL contents.
+		full := len(args) >= 3 && strings.EqualFold(args[2], "FULL")
 		out, err := c.eng.KV.XInfoStream(args[1])
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
+		if !full {
+			writeFlatMap(c.bw, out)
+			return
+		}
+		groups, err := c.eng.KV.XInfoGroups(args[1])
+		if err != nil {
+			c.writeStoreErr(err)
+			return
+		}
+		groupRows := []any{}
+		for _, g := range groups {
+			row := g.([]any)
+			// group rows already carry name/consumers/pending/last-delivered-id;
+			// expand with per-consumer detail under the same key.
+			var groupName string
+			for i := 0; i < len(row); i += 2 {
+				if k, ok := row[i].(string); ok && k == "name" && i+1 < len(row) {
+					groupName, _ = row[i+1].(string)
+					break
+				}
+			}
+			consumers, _ := c.eng.KV.XInfoConsumers(args[1], groupName)
+			row = append(row, "consumers-detail", consumers)
+			groupRows = append(groupRows, row)
+		}
+		out = append(out, "groups-detail", groupRows)
 		writeFlatMap(c.bw, out)
 	case "GROUPS":
 		out, err := c.eng.KV.XInfoGroups(args[1])

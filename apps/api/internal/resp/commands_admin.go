@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/acl"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/introspect"
 )
 
 // authCmd implements AUTH [username] password. With one arg the username
@@ -137,6 +139,8 @@ func (c *conn) aclCmd(args []string) {
 			return
 		}
 		writeSimple(c.bw, "OK")
+	case "DRYRUN":
+		c.aclDryRunCmd(args[1:])
 	default:
 		writeError(c.bw, "Unknown ACL subcommand "+args[0])
 	}
@@ -291,15 +295,27 @@ func (c *conn) clientCmd(args []string) {
 		}
 		writeBulk(c.bw, out.String())
 	case "KILL":
-		// CLIENT KILL ID id
-		if len(args) >= 3 && strings.EqualFold(args[1], "ID") {
-			id, _ := strconv.ParseUint(args[2], 10, 64)
-			if c.eng.Clients.Kill(id) {
-				writeInt(c.bw, 1)
-				return
+		// Two forms — Redis 2.4 single-arg "CLIENT KILL <addr>" and the
+		// modern selector-based form "CLIENT KILL [ID id] [ADDR ip:port]
+		// [LADDR ip:port] [USER user] [TYPE …] [SKIPME yes|no]".
+		if len(args) == 2 && !looksLikeSelector(args[1]) {
+			// legacy form: kill by addr
+			for _, ci := range c.eng.Clients.List() {
+				if ci.Addr == args[1] {
+					if c.eng.Clients.Kill(ci.ID) {
+						writeSimple(c.bw, "OK")
+						return
+					}
+				}
 			}
+			writeError(c.bw, "ERR No such client")
+			return
 		}
-		writeInt(c.bw, 0)
+		c.clientKillExtendedCmd(args[1:])
+		return
+	case "GETREDIR":
+		c.clientGetRedirCmd()
+		return
 	case "PAUSE":
 		if len(args) < 2 {
 			writeError(c.bw, "wrong number of arguments")
@@ -335,9 +351,123 @@ func (c *conn) clientCmd(args []string) {
 			c.info.NoEvict = false
 		}
 		writeSimple(c.bw, "OK")
+	case "TRACKING":
+		c.clientTrackingCmd(args[1:])
+	case "TRACKINGINFO":
+		info := c.eng.Tracking.Info(c.info.ID)
+		out := []any{
+			"flags", trackingFlagsString(info),
+			"redirect", int64(info.Redirect),
+			"prefixes", anyStrSlice(info.Prefixes),
+		}
+		writeValue(c.bw, out)
+	case "NO-LOOP":
+		// Sub-flag of TRACKING; idempotent toggle.
+		on := !(len(args) >= 2 && strings.EqualFold(args[1], "OFF"))
+		if c.invalidateCh != nil {
+			c.eng.Tracking.Enable(c.info.ID, false, on, 0, nil)
+		}
+		writeSimple(c.bw, "OK")
 	default:
 		writeSimple(c.bw, "OK")
 	}
+}
+
+// clientTrackingCmd handles CLIENT TRACKING ON|OFF [REDIRECT id]
+// [BCAST] [PREFIX p [PREFIX p ...]] [OPTIN] [OPTOUT] [NOLOOP].
+func (c *conn) clientTrackingCmd(args []string) {
+	if len(args) == 0 {
+		writeError(c.bw, "CLIENT TRACKING ON|OFF [opts ...]")
+		return
+	}
+	switch strings.ToUpper(args[0]) {
+	case "OFF":
+		c.eng.Tracking.Disable(c.info.ID)
+		if c.invalidateCh != nil {
+			close(c.invalidateCh)
+			c.invalidateCh = nil
+		}
+		writeSimple(c.bw, "OK")
+		return
+	case "ON":
+		// fall through to flag parsing
+	default:
+		writeError(c.bw, "syntax error")
+		return
+	}
+	bcast, noloop := false, false
+	redirect := uint64(0)
+	prefixes := []string{}
+	for i := 1; i < len(args); i++ {
+		switch strings.ToUpper(args[i]) {
+		case "BCAST":
+			bcast = true
+		case "NOLOOP":
+			noloop = true
+		case "OPTIN", "OPTOUT":
+			// Mode hints — we record but treat default == OPTIN today.
+		case "REDIRECT":
+			if i+1 < len(args) {
+				v, _ := strconv.ParseUint(args[i+1], 10, 64)
+				redirect = v
+				i++
+			}
+		case "PREFIX":
+			if i+1 < len(args) {
+				prefixes = append(prefixes, args[i+1])
+				i++
+			}
+		}
+	}
+	if c.invalidateCh == nil {
+		c.invalidateCh = make(chan []string, 64)
+		engine.RegisterInvalidationChannel(c.info.ID, c.invalidateCh)
+		go c.pumpInvalidations()
+	}
+	c.eng.Tracking.Enable(c.info.ID, bcast, noloop, redirect, prefixes)
+	writeSimple(c.bw, "OK")
+}
+
+// pumpInvalidations sends RESP3 push frames (or RESP2 pmessage on the
+// `__redis__:invalidate` channel) for every tracked-key write.
+func (c *conn) pumpInvalidations() {
+	for keys := range c.invalidateCh {
+		c.writeMu.Lock()
+		if c.proto >= 3 {
+			items := []any{"invalidate", anyStrSlice(keys)}
+			c.writePush(items)
+		} else {
+			// RESP2 fallback: emit a regular pub/sub message on the
+			// canonical channel name.
+			writeValue(c.bw, []any{"message", "__redis__:invalidate", anyStrSlice(keys)})
+		}
+		_ = c.bw.Flush()
+		c.writeMu.Unlock()
+	}
+}
+
+func trackingFlagsString(info introspect.TrackingInfo) []any {
+	flags := []any{}
+	if info.On {
+		flags = append(flags, "on")
+	} else {
+		flags = append(flags, "off")
+	}
+	if info.Bcast {
+		flags = append(flags, "bcast")
+	}
+	if info.NoLoop {
+		flags = append(flags, "noloop")
+	}
+	return flags
+}
+
+func anyStrSlice(xs []string) []any {
+	out := make([]any, len(xs))
+	for i, s := range xs {
+		out[i] = s
+	}
+	return out
 }
 
 // resetCmd implements RESET — clear MULTI/WATCH, drop subscriptions,
@@ -591,9 +721,22 @@ func (c *conn) restoreCmd(args []string) {
 }
 
 // helloCmd implements HELLO [protover [AUTH user pass] [SETNAME name]].
-// We always respond with RESP2 metadata since we don't yet implement
-// RESP3 — clients fall back to RESP2 cleanly.
+// `HELLO 3` flips the per-conn `proto` flag so subsequent commands can
+// emit RESP3 reply types (Map/Set/Bool/Double/BigNumber/Push). RESP2
+// remains the default for back-compat.
 func (c *conn) helloCmd(args []string) {
+	// Optional protover comes first; if present and parses, we honour
+	// it. Anything other than 2 or 3 is rejected per the spec.
+	if len(args) > 0 {
+		if v, err := strconv.Atoi(args[0]); err == nil {
+			if v != 2 && v != 3 {
+				writeTypedError(c.bw, "NOPROTO", "unsupported protocol version")
+				return
+			}
+			c.proto = v
+			args = args[1:]
+		}
+	}
 	for i := 0; i < len(args); i++ {
 		switch strings.ToUpper(args[i]) {
 		case "AUTH":
@@ -618,17 +761,15 @@ func (c *conn) helloCmd(args []string) {
 			i++
 		}
 	}
-	out := []any{
+	pairs := []any{
 		"server", "neurocache",
 		"version", "0.4.0",
-		"proto", int64(2),
+		"proto", int64(c.proto),
 		"id", int64(c.info.ID),
 		"mode", "standalone",
 		"role", "master",
 		"modules", []any{},
 	}
-	fmt.Fprintf(c.bw, "*%d\r\n", len(out))
-	for _, v := range out {
-		writeValue(c.bw, v)
-	}
+	// RESP3 clients expect a Map; RESP2 fans out as an interleaved array.
+	c.writeMap(pairs)
 }

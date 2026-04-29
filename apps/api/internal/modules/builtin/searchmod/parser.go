@@ -6,16 +6,21 @@ import (
 	"strings"
 )
 
-// QueryNode is the parse tree for a search expression. Six node kinds
-// cover the supported subset.
+// QueryNode is the parse tree for a search expression.
 type QueryNode struct {
 	Kind     QueryKind
-	Field    string    // for kField, kRange, kTag
-	Term     string    // for kTerm, kPrefix, kPhrase
+	Field    string    // for kField, kRange, kTag, kGeo, kFuzzy
+	Term     string    // for kTerm, kPrefix, kPhrase, kFuzzy
 	Phrase   []string  // for kPhrase (token sequence, post-stem)
 	Lo, Hi   float64   // for kRange (numeric)
 	LoOpen   bool      // ( -> exclusive
 	HiOpen   bool      // ( -> exclusive
+	GeoLat   float64   // kGeo
+	GeoLon   float64   // kGeo
+	GeoRadM  float64   // kGeo (meters)
+	FuzzyMax int       // kFuzzy: max edit distance (1 = single %, 2 = double %)
+	KnnK     int       // kKNN: requested neighbour count
+	KnnParam string    // kKNN: $param name resolved from FT.SEARCH PARAMS
 	Children []*QueryNode
 }
 
@@ -32,6 +37,9 @@ const (
 	kAnd
 	kOr
 	kNot
+	kGeo   // @field:[<lat> <lon> <radius> <unit>]
+	kFuzzy // %term% / %%term%%
+	kKNN   // *=>[KNN k @field $param] — vector KNN
 )
 
 // ParseQuery turns a query string into a tree. We keep the grammar
@@ -42,6 +50,30 @@ func ParseQuery(q string) (*QueryNode, error) {
 	if q == "" || q == "*" {
 		return &QueryNode{Kind: kAll}, nil
 	}
+	// KNN query: prefix-or-replace form `*=>[KNN k @field $vec]`.
+	// Real RediSearch lets a base filter precede `=>`; here we accept
+	// either pure `*=>[…]` or any base followed by `=>[…]` and AND
+	// the two together at execution.
+	if i := strings.Index(q, "=>["); i >= 0 {
+		base := strings.TrimSpace(q[:i])
+		j := strings.LastIndex(q, "]")
+		if j < i {
+			return nil, errors.New("missing ] in KNN clause")
+		}
+		body := q[i+3 : j]
+		knn, err := parseKNNClause(body)
+		if err != nil {
+			return nil, err
+		}
+		if base == "" || base == "*" {
+			return knn, nil
+		}
+		baseNode, err := ParseQuery(base)
+		if err != nil {
+			return nil, err
+		}
+		return &QueryNode{Kind: kAnd, Children: []*QueryNode{baseNode, knn}}, nil
+	}
 	p := &queryParser{src: q}
 	node, err := p.parseOr()
 	if err != nil {
@@ -51,6 +83,21 @@ func ParseQuery(q string) (*QueryNode, error) {
 		return nil, errors.New("unexpected trailing input: " + p.src[p.pos:])
 	}
 	return node, nil
+}
+
+// parseKNNClause reads "KNN k @field $param".
+func parseKNNClause(body string) (*QueryNode, error) {
+	parts := strings.Fields(body)
+	if len(parts) < 4 || !strings.EqualFold(parts[0], "KNN") {
+		return nil, errors.New("KNN clause must read 'KNN <k> @<field> $<param>'")
+	}
+	k, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, errors.New("KNN: k must be an integer")
+	}
+	field := strings.TrimPrefix(parts[2], "@")
+	param := strings.TrimPrefix(parts[3], "$")
+	return &QueryNode{Kind: kKNN, Field: field, KnnK: k, KnnParam: param}, nil
 }
 
 type queryParser struct {
@@ -182,15 +229,54 @@ func (p *queryParser) parseFieldQualifier() (*QueryNode, error) {
 
 func (p *queryParser) parseRange(field string) (*QueryNode, error) {
 	p.pos++ // consume [
-	lo, loOpen := p.readNumericBound()
-	p.skipSpace()
-	hi, hiOpen := p.readNumericBound()
-	p.skipSpace()
-	if p.pos >= len(p.src) || p.src[p.pos] != ']' {
+	// Distinguish GEO from numeric range by counting tokens before ']'.
+	// GEO carries 4 (lat, lon, radius, unit); numeric carries 2.
+	body := ""
+	for p.pos < len(p.src) && p.src[p.pos] != ']' {
+		body += string(p.src[p.pos])
+		p.pos++
+	}
+	if p.pos >= len(p.src) {
 		return nil, errors.New("missing ] in range")
 	}
-	p.pos++
+	p.pos++ // consume ]
+	parts := strings.Fields(body)
+	if len(parts) >= 4 && isGeoUnit(parts[3]) {
+		lat, _ := strconv.ParseFloat(parts[0], 64)
+		lon, _ := strconv.ParseFloat(parts[1], 64)
+		r, _ := strconv.ParseFloat(parts[2], 64)
+		return &QueryNode{Kind: kGeo, Field: field, GeoLat: lat, GeoLon: lon, GeoRadM: geoToMeters(r, parts[3])}, nil
+	}
+	// numeric range — parse with the existing reader, which handles
+	// (exclusive prefix + +inf/-inf.
+	subParser := &queryParser{src: body}
+	lo, loOpen := subParser.readNumericBound()
+	subParser.skipSpace()
+	hi, hiOpen := subParser.readNumericBound()
 	return &QueryNode{Kind: kRange, Field: field, Lo: lo, Hi: hi, LoOpen: loOpen, HiOpen: hiOpen}, nil
+}
+
+// isGeoUnit returns whether u is one of the four units RediSearch
+// accepts on a geo range filter.
+func isGeoUnit(u string) bool {
+	switch strings.ToLower(u) {
+	case "m", "km", "mi", "ft":
+		return true
+	}
+	return false
+}
+
+// geoToMeters normalises the radius to meters.
+func geoToMeters(r float64, unit string) float64 {
+	switch strings.ToLower(unit) {
+	case "km":
+		return r * 1000
+	case "mi":
+		return r * 1609.344
+	case "ft":
+		return r * 0.3048
+	}
+	return r
 }
 
 func (p *queryParser) readNumericBound() (float64, bool) {
@@ -284,6 +370,19 @@ func (p *queryParser) parseTermOrPrefix() (*QueryNode, error) {
 	tok := p.src[start:p.pos]
 	if tok == "" {
 		return nil, errors.New("empty term")
+	}
+	// Fuzzy: %term% (max edit distance 1) or %%term%% (distance 2).
+	if strings.HasPrefix(tok, "%") && strings.HasSuffix(tok, "%") {
+		dist := 0
+		for strings.HasPrefix(tok, "%") && strings.HasSuffix(tok, "%") {
+			tok = strings.TrimPrefix(tok, "%")
+			tok = strings.TrimSuffix(tok, "%")
+			dist++
+		}
+		if dist > 3 {
+			dist = 3
+		}
+		return &QueryNode{Kind: kFuzzy, Term: strings.ToLower(tok), FuzzyMax: dist}, nil
 	}
 	prefix := false
 	if strings.HasSuffix(tok, "*") {

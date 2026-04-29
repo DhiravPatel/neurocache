@@ -31,9 +31,24 @@ func TestPathParseAndGet(t *testing.T) {
 	}
 }
 
-func TestPathFilterRejected(t *testing.T) {
-	if _, err := parsePath("$..price[?(@.qty > 0)]"); err == nil {
-		t.Fatal("filter expression should error")
+func TestPathFilterMatches(t *testing.T) {
+	doc, _ := New([]byte(`{"items":[{"name":"a","qty":2},{"name":"b","qty":0},{"name":"c","qty":5}]}`))
+	p, err := parsePath("$.items[?(@.qty > 0)]")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := p.Get(doc.Root)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 items with qty>0, got %d (%v)", len(got), got)
+	}
+}
+
+func TestPathFilterAndOr(t *testing.T) {
+	doc, _ := New([]byte(`{"xs":[{"k":1},{"k":2},{"k":3}]}`))
+	p, _ := parsePath(`$.xs[?(@.k == 1 || @.k == 3)]`)
+	got := p.Get(doc.Root)
+	if len(got) != 2 {
+		t.Fatalf("got %d, want 2", len(got))
 	}
 }
 

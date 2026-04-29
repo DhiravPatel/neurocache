@@ -80,6 +80,25 @@ func initModule(ctx *modules.RegisterCtx) error {
 		{Name: "FT.EXPLAIN", Arity: 3, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftExplain},
 		{Name: "FT.INFO", Arity: 2, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftInfo},
 		{Name: "FT._LIST", Arity: 1, Categories: r, KeyPosition: modules.KeyNone, Run: ftList},
+
+		// Suggestions
+		{Name: "FT.SUGADD", Arity: -4, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: ftSugAdd},
+		{Name: "FT.SUGGET", Arity: -3, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftSugGet},
+		{Name: "FT.SUGDEL", Arity: 3, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: ftSugDel},
+		{Name: "FT.SUGLEN", Arity: 2, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftSugLen},
+
+		// Synonyms
+		{Name: "FT.SYNUPDATE", Arity: -4, Write: true, Categories: w, KeyPosition: modules.KeyAt(1), Run: ftSynUpdate},
+		{Name: "FT.SYNDUMP", Arity: 2, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftSynDump},
+
+		// Spellcheck
+		{Name: "FT.SPELLCHECK", Arity: -3, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftSpellCheck},
+
+		// Cursor
+		{Name: "FT.CURSOR", Arity: -3, Categories: r, KeyPosition: modules.KeyNone, Run: ftCursor},
+
+		// Profile
+		{Name: "FT.PROFILE", Arity: -4, Categories: r, KeyPosition: modules.KeyAt(1), Run: ftProfile},
 	} {
 		if err := ctx.RegisterCmd(c); err != nil {
 			return err
@@ -292,18 +311,37 @@ func ftSearch(c *modules.Ctx, args []string) error {
 		c.Reply.Error("Syntax error: " + err.Error())
 		return nil
 	}
-	hits := idx.Search(q)
 	noContent, withScores := false, false
 	limitOff, limitCount := 0, 10
 	var sortField string
 	sortAsc := true
 	var returnFields []string
+	params := map[string]string{}
 	for i := 2; i < len(args); i++ {
 		switch strings.ToUpper(args[i]) {
 		case "NOCONTENT":
 			noContent = true
 		case "WITHSCORES":
 			withScores = true
+		case "PARAMS":
+			// PARAMS n k v k v ...
+			if i+1 >= len(args) {
+				c.Reply.Error("PARAMS needs a count")
+				return nil
+			}
+			n, _ := strconv.Atoi(args[i+1])
+			if i+1+n > len(args) {
+				c.Reply.Error("PARAMS: too few args")
+				return nil
+			}
+			for j := i + 2; j+1 <= i+1+n; j += 2 {
+				params[args[j]] = args[j+1]
+			}
+			i += 1 + n
+		case "DIALECT":
+			if i+1 < len(args) {
+				i++
+			}
 		case "LIMIT":
 			if i+2 >= len(args) {
 				c.Reply.Error("LIMIT needs offset + num")
@@ -333,6 +371,7 @@ func ftSearch(c *modules.Ctx, args []string) error {
 			i += 1 + n
 		}
 	}
+	hits := idx.SearchWithParams(q, params)
 	if sortField != "" {
 		sort.SliceStable(hits, func(i, j int) bool {
 			a := hits[i].Doc.Fields[sortField]

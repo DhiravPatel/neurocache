@@ -30,9 +30,11 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/metrics"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/modules"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/primitives"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/sentinel"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 )
@@ -51,8 +53,11 @@ type Engine struct {
 	SlowLog  *introspect.SlowLog
 	Latency  *introspect.LatencyMonitor
 	Clients  *introspect.ClientRegistry
-	Scripts  *scripting.Cache
-	Blocker  *blocking.Hub
+	Monitor  *introspect.MonitorBroker
+	Tracking *introspect.TrackingTable
+	Scripts   *scripting.Cache
+	Functions *scripting.FunctionRegistry
+	Blocker   *blocking.Hub
 
 	Replication *replication.State
 	Backlog     *replication.Backlog
@@ -63,6 +68,19 @@ type Engine struct {
 	Bus     *cluster.Bus
 
 	Modules *modules.Registry
+
+	RuntimeCfg *config.Runtime
+
+	Sentinel *sentinel.Sentinel
+
+	// NeuroCache-only primitives (no Redis equivalent).
+	Idempotent  *primitives.IdempotencyStore
+	Locks       *primitives.LockManager
+	RateLimit   *primitives.RateLimiter
+	Dedup       *primitives.Deduper
+	CostTable   *primitives.CostTable
+	History     *primitives.HistoryStore
+	Recommender *primitives.Recommender
 
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
@@ -117,7 +135,10 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		SlowLog:   introspect.NewSlowLog(cfg.SlowLogMaxLen, time.Duration(cfg.SlowLogThreshold)*time.Microsecond),
 		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
 		Clients:   introspect.NewClientRegistry(),
+		Monitor:   introspect.NewMonitorBroker(),
+		Tracking:  introspect.NewTrackingTable(),
 		Scripts:   scripting.NewCache(),
+		Functions: scripting.NewFunctionRegistry(),
 		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
 
@@ -128,6 +149,14 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		versions:  map[string]uint64{},
 	}
 	e.Modules = modules.NewRegistry(&moduleHandle{e: e})
+	e.RuntimeCfg = config.NewRuntime(&e.Cfg)
+	e.Idempotent = primitives.NewIdempotencyStore()
+	e.Locks = primitives.NewLockManager()
+	e.RateLimit = primitives.NewRateLimiter()
+	e.Dedup = primitives.NewDeduper()
+	e.CostTable = primitives.NewCostTable()
+	e.History = primitives.NewHistoryStore(64, 24*time.Hour)
+	e.Recommender = primitives.NewRecommender()
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
@@ -135,6 +164,22 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		}
 		e.PubSub.Publish("__keyspace__:"+key, event)
 		e.PubSub.Publish("__keyevent__:"+event, key)
+		// Server-assisted client caching: fan out invalidations to
+		// every client that read this key (default mode) or whose
+		// PREFIX subscriptions match (BCAST mode). The pump goroutine
+		// on each receiving conn turns this into a RESP3 Push frame.
+		if e.Tracking != nil {
+			for _, t := range e.Tracking.Invalidations(key, 0) {
+				e.invalidateClient(t.ClientID, []string{key})
+			}
+		}
+		// KEY.TRACK time-travel — snapshot the new value when this key
+		// is opted into versioning. Cheap when nothing's tracked.
+		if e.History != nil && e.History.IsTracked(key) {
+			if v, ok, _ := e.KV.GetTyped(key); ok {
+				e.History.Snapshot(key, v)
+			}
+		}
 		// Wake any blocked clients (BLPOP/BRPOP/BLMOVE/BZPOPMIN/BZPOPMAX
 		// /XREAD BLOCK). The blocker filters by event below — only writes
 		// that produce something a consumer can pop need to fire.
@@ -224,6 +269,130 @@ func (e *Engine) Start() {
 		}
 	}
 	e.loadModulesFromConfig()
+	if e.Cfg.SentinelEnabled {
+		e.startSentinel()
+	}
+	if e.Cfg.ClusterAutoFailover && e.Cluster != nil && e.Cluster.Enabled() {
+		e.startAutoFailover()
+	}
+}
+
+// startSentinel boots the sentinel monitoring loop. Each entry in
+// NEUROCACHE_SENTINEL_MONITOR (`name=host:port:quorum`, comma-separated)
+// becomes a watched master.
+func (e *Engine) startSentinel() {
+	host, port := e.Cfg.Host, e.Cfg.RESPPort
+	id := e.Replication.ReplID() // reuse the replid as sentinel-id
+	s := sentinel.New(id, host, port, sentinel.Config{})
+	for _, entry := range strings.Split(e.Cfg.SentinelMonitor, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			e.Log.Warn("sentinel monitor: bad entry", "entry", entry)
+			continue
+		}
+		name := parts[0]
+		fields := strings.Split(parts[1], ":")
+		if len(fields) != 3 {
+			e.Log.Warn("sentinel monitor: expected host:port:quorum", "entry", entry)
+			continue
+		}
+		quorum, err := strconv.Atoi(fields[2])
+		if err != nil {
+			e.Log.Warn("sentinel monitor: bad quorum", "entry", entry, "err", err)
+			continue
+		}
+		if err := s.Monitor(name, fields[0], fields[1], quorum); err != nil {
+			e.Log.Warn("sentinel monitor failed", "name", name, "err", err)
+			continue
+		}
+		e.Log.Info("sentinel watching", "name", name, "addr", fields[0]+":"+fields[1], "quorum", quorum)
+	}
+	s.Start()
+	e.Sentinel = s
+}
+
+// startAutoFailover wires a callback into the cluster bus's FAIL
+// detection. When a master is declared FAIL, the surviving node with
+// the lowest ID among the master's replicas promotes itself. This is
+// the simple deterministic election scheme described in the sentinel
+// package — converges within one gossip round and avoids split-brain
+// by tying election to the gossip-confirmed FAIL flag.
+func (e *Engine) startAutoFailover() {
+	// We poll the cluster state once per gossip tick rather than
+	// hooking the bus directly — the bus already announces FAIL via
+	// AnnounceFail, and the local cluster state's flag is up to date
+	// before this runs.
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-e.stopCh:
+				return
+			case <-t.C:
+				e.evaluateAutoFailover()
+			}
+		}
+	}()
+}
+
+func (e *Engine) evaluateAutoFailover() {
+	myself := e.Cluster.Myself()
+	if myself == nil {
+		return
+	}
+	for _, n := range e.Cluster.Nodes() {
+		if !n.HasFlag(cluster.FlagFail) {
+			continue
+		}
+		if n.HasFlag(cluster.FlagReplica) {
+			continue
+		}
+		// We are a candidate iff we replicate this master + we have
+		// the lowest ID among active replicas of it.
+		if myself.MasterID != n.ID {
+			continue
+		}
+		if !lowestIDReplica(e.Cluster.Nodes(), n.ID, myself.ID) {
+			continue
+		}
+		e.Log.Warn("auto-failover: promoting self", "former_master", n.ID)
+		// Promote: take ownership of the failed master's slots.
+		for _, r := range n.SlotRanges() {
+			for s := r[0]; s <= r[1]; s++ {
+				_, _ = e.Cluster.AssignSlot(s, myself.ID)
+			}
+		}
+		myself.Role = cluster.RoleMaster
+		myself.SetFlag(cluster.FlagMaster)
+		myself.ClearFlag(cluster.FlagReplica)
+		myself.MasterID = ""
+		e.Cluster.BumpEpoch()
+		e.PromoteToMaster()
+		return // don't promote twice in one tick
+	}
+}
+
+// lowestIDReplica returns true if myID is the lowest-sorted among the
+// alive replicas of masterID. Used by the deterministic election.
+func lowestIDReplica(nodes []*cluster.Node, masterID, myID string) bool {
+	best := myID
+	for _, n := range nodes {
+		if n.MasterID != masterID {
+			continue
+		}
+		if n.HasFlag(cluster.FlagFail) {
+			continue
+		}
+		if n.ID < best {
+			best = n.ID
+		}
+	}
+	return best == myID
 }
 
 // startCluster builds the local node, plugs the slot counter into the
@@ -313,15 +482,19 @@ func (e *Engine) KeyVersion(key string) uint64 {
 
 // RecordWrite hands a write-path command to the AOF + replication
 // backlog. Called from dispatch after the command executes
-// successfully. Replica-mode nodes skip both paths — the write came
-// from the master's stream, replaying it would loop.
+// successfully.
+//
+// Replica-mode nodes skip the AOF (the master is durable on its own)
+// but, when ReplChains is enabled, still feed the backlog so
+// downstream replicas-of-replicas can PSYNC. We never fan out to the
+// engine's own master link — only the local fan-out to attached
+// replicas matters for the chain.
 func (e *Engine) RecordWrite(cmd string, args []string) {
-	if e.Replication != nil && e.Replication.IsReplica() {
-		// Replicas only apply the write; the master is the source of
-		// truth for durability + fan-out.
+	isReplica := e.Replication != nil && e.Replication.IsReplica()
+	if isReplica && !e.Cfg.ReplChains {
 		return
 	}
-	if e.AOF != nil {
+	if !isReplica && e.AOF != nil {
 		_ = e.AOF.Append(cmd, args)
 	}
 	if e.Master != nil {
@@ -514,6 +687,47 @@ func (e *Engine) ConsumeReplicaHeartbeats(r *replication.ReplicaLink) {
 				}
 			}
 		}
+	}
+}
+
+// ── client-tracking dispatcher ─────────────────────────────────────
+//
+// The RESP layer registers per-client invalidation channels with the
+// engine when CLIENT TRACKING ON fires. The keyspace notifier looks
+// up the client by ID and forwards the keys.
+
+var (
+	invalMu       sync.RWMutex
+	invalidateChs = map[uint64]chan<- []string{}
+)
+
+// RegisterInvalidationChannel exposes a client's push channel so the
+// engine notifier can deliver invalidations.
+func RegisterInvalidationChannel(clientID uint64, ch chan<- []string) {
+	invalMu.Lock()
+	defer invalMu.Unlock()
+	invalidateChs[clientID] = ch
+}
+
+// UnregisterInvalidationChannel cleans up on disconnect.
+func UnregisterInvalidationChannel(clientID uint64) {
+	invalMu.Lock()
+	defer invalMu.Unlock()
+	delete(invalidateChs, clientID)
+}
+
+// invalidateClient is the notifier-side dispatch. Drops on overflow
+// since invalidation is best-effort — the client falls back to a TTL.
+func (e *Engine) invalidateClient(clientID uint64, keys []string) {
+	invalMu.RLock()
+	ch := invalidateChs[clientID]
+	invalMu.RUnlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- keys:
+	default:
 	}
 }
 

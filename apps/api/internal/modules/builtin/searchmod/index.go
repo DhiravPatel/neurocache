@@ -20,8 +20,18 @@ type Index struct {
 	postings map[string]map[string]*postingList // field name -> term -> list
 	numeric  map[string]*numericIndex
 	tags     map[string]map[string]map[string]struct{} // field -> tag -> docID set
+	geos     map[string]*geoIndex                       // field -> geo index
+	vectors  map[string]*vectorIndex                    // field -> vector index
 	docLen   map[string]map[string]int                 // field -> docID -> term count (for BM25 length norm)
 	totalLen map[string]int                            // field -> sum of term counts
+
+	// queryParams is set transiently by SearchWithParams so eval()
+	// can resolve $param references inside KNN clauses without
+	// threading the map through every recursion.
+	queryParams map[string]string
+
+	// Synonyms expands each search term into its equivalence class.
+	Synonyms *SynonymManager
 }
 
 // Document is one indexed record. Fields hold the *raw* values so
@@ -41,8 +51,9 @@ type postingList struct {
 }
 
 type posting struct {
-	docID string
-	freq  int
+	docID     string
+	freq      int
+	positions []int // 0-based token positions in the field
 }
 
 // numericIndex stores (value, docID) pairs sorted by value so range
@@ -65,8 +76,11 @@ func NewIndex(name string, schema *Schema) *Index {
 		postings: map[string]map[string]*postingList{},
 		numeric:  map[string]*numericIndex{},
 		tags:     map[string]map[string]map[string]struct{}{},
+		geos:     map[string]*geoIndex{},
+		vectors:  map[string]*vectorIndex{},
 		docLen:   map[string]map[string]int{},
 		totalLen: map[string]int{},
+		Synonyms: newSynonymManager(),
 	}
 	for _, f := range schema.Fields {
 		switch f.Type {
@@ -77,6 +91,10 @@ func NewIndex(name string, schema *Schema) *Index {
 			idx.numeric[f.Name] = &numericIndex{}
 		case FieldTag:
 			idx.tags[f.Name] = map[string]map[string]struct{}{}
+		case FieldGeo:
+			idx.geos[f.Name] = newGeoIndex()
+		case FieldVector:
+			idx.vectors[f.Name] = newVectorIndex(f)
 		}
 	}
 	return idx
@@ -100,18 +118,18 @@ func (idx *Index) AddDoc(id string, fields map[string]string, score float64) {
 		switch f.Type {
 		case FieldText:
 			tokens := Tokenize(raw, !f.NoStem)
-			counts := map[string]int{}
-			for _, t := range tokens {
-				counts[t]++
+			positions := map[string][]int{}
+			for pos, t := range tokens {
+				positions[t] = append(positions[t], pos)
 			}
 			fieldPost := idx.postings[f.Name]
-			for term, freq := range counts {
+			for term, posList := range positions {
 				p, ok := fieldPost[term]
 				if !ok {
 					p = &postingList{}
 					fieldPost[term] = p
 				}
-				p.add(id, freq)
+				p.addWithPositions(id, posList)
 			}
 			idx.docLen[f.Name][id] = len(tokens)
 			idx.totalLen[f.Name] += len(tokens)
@@ -133,6 +151,14 @@ func (idx *Index) AddDoc(id string, fields map[string]string, score float64) {
 					fieldTags[t] = set
 				}
 				set[id] = struct{}{}
+			}
+		case FieldGeo:
+			if g, ok := idx.geos[f.Name]; ok {
+				g.Set(id, raw)
+			}
+		case FieldVector:
+			if vi, ok := idx.vectors[f.Name]; ok {
+				_ = vi.Set(id, raw)
 			}
 		}
 	}
@@ -180,6 +206,14 @@ func (idx *Index) removeLocked(id string) {
 				if len(set) == 0 {
 					delete(idx.tags[f.Name], tag)
 				}
+			}
+		case FieldGeo:
+			if g, ok := idx.geos[f.Name]; ok {
+				g.Del(id)
+			}
+		case FieldVector:
+			if vi, ok := idx.vectors[f.Name]; ok {
+				vi.Del(id)
 			}
 		}
 	}
@@ -266,6 +300,26 @@ func (idx *Index) NumericRange(field string, lo, hi float64) []string {
 	return out
 }
 
+// GeoWithin returns docIDs whose `field` value sits within `radiusM`
+// meters of (lat, lon). Empty slice when the field isn't a GEO field.
+func (idx *Index) GeoWithin(field string, lat, lon, radiusM float64) []string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	g, ok := idx.geos[field]
+	if !ok {
+		return nil
+	}
+	return g.Within(lat, lon, radiusM)
+}
+
+// VectorIndex exposes the per-field vector index so the query path can
+// run KNN searches.
+func (idx *Index) VectorIndex(field string) *vectorIndex {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.vectors[field]
+}
+
 // TagDocs returns the doc IDs tagged with `tag` on `field`.
 func (idx *Index) TagDocs(field, tag string) []string {
 	idx.mu.RLock()
@@ -312,6 +366,29 @@ func (p *postingList) add(docID string, freq int) {
 	p.entries = append(p.entries, posting{})
 	copy(p.entries[pos+1:], p.entries[pos:])
 	p.entries[pos] = posting{docID: docID, freq: freq}
+}
+
+// addWithPositions records a doc with the term's exact in-field offsets.
+// Required by phrase queries that demand contiguous ordering.
+func (p *postingList) addWithPositions(docID string, positions []int) {
+	pos := sort.Search(len(p.entries), func(i int) bool { return p.entries[i].docID >= docID })
+	if pos < len(p.entries) && p.entries[pos].docID == docID {
+		p.entries[pos].freq += len(positions)
+		p.entries[pos].positions = append(p.entries[pos].positions, positions...)
+		return
+	}
+	p.entries = append(p.entries, posting{})
+	copy(p.entries[pos+1:], p.entries[pos:])
+	p.entries[pos] = posting{docID: docID, freq: len(positions), positions: append([]int(nil), positions...)}
+}
+
+// positions returns the recorded positions for (docID), or nil.
+func (p *postingList) positions(docID string) []int {
+	pos := sort.Search(len(p.entries), func(i int) bool { return p.entries[i].docID >= docID })
+	if pos < len(p.entries) && p.entries[pos].docID == docID {
+		return p.entries[pos].positions
+	}
+	return nil
 }
 
 func (p *postingList) remove(docID string) {

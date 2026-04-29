@@ -32,6 +32,8 @@ const (
 	FieldText FieldType = iota
 	FieldNumeric
 	FieldTag
+	FieldGeo
+	FieldVector
 )
 
 // String renders the field type for FT.INFO output.
@@ -41,6 +43,10 @@ func (f FieldType) String() string {
 		return "NUMERIC"
 	case FieldTag:
 		return "TAG"
+	case FieldGeo:
+		return "GEO"
+	case FieldVector:
+		return "VECTOR"
 	}
 	return "TEXT"
 }
@@ -55,6 +61,14 @@ type FieldSpec struct {
 	NoIndex  bool
 	NoStem   bool
 	TagSep   string // TAG only; default ","
+
+	// VECTOR-only attributes.
+	VectorAlgo     string // "FLAT" | "HNSW"
+	VectorDim      int
+	VectorMetric   string // "L2" | "IP" | "COSINE"
+	VectorM        int    // HNSW: graph degree (default 16)
+	VectorEFConstr int    // HNSW: ef_construction (default 200)
+	VectorEFRun    int    // HNSW: ef_runtime (default 10)
 }
 
 // Schema is the index's field definition.
@@ -96,6 +110,48 @@ func ParseSchema(args []string) (*Schema, error) {
 			f.Type = FieldNumeric
 		case "TAG":
 			f.Type = FieldTag
+		case "GEO":
+			f.Type = FieldGeo
+		case "VECTOR":
+			f.Type = FieldVector
+			// VECTOR fields take a sub-clause:
+			//   VECTOR <algo> <numattrs> attr value [attr value ...]
+			if i+1 >= len(args) {
+				return nil, errors.New("VECTOR field needs an algorithm")
+			}
+			f.VectorAlgo = strings.ToUpper(args[i])
+			i++
+			f.VectorM, f.VectorEFConstr, f.VectorEFRun = 16, 200, 10
+			if i >= len(args) {
+				return nil, errors.New("VECTOR field needs an attr count")
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil {
+				return nil, errors.New("VECTOR: attr count must be integer")
+			}
+			i++
+			if i+n*2 > len(args) {
+				return nil, errors.New("VECTOR: attr list too short")
+			}
+			for j := 0; j < n; j++ {
+				key := strings.ToUpper(args[i])
+				val := args[i+1]
+				i += 2
+				switch key {
+				case "TYPE":
+					// FLOAT32 only — we don't store binary precision flag
+				case "DIM":
+					f.VectorDim, _ = strconv.Atoi(val)
+				case "DISTANCE_METRIC":
+					f.VectorMetric = strings.ToUpper(val)
+				case "M":
+					f.VectorM, _ = strconv.Atoi(val)
+				case "EF_CONSTRUCTION":
+					f.VectorEFConstr, _ = strconv.Atoi(val)
+				case "EF_RUNTIME":
+					f.VectorEFRun, _ = strconv.Atoi(val)
+				}
+			}
 		default:
 			return nil, errors.New("schema: unknown field type " + typ)
 		}

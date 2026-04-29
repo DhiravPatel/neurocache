@@ -107,8 +107,15 @@ func ParseAggPipeline(args []string) (*AggPipeline, error) {
 			p.Stages = append(p.Stages, &limitStage{offset: off, count: cnt})
 			i += 3
 		case "FILTER":
-			// FILTER is a v2.4+ feature; out of scope for the subset.
-			return nil, errors.New("FILTER stage not supported in this build")
+			// FT.AGGREGATE FILTER expr — drop every row where the
+			// expression evaluates to 0 / empty / false. The expression
+			// language reuses the APPLY evaluator (field refs, numeric
+			// literals, arithmetic), with comparison operators added.
+			if i+1 >= len(args) {
+				return nil, errors.New("FILTER: missing expression")
+			}
+			p.Stages = append(p.Stages, &filterStage{expr: args[i+1]})
+			i += 2
 		default:
 			return nil, errors.New("unknown aggregate stage: " + args[i])
 		}
@@ -325,6 +332,138 @@ func (l *limitStage) apply(in *AggResult) *AggResult {
 	}
 	in.Rows = in.Rows[l.offset:end]
 	return in
+}
+
+// filterStage drops rows where evalFilterExpr returns false. The
+// expression grammar is APPLY's arithmetic + comparison ops + the
+// boolean connectives && and ||; we don't need full SQL semantics, just
+// enough to express "@price > 10 && @qty > 0".
+type filterStage struct {
+	expr string
+}
+
+func (f *filterStage) apply(in *AggResult) *AggResult {
+	out := &AggResult{Rows: in.Rows[:0]}
+	for _, row := range in.Rows {
+		if evalFilterBool(f.expr, row) {
+			out.Rows = append(out.Rows, row)
+		}
+	}
+	return out
+}
+
+// evalFilterBool returns true when the expression is non-zero / true.
+// Comparisons return 1 / 0; arithmetic results > 0 are truthy.
+func evalFilterBool(expr string, row map[string]string) bool {
+	v := evalFilterExpr(expr, row)
+	return v != 0
+}
+
+// evalFilterExpr extends the APPLY evaluator with comparison + boolean
+// operators. We add a small layer above the existing exprParser rather
+// than rewrite the whole grammar.
+func evalFilterExpr(expr string, row map[string]string) float64 {
+	p := &filterExprParser{base: exprParser{src: strings.TrimSpace(expr), row: row}}
+	return p.parseOr()
+}
+
+type filterExprParser struct {
+	base exprParser
+}
+
+func (p *filterExprParser) parseOr() float64 {
+	v := p.parseAnd()
+	for {
+		p.base.skipSpace()
+		if p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '|' && p.base.src[p.base.pos+1] == '|' {
+			p.base.pos += 2
+			r := p.parseAnd()
+			if v != 0 || r != 0 {
+				v = 1
+			} else {
+				v = 0
+			}
+			continue
+		}
+		return v
+	}
+}
+
+func (p *filterExprParser) parseAnd() float64 {
+	v := p.parseCompare()
+	for {
+		p.base.skipSpace()
+		if p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '&' && p.base.src[p.base.pos+1] == '&' {
+			p.base.pos += 2
+			r := p.parseCompare()
+			if v != 0 && r != 0 {
+				v = 1
+			} else {
+				v = 0
+			}
+			continue
+		}
+		return v
+	}
+}
+
+func (p *filterExprParser) parseCompare() float64 {
+	left := p.base.parseExpr()
+	p.base.skipSpace()
+	if p.base.pos >= len(p.base.src) {
+		return left
+	}
+	op := ""
+	switch {
+	case p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '=' && p.base.src[p.base.pos+1] == '=':
+		op = "=="
+		p.base.pos += 2
+	case p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '!' && p.base.src[p.base.pos+1] == '=':
+		op = "!="
+		p.base.pos += 2
+	case p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '<' && p.base.src[p.base.pos+1] == '=':
+		op = "<="
+		p.base.pos += 2
+	case p.base.pos+1 < len(p.base.src) && p.base.src[p.base.pos] == '>' && p.base.src[p.base.pos+1] == '=':
+		op = ">="
+		p.base.pos += 2
+	case p.base.src[p.base.pos] == '<':
+		op = "<"
+		p.base.pos++
+	case p.base.src[p.base.pos] == '>':
+		op = ">"
+		p.base.pos++
+	default:
+		return left
+	}
+	right := p.base.parseExpr()
+	switch op {
+	case "==":
+		if left == right {
+			return 1
+		}
+	case "!=":
+		if left != right {
+			return 1
+		}
+	case "<":
+		if left < right {
+			return 1
+		}
+	case "<=":
+		if left <= right {
+			return 1
+		}
+	case ">":
+		if left > right {
+			return 1
+		}
+	case ">=":
+		if left >= right {
+			return 1
+		}
+	}
+	return 0
 }
 
 type applyStage struct {

@@ -18,6 +18,14 @@ type SearchHit struct {
 // matches contribute 1.0 (the index has no document-frequency story
 // for tags so a flat boost matches Redis behaviour).
 func (idx *Index) Search(q *QueryNode) []SearchHit {
+	return idx.SearchWithParams(q, nil)
+}
+
+// SearchWithParams resolves $param references in KNN clauses against
+// the FT.SEARCH PARAMS map. Other query kinds ignore params.
+func (idx *Index) SearchWithParams(q *QueryNode, params map[string]string) []SearchHit {
+	idx.queryParams = params
+	defer func() { idx.queryParams = nil }()
 	matches := idx.eval(q)
 	out := make([]SearchHit, 0, len(matches))
 	for id, score := range matches {
@@ -110,6 +118,53 @@ func (idx *Index) eval(n *QueryNode) map[string]float64 {
 			out[id] = 1
 		}
 		return out
+	case kGeo:
+		out := map[string]float64{}
+		for _, id := range idx.GeoWithin(n.Field, n.GeoLat, n.GeoLon, n.GeoRadM) {
+			out[id] = 1
+		}
+		return out
+	case kKNN:
+		// Resolve the parameter to the raw vector bytes / CSV.
+		raw, ok := idx.queryParams[n.KnnParam]
+		if !ok {
+			return map[string]float64{}
+		}
+		vi := idx.VectorIndex(n.Field)
+		if vi == nil {
+			return map[string]float64{}
+		}
+		query, err := parseVector(raw, vi.dim)
+		if err != nil {
+			return map[string]float64{}
+		}
+		results := vi.KNN(query, n.KnnK)
+		out := map[string]float64{}
+		// Convert distance → score (higher = better).
+		for _, r := range results {
+			out[r.DocID] = 1 / (1 + r.Distance)
+		}
+		return out
+	case kFuzzy:
+		// Walk every term in every TEXT field; keep matches whose
+		// Levenshtein distance to the query term is ≤ FuzzyMax.
+		out := map[string]float64{}
+		for _, f := range idx.Schema.Fields {
+			if f.Type != FieldText {
+				continue
+			}
+			for term, p := range idx.postings[f.Name] {
+				if levenshtein(term, n.Term, n.FuzzyMax+1) > n.FuzzyMax {
+					continue
+				}
+				for _, e := range p.entries {
+					// Slight penalty proportional to edit distance.
+					out[e.docID] += idx.BM25Score(f.Name, term, e.docID) * f.Weight /
+						float64(1+levenshtein(term, n.Term, n.FuzzyMax+1))
+				}
+			}
+		}
+		return out
 	case kAnd:
 		var acc map[string]float64
 		for i, child := range n.Children {
@@ -191,38 +246,100 @@ func (idx *Index) scoreSingleField(field, term string) map[string]float64 {
 	return out
 }
 
-// scorePhrase requires every term to appear in the same doc. We don't
-// currently store positions, so the implementation is conjunctive
-// instead of strictly contiguous — a clear note in the docs lists this
-// as a known subset behaviour.
+// scorePhrase requires every term to appear contiguously in the same
+// document. We use the positional postings recorded at index time:
+// for each candidate doc, walk the first term's positions and check
+// whether (pos+1, pos+2, …) appears in the subsequent terms' postings.
+// Without positions we'd only get conjunctive matching, which produces
+// false positives for queries like `"red wine"` against "wine red".
 func (idx *Index) scorePhrase(field string, phrase []string) map[string]float64 {
 	if len(phrase) == 0 {
 		return nil
 	}
-	var first map[string]float64
-	for i, term := range phrase {
-		var hit map[string]float64
-		if field != "" {
-			hit = idx.scoreSingleField(field, term)
-		} else {
-			hit = idx.scoreAcrossTextFields(term)
-		}
-		if i == 0 {
-			first = hit
-			continue
-		}
-		merged := map[string]float64{}
-		for id, sc := range first {
-			if other, ok := hit[id]; ok {
-				merged[id] = sc + other
+	out := map[string]float64{}
+	fields := []string{field}
+	if field == "" {
+		fields = nil
+		for _, f := range idx.Schema.Fields {
+			if f.Type == FieldText {
+				fields = append(fields, f.Name)
 			}
 		}
-		first = merged
 	}
-	// modest phrase boost to prioritise multi-term matches
-	for id := range first {
-		first[id] *= 1.25
+	for _, fname := range fields {
+		f := idx.Schema.Field(fname)
+		if f == nil || f.Type != FieldText {
+			continue
+		}
+		// Resolve every phrase term's posting list in this field.
+		stems := make([]string, len(phrase))
+		for i, term := range phrase {
+			stems[i] = term
+			if !f.NoStem {
+				stems[i] = stemSuffix(term)
+			}
+		}
+		first := idx.TermPostings(fname, stems[0])
+		if first == nil {
+			continue
+		}
+		// For each candidate doc, demand a contiguous match.
+		for _, e := range first.entries {
+			if !idx.phraseHits(fname, stems, e.docID) {
+				continue
+			}
+			out[e.docID] += idx.BM25Score(fname, stems[0], e.docID) * f.Weight * 1.5
+		}
 	}
-	_ = strings.Join(phrase, " ") // keep imports tidy if a future log line wants it
-	return first
+	_ = strings.Join(phrase, " ") // keep imports tidy
+	return out
+}
+
+// phraseHits checks whether `stems` appear in order, starting at one
+// of the first term's recorded positions. Returns false when the field
+// stored no positional data (which means the legacy add path was used
+// — phrase queries against such docs degrade to conjunctive).
+func (idx *Index) phraseHits(field string, stems []string, docID string) bool {
+	first := idx.TermPostings(field, stems[0])
+	if first == nil {
+		return false
+	}
+	starts := first.positions(docID)
+	if starts == nil {
+		// no positional data — best-effort conjunctive check
+		for _, term := range stems[1:] {
+			p := idx.TermPostings(field, term)
+			if p == nil || p.freq(docID) == 0 {
+				return false
+			}
+		}
+		return true
+	}
+	for _, start := range starts {
+		ok := true
+		for offset, term := range stems[1:] {
+			p := idx.TermPostings(field, term)
+			if p == nil {
+				ok = false
+				break
+			}
+			if !containsInt(p.positions(docID), start+offset+1) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(arr []int, v int) bool {
+	for _, x := range arr {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

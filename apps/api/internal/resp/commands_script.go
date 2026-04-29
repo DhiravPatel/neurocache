@@ -140,6 +140,8 @@ func (c *conn) scriptCmd(args []string) {
 	case "FLUSH":
 		c.eng.Scripts.Flush()
 		writeSimple(c.bw, "OK")
+	case "KILL":
+		c.scriptKillCmd()
 	default:
 		writeError(c.bw, "unknown SCRIPT subcommand")
 	}

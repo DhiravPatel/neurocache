@@ -28,6 +28,26 @@ var clusterRoutingExempt = map[string]bool{
 	"SUBSCRIBE": true, "UNSUBSCRIBE": true, "PSUBSCRIBE": true,
 	"PUNSUBSCRIBE": true, "PUBLISH": true, "PUBSUB": true,
 
+	// sharded pub/sub does its own slot routing inside the handler.
+	"SSUBSCRIBE": true, "SUNSUBSCRIBE": true, "SPUBLISH": true,
+
+	// MONITOR / FUNCTION / FCALL re-enter the dispatcher per-call;
+	// those nested calls do their own routing.
+	"MONITOR": true, "FUNCTION": true, "FCALL": true, "FCALL_RO": true,
+
+	// SENTINEL targets a specific node and bypasses slot routing.
+	// (CONFIG is already in the connection-control block above.)
+	"SENTINEL": true,
+
+	// NeuroCache-only primitives — single-node by design.
+	"IDEMPOTENT": true, "LOCK": true, "RATELIMIT": true, "DEDUP": true,
+	"CACHE.WEIGH": true, "CACHE.UNWEIGH": true, "CACHE.STATS": true,
+	"CACHE.WEIGHTS": true, "CACHE.HIT": true,
+	"KEY.TRACK": true, "KEY.UNTRACK": true, "KEY.HISTORY": true, "KEY.AT": true,
+	"AI.LIKE": true, "AI.RECOMMEND": true, "AI.SIMILAR": true,
+	"AI.STATS": true, "AI.FORGET": true,
+	"SHUTDOWN": true,
+
 	// scripting is keyless from the dispatcher's perspective; the
 	// individual redis.call invocations re-enter the routing check.
 	"EVAL": true, "EVALSHA": true, "SCRIPT": true,

@@ -42,8 +42,6 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeSimple(c.bw, "OK")
 	case "DBSIZE":
 		writeInt(c.bw, int64(c.eng.KV.Size()))
-	case "COMMAND":
-		writeArray(c.bw, []string{})
 	case "HELLO":
 		c.helloCmd(args)
 	case "QUIT":
@@ -57,7 +55,7 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "INFO":
 		writeBulk(c.bw, c.infoString())
 	case "DEBUG":
-		writeSimple(c.bw, "OK")
+		c.debugCmd(args)
 	case "RESET":
 		c.resetCmd()
 	case "OBJECT":
@@ -134,6 +132,120 @@ func (c *conn) dispatch(cmd string, args []string) {
 	// ─── modules ───────────────────────────────────────────────────
 	case "MODULE":
 		c.moduleCmd(args)
+
+	// ─── operational extras ────────────────────────────────────────
+	case "CONFIG":
+		c.configCmd(args)
+	case "MONITOR":
+		c.monitorCmd()
+	case "SSUBSCRIBE":
+		c.ssubscribeCmd(args)
+	case "SUNSUBSCRIBE":
+		c.sunsubscribeCmd(args)
+	case "SPUBLISH":
+		c.spublishCmd(args)
+	case "FUNCTION":
+		c.functionCmd(args)
+	case "FCALL":
+		c.fcallCmd(args, false)
+	case "FCALL_RO":
+		c.fcallCmd(args, true)
+	case "SENTINEL":
+		c.sentinelCmd(args)
+
+	// ─── new in this batch ─────────────────────────────────────────
+	case "SMISMEMBER":
+		c.smismemberCmd(args)
+	case "SINTERCARD":
+		c.sintercardCmd(args)
+	case "GETDEL":
+		c.getdelCmd(args)
+	case "GETEX":
+		c.getexCmd(args)
+	case "LPOS":
+		c.lposCmd(args)
+	case "ZUNIONSTORE":
+		c.zunionstoreCmd(args)
+	case "ZINTERSTORE":
+		c.zinterstoreCmd(args)
+	case "ZDIFFSTORE":
+		c.zdiffstoreCmd(args)
+	case "ZUNION":
+		c.zunionCmd(args)
+	case "ZINTER":
+		c.zinterCmd(args)
+	case "ZDIFF":
+		c.zdiffCmd(args)
+	case "ZINTERCARD":
+		c.zintercardCmd(args)
+	case "ZRANGEBYLEX":
+		c.zrangeByLexCmd(args, false)
+	case "ZREVRANGEBYLEX":
+		c.zrangeByLexCmd(args, true)
+	case "ZLEXCOUNT":
+		c.zlexcountCmd(args)
+	case "ZRANGESTORE":
+		c.zrangestoreCmd(args)
+	case "ZMPOP":
+		c.zmpopCmd(args)
+	case "BZMPOP":
+		c.bzmpopCmd(args)
+	case "LMPOP":
+		c.lmpopCmd(args)
+	case "BLMPOP":
+		c.blmpopCmd(args)
+	case "HEXPIRE":
+		c.hexpireCmd(args, false, false)
+	case "HPEXPIRE":
+		c.hexpireCmd(args, true, false)
+	case "HEXPIREAT":
+		c.hexpireCmd(args, false, true)
+	case "HPEXPIREAT":
+		c.hexpireCmd(args, true, true)
+	case "HTTL":
+		c.httlCmd(args, false)
+	case "HPTTL":
+		c.httlCmd(args, true)
+	case "HPERSIST":
+		c.hpersistCmd(args)
+	case "HRANDFIELD":
+		c.hrandfieldCmd(args)
+	case "LCS":
+		c.lcsCmd(args)
+	case "BITFIELD":
+		c.bitfieldCmd(args, false)
+	case "BITFIELD_RO":
+		c.bitfieldCmd(args, true)
+	case "SORT":
+		c.sortCmd(args, false)
+	case "SORT_RO":
+		c.sortCmd(args, true)
+	case "WAITAOF":
+		c.waitaofCmd(args)
+	case "XSETID":
+		c.xsetidCmd(args)
+
+	// ─── plumbing additions ────────────────────────────────────────
+	case "COMMAND":
+		c.commandCmd(args)
+	case "SHUTDOWN":
+		c.shutdownCmd(args)
+
+	// ─── novel NeuroCache primitives ───────────────────────────────
+	case "IDEMPOTENT":
+		c.idempotentCmd(args)
+	case "LOCK":
+		c.lockCmd(args)
+	case "RATELIMIT":
+		c.ratelimitCmd(args)
+	case "DEDUP":
+		c.dedupCmd(args)
+	case "CACHE.WEIGH", "CACHE.UNWEIGH", "CACHE.STATS", "CACHE.WEIGHTS", "CACHE.HIT":
+		c.cacheCmd(splitDottedSubcommand(cmd, args))
+	case "KEY.TRACK", "KEY.UNTRACK", "KEY.HISTORY", "KEY.AT":
+		c.keyHistoryCmd(splitDottedSubcommand(cmd, args))
+	case "AI.LIKE", "AI.RECOMMEND", "AI.SIMILAR", "AI.STATS", "AI.FORGET":
+		c.aiCmd(splitDottedSubcommand(cmd, args))
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{
@@ -1719,6 +1831,9 @@ func (c *conn) pubsubCmd(args []string) {
 		return
 	}
 	switch strings.ToUpper(args[0]) {
+	case "SHARDCHANNELS", "SHARDNUMSUB":
+		c.pubsubShardCmd(args)
+		return
 	case "CHANNELS":
 		pat := "*"
 		if len(args) >= 2 {
@@ -1747,30 +1862,55 @@ func (c *conn) xaddCmd(args []string) {
 	if !c.wantArgs("XADD", args, 4) {
 		return
 	}
-	// Optional MAXLEN ~N prefix
+	noMkStream := false
 	maxLen := 0
+	minID := ""
 	i := 1
-	if strings.EqualFold(args[i], "MAXLEN") {
-		if i+1 >= len(args) {
-			writeError(c.bw, "syntax error")
-			return
+	for i < len(args) {
+		switch strings.ToUpper(args[i]) {
+		case "NOMKSTREAM":
+			noMkStream = true
+			i++
+		case "MAXLEN":
+			if i+1 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			offset := i + 1
+			if args[offset] == "~" || args[offset] == "=" {
+				offset++
+			}
+			if offset >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			n, err := strconv.Atoi(args[offset])
+			if err != nil {
+				writeError(c.bw, "invalid MAXLEN")
+				return
+			}
+			maxLen = n
+			i = offset + 1
+		case "MINID":
+			if i+1 >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			offset := i + 1
+			if args[offset] == "~" || args[offset] == "=" {
+				offset++
+			}
+			if offset >= len(args) {
+				writeError(c.bw, "syntax error")
+				return
+			}
+			minID = args[offset]
+			i = offset + 1
+		default:
+			goto idArg
 		}
-		offset := i + 1
-		if args[offset] == "~" || args[offset] == "=" {
-			offset++
-		}
-		if offset >= len(args) {
-			writeError(c.bw, "syntax error")
-			return
-		}
-		n, err := strconv.Atoi(args[offset])
-		if err != nil {
-			writeError(c.bw, "invalid MAXLEN")
-			return
-		}
-		maxLen = n
-		i = offset + 1
 	}
+idArg:
 	if i >= len(args) {
 		writeError(c.bw, "syntax error")
 		return
@@ -1781,12 +1921,31 @@ func (c *conn) xaddCmd(args []string) {
 		writeError(c.bw, "wrong number of arguments for 'xadd'")
 		return
 	}
+	if noMkStream && c.eng.KV.Type(args[0]).String() == "none" {
+		writeNil(c.bw)
+		return
+	}
 	assigned, err := c.eng.KV.XAdd(args[0], id, fields, maxLen)
 	if err != nil {
 		c.writeStoreErr(err)
 		return
 	}
+	if minID != "" {
+		_, _ = c.eng.KV.XTrimMinID(args[0], minID)
+	}
 	writeBulk(c.bw, assigned)
+}
+
+// xsetidCmd: XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]
+func (c *conn) xsetidCmd(args []string) {
+	if !c.wantArgs("XSETID", args, 2) {
+		return
+	}
+	if err := c.eng.KV.XSetID(args[0], args[1]); err != nil {
+		c.writeStoreErr(err)
+		return
+	}
+	writeSimple(c.bw, "OK")
 }
 
 func (c *conn) xrangeCmd(args []string, reverse bool) {

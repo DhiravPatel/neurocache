@@ -50,6 +50,16 @@ var writeCommands = map[string]bool{
 
 	// NeuroCache AI-native
 	"SEMANTIC_SET": true, "CACHE_LLM": true, "MEMORY_ADD": true,
+
+	// new in the gap-closing batch
+	"GETDEL": true, "GETEX": true,
+	"ZUNIONSTORE": true, "ZINTERSTORE": true, "ZDIFFSTORE": true,
+	"ZRANGESTORE": true,
+	"ZMPOP": true, "BZMPOP": true, "LMPOP": true, "BLMPOP": true,
+	"HEXPIRE": true, "HPEXPIRE": true, "HEXPIREAT": true, "HPEXPIREAT": true,
+	"HPERSIST": true,
+	"BITFIELD": true,
+	"XSETID": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.
