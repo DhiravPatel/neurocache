@@ -62,6 +62,7 @@ type Entry struct {
 	Set    map[string]struct{}
 	ZSet   *ZSet
 	Stream *Stream
+	Module *ModuleValue // populated when Type == TypeModule
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry

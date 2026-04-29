@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import {
   Activity, Database, Brain, Zap, Sparkles, Terminal, BarChart3,
-  BookOpen, ExternalLink,
+  BookOpen, Boxes,
 } from "lucide-react";
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
@@ -15,6 +15,7 @@ const navItems = [
   { to: "/dashboard/semantic",   label: "Semantic",   icon: Sparkles  },
   { to: "/dashboard/llm",        label: "LLM Cache",  icon: Zap       },
   { to: "/dashboard/memory",     label: "Memory",     icon: Brain     },
+  { to: "/dashboard/modules",    label: "Modules",    icon: Boxes     },
   { to: "/dashboard/playground", label: "Playground", icon: Terminal  },
 ];
 
@@ -29,7 +30,7 @@ export default function Layout() {
           to="/"
           className="flex h-14 items-center gap-2 border-b border-border px-4 hover:bg-white/5"
         >
-          <div className="h-6 w-6 rounded-md bg-gradient-to-br from-primary to-accent" />
+          <img src="/favicon.svg" alt="NeuroCache" className="h-6 w-6" />
           <div className="text-sm font-semibold tracking-wide">NeuroCache</div>
           <span
             className={clsx(
@@ -74,12 +75,6 @@ export default function Layout() {
               className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5"
             >
               <BookOpen size={16} /> Docs
-            </Link>
-            <Link
-              to="/"
-              className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-100/60 hover:text-slate-100 dark:hover:bg-white/5"
-            >
-              <ExternalLink size={16} /> Landing
             </Link>
           </div>
         </nav>

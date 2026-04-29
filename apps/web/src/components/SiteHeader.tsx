@@ -1,6 +1,5 @@
-import { Link, NavLink } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Github, Book, LayoutDashboard } from "lucide-react";
-import clsx from "clsx";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function SiteHeader() {
@@ -11,10 +10,6 @@ export function SiteHeader() {
           <img src="/favicon.svg" alt="NeuroCache" className="h-6 w-6" />
           <span className="text-sm font-semibold tracking-wide">NeuroCache</span>
         </Link>
-        <nav className="hidden items-center gap-1 md:flex">
-          <HeaderLink to="/docs">Docs</HeaderLink>
-          <HeaderLink to="/dashboard">Dashboard</HeaderLink>
-        </nav>
         <div className="ml-auto flex items-center gap-2">
           <ThemeToggle />
           <a
@@ -37,35 +32,17 @@ export function SiteHeader() {
   );
 }
 
-function HeaderLink({ to, children }: { to: string; children: React.ReactNode }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        clsx(
-          "rounded-md px-3 py-1.5 text-sm transition-colors",
-          isActive
-            ? "bg-slate-700/30 text-slate-100 dark:bg-white/5"
-            : "text-slate-400 hover:text-slate-100",
-        )
-      }
-    >
-      {children}
-    </NavLink>
-  );
-}
-
 export function SiteFooter() {
   return (
     <footer className="mt-24 border-t border-border bg-surface/30">
       <div className="mx-auto grid max-w-6xl grid-cols-2 gap-8 px-6 py-10 md:grid-cols-4">
         <div>
           <div className="flex items-center gap-2">
-            <div className="h-5 w-5 rounded-md bg-gradient-to-br from-primary to-accent" />
+            <img src="/favicon.svg" alt="NeuroCache" className="h-5 w-5" />
             <span className="text-sm font-semibold">NeuroCache</span>
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            The memory layer for AI applications. MIT licensed, self-hostable.
+            The memory layer for AI applications. Self-hostable.
           </p>
         </div>
         <FooterCol
@@ -95,7 +72,7 @@ export function SiteFooter() {
         />
       </div>
       <div className="border-t border-border py-4 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} NeuroCache · MIT License
+        © {new Date().getFullYear()} NeuroCache
       </div>
     </footer>
   );

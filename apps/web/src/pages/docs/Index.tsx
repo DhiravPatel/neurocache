@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Rocket, BookOpen, Sparkles, Zap, Brain, Database, Gauge, Wrench } from "lucide-react";
+import { Rocket, BookOpen, Sparkles, Zap, Brain, Database, Gauge, Wrench, Boxes, Network } from "lucide-react";
 import { Code } from "../../components/Code";
 
 export default function DocsIndex() {
@@ -49,11 +49,19 @@ export default function DocsIndex() {
         <Card to="/docs/commands"       icon={Database} title="Commands">
           Reference for every command, both Redis and AI-native.
         </Card>
+        <Card to="/docs/commands#modules" icon={Boxes}  title="Modules">
+          JSON, TimeSeries, Search, Bloom / Cuckoo / CMS &mdash; activate
+          with <code>MODULE LOAD</code>.
+        </Card>
+        <Card to="/docs/commands#cluster" icon={Network} title="Cluster">
+          16384-slot routing, gossip, MOVED/ASK redirection, MIGRATE.
+          Drop-in for Redis cluster clients.
+        </Card>
         <Card to="/docs/configuration"  icon={Wrench}   title="Configuration">
           Environment variables, eviction policies, CORS, logging.
         </Card>
         <Card to="/docs/deployment"     icon={Gauge}    title="Deployment">
-          Render, Fly, Railway, self-host — production checklists.
+          Render, Fly, Railway, self-host &mdash; production checklists.
         </Card>
       </div>
 

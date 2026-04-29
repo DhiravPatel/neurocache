@@ -15,6 +15,14 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/logger"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/resp"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/webui"
+
+	// Built-in modules — imported for side effects so MODULE LOAD can
+	// activate them by name. Add new modules here to compile them in.
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/echo"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/jsonmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/probmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/searchmod"
+	_ "github.com/dhiravpatel/neurocache/apps/api/internal/modules/builtin/tsmod"
 )
 
 func main() {

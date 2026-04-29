@@ -97,6 +97,13 @@ type conn struct {
 	replCapa        []string
 	adoptedByMaster *replication.ReplicaLink
 
+	// Cluster-mode per-conn flags. asking is single-shot — set by the
+	// ASKING command, consumed by the very next dispatched command.
+	// readonly toggles whether this conn accepts reads on imported slots
+	// from a replica perspective (READONLY / READWRITE).
+	asking   bool
+	readonly bool
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -234,6 +241,26 @@ func (c *conn) execute(parts []string) {
 		if !allowedDuringSubscribe[cmd] {
 			c.writeMu.Lock()
 			writeError(c.bw, "Can't execute '"+strings.ToLower(cmd)+"': only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT are allowed in this context")
+			c.writeMu.Unlock()
+			return
+		}
+	}
+
+	// Cluster slot routing. Skipped for cluster-admin commands and any
+	// command that doesn't carry a key. The asking flag is single-shot.
+	if c.eng.Cluster != nil && c.eng.Cluster.Enabled() && !clusterRoutingExempt[cmd] {
+		keys := keysForCommand(cmd, args)
+		v := c.eng.Cluster.Route(keys, c.asking)
+		c.asking = false
+		switch v.Redirect {
+		case 1, 2: // RedirectMoved (1) or RedirectAsk (2)
+			c.writeMu.Lock()
+			writeError(c.bw, v.Error())
+			c.writeMu.Unlock()
+			return
+		case 3, 4, 5: // CrossSlot, TryAgain, ClusterDown
+			c.writeMu.Lock()
+			writeError(c.bw, v.Error())
 			c.writeMu.Unlock()
 			return
 		}

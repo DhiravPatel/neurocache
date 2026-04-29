@@ -118,6 +118,22 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.psyncCmd(args)
 	case "REPLCONF":
 		c.replconfCmd(args)
+
+	// ─── cluster ───────────────────────────────────────────────────
+	case "CLUSTER":
+		c.clusterCmd(args)
+	case "ASKING":
+		c.askingCmd()
+	case "READONLY":
+		c.readonlyCmd()
+	case "READWRITE":
+		c.readwriteCmd()
+	case "MIGRATE":
+		c.migrateCmd(args)
+
+	// ─── modules ───────────────────────────────────────────────────
+	case "MODULE":
+		c.moduleCmd(args)
 	case "TIME":
 		now := time.Now()
 		writeValue(c.bw, []any{
@@ -1339,6 +1355,12 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeBulk(c.bw, memory.Synthesize(hits))
 
 	default:
+		// Module-registered commands take the slow path: built-ins
+		// always win on name collision, but anything new is claimed
+		// here.
+		if c.dispatchModule(cmd, args) {
+			return
+		}
 		writeError(c.bw, "unknown command '"+cmd+"'")
 	}
 }

@@ -9,6 +9,7 @@ import KVPage from "./pages/KV";
 import SemanticPage from "./pages/Semantic";
 import LLMCachePage from "./pages/LLMCache";
 import MemoryPage from "./pages/Memory";
+import ModulesPage from "./pages/Modules";
 import Playground from "./pages/Playground";
 
 import DocsLayout from "./layouts/DocsLayout";
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="semantic"  element={<SemanticPage />} />
         <Route path="llm"       element={<LLMCachePage />} />
         <Route path="memory"    element={<MemoryPage />} />
+        <Route path="modules"   element={<ModulesPage />} />
         <Route path="playground" element={<Playground />} />
       </Route>
 
