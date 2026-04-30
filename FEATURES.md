@@ -838,9 +838,97 @@ Every Phase 11 family is reachable as JSON on the same router under `/api/...`. 
 - `c.eng.RecordWrite()` propagates them to replicas via the same fan-out as every other command.
 - ACL: each family is in the `@aiops` category. `+@aiops` grants the whole Phase 11 surface in one rule.
 
+## Phase 12 — Uniqueness primitives (genuinely beyond Redis)
+
+Seven new families that solve problems Redis doesn't address at the cache layer at all — not "implements differently", but "doesn't ship". Tagged cache invalidation closes the never-ending side-channel-set problem; a real production job queue (priorities + retries + DLQ + visibility timeout) replaces the Streams-as-job-queue anti-pattern; feature flags with progressive rollout become first-class instead of "use a SET and a SCRIPT"; structured audit logging gets indexed by actor / resource / action; in-memory distributed tracing gives you span timelines without an OpenTelemetry collector; JSON-Patch document sync replaces home-grown Yjs/Automerge layers; and a native Prometheus exporter ships `/metrics` directly off the cache. State lives in `internal/aiops/`; RESP handlers in `internal/resp/commands_phase12.go`; HTTP handlers in `internal/http/aiops.go`; routes in `internal/http/router.go`. All writes flow through the same AOF + replication path as every other command.
+
+### CHURN.* — tagged cache invalidation
+
+| Command | What it does | Where |
+|---|---|---|
+| `CHURN.TAG key tag [tag ...]` | Attach tags to a key. Returns the count of new (key,tag) pairs. | `aiops/churn.go` + `resp/commands_phase12.go` |
+| `CHURN.UNTAG key [tag ...]` | Remove (key,tag) pairs; no tags = remove every tag from key. | same |
+| `CHURN.INVALIDATE tag [tag ...]` | Drop every key carrying any listed tag. Returns the keys. | same |
+| `CHURN.KEYS tag` | Every key currently carrying tag. | same |
+| `CHURN.TAGS_OF key` | Every tag attached to key. | same |
+| `CHURN.TAGS` | Every known tag. | same |
+| `CHURN.STATS` | tagged_keys + unique_tags. | same |
+
+### WORKER.* — production job queue
+
+| Command | What it does | Where |
+|---|---|---|
+| `WORKER.ENQUEUE queue payload [PRIORITY n] [IDEMPKEY k]` | Enqueue a job (idempotency-key dedupes). Returns id. | `aiops/worker.go` + `resp/commands_phase12.go` |
+| `WORKER.DEQUEUE queue [VISIBILITY ms]` | Reserve the highest-priority job for a visibility window. | same |
+| `WORKER.ACK queue id` | Mark a reserved job complete. | same |
+| `WORKER.NACK queue id error [DELAY ms]` | Fail a job → re-queue or DLQ. | same |
+| `WORKER.STATS queue` | Pending / reserved / DLQ / max_attempts / dlq_cap. | same |
+| `WORKER.DLQ queue` | List dead-letter jobs. | same |
+| `WORKER.REQUEUE queue id` | Move a DLQ job back to the head of the queue. | same |
+| `WORKER.CONFIG queue [MAXATTEMPTS n] [DLQCAP n]` | Tune the retry / DLQ ceiling. | same |
+| `WORKER.QUEUES` | List active queue names. | same |
+
+### FLAG.* — feature flags with progressive rollout
+
+| Command | What it does | Where |
+|---|---|---|
+| `FLAG.SET name on\|off PERCENTAGE n [ALLOW ...] [DENY ...]` | Configure default state + rollout %. | `aiops/flag.go` + `resp/commands_phase12.go` |
+| `FLAG.IS name user` | Evaluate the flag for a user (deny → allow → %-rollout → on). | same |
+| `FLAG.ALLOW name user` / `FLAG.DENY name user` | Pin a user to allow / deny. | same |
+| `FLAG.GET name` | Snapshot of state + counters. | same |
+| `FLAG.LIST` / `FLAG.DELETE name` | List or remove a flag. | same |
+
+### AUDIT.* — append-only structured event log
+
+| Command | What it does | Where |
+|---|---|---|
+| `AUDIT.LOG actor action resource [OUTCOME outcome] [ATTRS k v ...]` | Append an immutable record. | `aiops/audit.go` + `resp/commands_phase12.go` |
+| `AUDIT.QUERY [ACTOR a] [ACTION a] [RESOURCE r] [SINCE ms] [UNTIL ms] [LIMIT n]` | Indexed search reverse-chronological. | same |
+| `AUDIT.COUNT` / `AUDIT.STATS` | Cardinality + index sizes. | same |
+| `AUDIT.RETENTION n` | Adjust the ring cap (default 1M). | same |
+
+### TRACE.* — in-memory distributed tracing
+
+| Command | What it does | Where |
+|---|---|---|
+| `TRACE.START trace_id span_id [PARENT pid] name [ATTRS k v ...]` | Open a span. | `aiops/trace.go` + `resp/commands_phase12.go` |
+| `TRACE.END trace_id span_id [STATUS s]` | Close a span; computes duration. | same |
+| `TRACE.ANNOTATE trace_id span_id k v [k v ...]` | Add attributes after the fact. | same |
+| `TRACE.GET trace_id` | Every span sorted by start time. | same |
+| `TRACE.LIST [LIMIT n]` | Most-recently-touched trace ids. | same |
+| `TRACE.FORGET trace_id` / `TRACE.STATS` | Drop / stat. | same |
+
+### DOC.* — JSON-Patch document sync
+
+| Command | What it does | Where |
+|---|---|---|
+| `DOC.INIT key json-value` | Create / overwrite. Version becomes 1. | `aiops/doc.go` + `resp/commands_phase12.go` |
+| `DOC.APPLY key json-patch-array` | Apply RFC 6902 ops atomically; bumps version. | same |
+| `DOC.GET key` | Current value + version. | same |
+| `DOC.SINCE key version` | Patches after version, or a fresh snapshot if the caller fell off retention. | same |
+| `DOC.LIST` / `DOC.FORGET key` | Enumerate / remove. | same |
+
+### OBSERVE.* — Prometheus exporter
+
+| Command | What it does | Where |
+|---|---|---|
+| `OBSERVE.REGISTER COUNTER\|GAUGE name help [LABEL k v ...]` | Declare a metric. | `aiops/observe.go` + `resp/commands_phase12.go` |
+| `OBSERVE.INC name [delta]` | Bump a counter (default delta = 1). | same |
+| `OBSERVE.SET name value` | Write a gauge. | same |
+| `OBSERVE.RENDER` | Prometheus text exposition. Also available at `GET /metrics`. | same |
+
+### HTTP surface
+
+Every Phase 12 family is reachable on the same router under `/api/...` (and `/metrics` for the Prometheus scraper). Examples: `POST /api/churn/{key}`, `POST /api/worker/{queue}`, `POST /api/flag/{name}`, `POST /api/audit`, `POST /api/trace/{trace_id}/{span_id}`, `PATCH /api/doc/{key}`, `GET /metrics`. Full table in `internal/http/aiops.go` + `internal/http/router.go`.
+
+### Persistence + replication
+- Every mutating command is in `internal/resp/writeset.go` so AOF replays them faithfully on restart. `WORKER.DEQUEUE` is included so the in-flight reserved set survives a restart.
+- `c.eng.RecordWrite()` propagates them to replicas like any other command.
+- ACL: CHURN/WORKER/FLAG/AUDIT/TRACE/DOC live in `@aiops`; OBSERVE lives in `@admin` since it's metric management.
+
 ## Total command count
 
-**~642 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives.
+**~685 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives + uniqueness primitives.
 
 ## Known gaps
 

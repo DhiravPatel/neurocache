@@ -891,6 +891,158 @@ GRAPH.PATH alice acme                  # → one hop`,
           { cmd: "MCP.RPC json-rpc-frame", desc: "Pass-through for arbitrary JSON-RPC methods." },
         ],
       },
+      {
+        id: "churn",
+        title: "Tagged cache invalidation",
+        blurb: (
+          <>
+            Solves cache invalidation by tagging keys at write time and
+            invalidating by tag at read time. <code>CHURN.TAG</code> attaches
+            tags; <code>CHURN.INVALIDATE</code> drops every key carrying any of
+            the listed tags and returns the dropped key list. Replaces the
+            side-channel sets every team eventually builds in app code.
+          </>
+        ),
+        commands: [
+          { cmd: "CHURN.TAG key tag [tag ...]", desc: "Attach one or more tags to a key. Returns count of new (key, tag) pairs added." },
+          { cmd: "CHURN.UNTAG key [tag ...]", desc: "Remove (key, tag) pairs. With no tags, removes the key from every tag it carries. Returns the count of pairs removed." },
+          { cmd: "CHURN.INVALIDATE tag [tag ...]", desc: "Drop every key carrying any of the listed tags. Returns the dropped key list so the caller can re-prime." },
+          { cmd: "CHURN.KEYS tag", desc: "Every key currently carrying tag." },
+          { cmd: "CHURN.TAGS_OF key", desc: "Every tag attached to a key." },
+          { cmd: "CHURN.TAGS", desc: "Every known tag." },
+          { cmd: "CHURN.STATS", desc: "tagged_keys + unique_tags snapshot." },
+        ],
+      },
+      {
+        id: "worker",
+        title: "Production job queue",
+        blurb: (
+          <>
+            A real worker queue: priorities, retries with exponential backoff,
+            dead-letter routing, visibility-timeout for at-least-once delivery,
+            and per-job idempotency. Beyond what STREAMS gives — which is a
+            great audit log but a poor job queue — and beyond SCHEDULE.*, which
+            is fire-and-forget, not retry-aware.
+          </>
+        ),
+        commands: [
+          { cmd: "WORKER.ENQUEUE queue payload [PRIORITY n] [IDEMPKEY k]", desc: "Enqueue a job. Idempotency key dedupes against pending + reserved jobs on the same queue. Returns the assigned id." },
+          { cmd: "WORKER.DEQUEUE queue [VISIBILITY ms]", desc: "Reserve the highest-priority job for a visibility window (default 30s). If the worker dies without ACK/NACK, the sweeper requeues with attempts++." },
+          { cmd: "WORKER.ACK queue id", desc: "Mark a reserved job complete. Returns 1/0." },
+          { cmd: "WORKER.NACK queue id error [DELAY ms]", desc: "Fail a reserved job. Re-queues until max-attempts, then dead-letters. DELAY postpones re-queue for transient failures." },
+          { cmd: "WORKER.STATS queue", desc: "pending / reserved / dlq / max_attempts / dlq_cap snapshot." },
+          { cmd: "WORKER.DLQ queue", desc: "List dead-letter jobs (most-recent first)." },
+          { cmd: "WORKER.REQUEUE queue id", desc: "Move a DLQ job back to the head of the queue. Resets attempts." },
+          { cmd: "WORKER.CONFIG queue [MAXATTEMPTS n] [DLQCAP n]", desc: "Tune retry / DLQ ceiling per queue. Defaults: 5 attempts, 1000 DLQ entries." },
+          { cmd: "WORKER.QUEUES", desc: "List active queue names." },
+        ],
+      },
+      {
+        id: "flag",
+        title: "Feature flags with progressive rollout",
+        blurb: (
+          <>
+            Feature flag state with progressive rollout. Where AB.* is for
+            measuring outcomes across variants, FLAG.* is for gating access to
+            features per user with a percentage rollout, allow lists, and deny
+            lists. Same hashing as AB.* so a user's bucket is stable across
+            reconnects. Evaluation order: deny → allow → %-rollout → on/off
+            default.
+          </>
+        ),
+        commands: [
+          { cmd: "FLAG.SET name on|off PERCENTAGE n [ALLOW u1 ...] [DENY u1 ...]", desc: "Configure default state, rollout percentage, and (optional) allow/deny lists." },
+          { cmd: "FLAG.IS name user", desc: "Evaluate the flag for a user. Returns 1/0. Bumps internal eval/enabled counters." },
+          { cmd: "FLAG.ALLOW name user", desc: "Pin a user to the allow list. Returns 1 if added, 0 if the flag doesn't exist." },
+          { cmd: "FLAG.DENY name user", desc: "Pin a user to the deny list. Returns 1/0." },
+          { cmd: "FLAG.GET name", desc: "Snapshot of state + counters (evals, enabled, created_at, updated_at)." },
+          { cmd: "FLAG.LIST", desc: "List every flag name." },
+          { cmd: "FLAG.DELETE name", desc: "Remove a flag. Returns 1/0." },
+        ],
+      },
+      {
+        id: "audit",
+        title: "Structured audit log (compliance)",
+        blurb: (
+          <>
+            An append-only structured event log for SOC2 / HIPAA / GDPR
+            access-audit use cases. Each entry is immutable — records can be
+            queried by actor / resource / action / time range, but never
+            modified or deleted (except by retention sweep). Indexed on actor,
+            resource, action so the typical "who did what to X this week?"
+            query is fast.
+          </>
+        ),
+        commands: [
+          { cmd: "AUDIT.LOG actor action resource [OUTCOME outcome] [ATTRS k v ...]", desc: "Append a record. Returns the assigned id." },
+          { cmd: "AUDIT.QUERY [ACTOR a] [ACTION a] [RESOURCE r] [SINCE unix-ms] [UNTIL unix-ms] [LIMIT n]", desc: "Indexed search reverse-chronological. Empty filters select everything." },
+          { cmd: "AUDIT.COUNT", desc: "Total stored events." },
+          { cmd: "AUDIT.STATS", desc: "entries / max_entries / unique_actors / unique_resources / unique_actions." },
+          { cmd: "AUDIT.RETENTION n", desc: "Adjust the ring cap (default 1M). Older events drop on shrink." },
+        ],
+      },
+      {
+        id: "trace",
+        title: "In-memory distributed tracing",
+        blurb: (
+          <>
+            In-memory distributed tracing for agentic workflows. A full
+            OpenTelemetry collector is overkill for the "I want to see why my
+            agent took 12 seconds to plan a sandwich" case. With{" "}
+            <code>TRACE.*</code> you record spans inline and inspect the
+            timeline without an external collector.
+          </>
+        ),
+        commands: [
+          { cmd: "TRACE.START trace_id span_id [PARENT pid] name [ATTRS k v ...]", desc: "Open a span. parent_id may be empty for root spans." },
+          { cmd: "TRACE.END trace_id span_id [STATUS s]", desc: "Close a span; computes duration_ms from start. Returns 1/0." },
+          { cmd: "TRACE.ANNOTATE trace_id span_id k v [k v ...]", desc: "Add attributes to an existing span. Existing keys overwritten. Returns 1/0." },
+          { cmd: "TRACE.GET trace_id", desc: "Every span sorted by start time. Build the trace tree client-side." },
+          { cmd: "TRACE.LIST [LIMIT n]", desc: "Most-recently-touched trace ids." },
+          { cmd: "TRACE.FORGET trace_id", desc: "Drop a trace. Returns 1/0." },
+          { cmd: "TRACE.STATS", desc: "traces / total_spans / max_per_trace snapshot." },
+        ],
+      },
+      {
+        id: "doc",
+        title: "JSON-Patch document sync",
+        blurb: (
+          <>
+            Collaborative-document sync with an RFC 6902 JSON Patch op stream
+            and a monotonic version counter. Replaces the build-your-own-Yjs /
+            Automerge layer apps reach for when they need real-time multiplayer
+            state. Conflict resolution is last-writer-wins on individual paths,
+            surfaced via the version field.
+          </>
+        ),
+        commands: [
+          { cmd: "DOC.INIT key json-value", desc: "Create / overwrite a document with an initial JSON value. Version becomes 1." },
+          { cmd: "DOC.APPLY key json-patch-array", desc: "Apply a JSON Patch (RFC 6902) array of ops atomically; returns the new version." },
+          { cmd: "DOC.GET key", desc: "Current value + version + updated_at, or nil." },
+          { cmd: "DOC.SINCE key version", desc: "Patches after version, or a fresh snapshot when the caller fell off the retention window." },
+          { cmd: "DOC.LIST", desc: "Every document key." },
+          { cmd: "DOC.FORGET key", desc: "Drop a document. Returns 1/0." },
+        ],
+      },
+      {
+        id: "observe",
+        title: "Prometheus exporter",
+        blurb: (
+          <>
+            A native Prometheus text-exposition endpoint at <code>/metrics</code>.
+            We auto-register baseline runtime gauges (uptime, goroutines, GC
+            stats, memstats) and let user code register custom counters /
+            gauges via <code>OBSERVE.REGISTER</code>. Any Prometheus / VictoriaMetrics /
+            Mimir scraper picks it up without a sidecar.
+          </>
+        ),
+        commands: [
+          { cmd: "OBSERVE.REGISTER COUNTER|GAUGE name help [LABEL k v ...]", desc: "Declare a metric ahead of time so it appears in the export even when never incremented." },
+          { cmd: "OBSERVE.INC name [delta]", desc: "Bump a counter (creating it if missing). Default delta = 1." },
+          { cmd: "OBSERVE.SET name value", desc: "Write a gauge value (creating it if missing). Floats stored as int64 millis × 1000 internally for precision." },
+          { cmd: "OBSERVE.RENDER", desc: "Prometheus text exposition (Content-Type: text/plain; version=0.0.4). Also exposed at GET /metrics for Prometheus scrapers." },
+        ],
+      },
     ],
   },
 

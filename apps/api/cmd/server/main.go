@@ -92,10 +92,12 @@ func main() {
 	defer eng.Stop()
 
 	apiHandler := httpapi.NewRouter(eng, cfg, log)
-	// Serve embedded dashboard; delegate /api/* to the API router.
+	// Serve embedded dashboard; delegate /api/* and /metrics to the API
+	// router. /metrics is the Prometheus scrape endpoint and must not be
+	// shadowed by the SPA fallback.
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           webui.Handler(apiHandler, "/api/"),
+		Handler:           webui.Handler(apiHandler, "/api/", "/metrics"),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
