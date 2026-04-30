@@ -60,6 +60,29 @@ var writeCommands = map[string]bool{
 	"HPERSIST": true,
 	"BITFIELD": true,
 	"XSETID": true,
+
+	// phase 1: driver-critical fillers
+	"LMOVE": true, "BLMOVE": true,
+	"ZREMRANGEBYRANK": true, "ZREMRANGEBYSCORE": true, "ZREMRANGEBYLEX": true,
+	"GEOSEARCHSTORE": true,
+	// JSON.MERGE is module-write — module dispatch already records it
+	// via the writer hook; we do not list it here.
+
+	// phase 2: hash field TTL extras + deprecated geo family
+	"HGETDEL": true, "HGETEX": true, "HSETEX": true,
+	"GEORADIUS": true, "GEORADIUSBYMEMBER": true,
+	// _RO variants are reads; only the writing forms appear here.
+
+	// phase 4: niche 8.x-pattern additions. DIGEST is a pure read,
+	// XCFGSET only mutates group config (recoverable from XINFO),
+	// CLUSTER MIGRATION is admin observability — none of those land
+	// in AOF. The mutators below do.
+	"DELEX": true, "MSETEX": true,
+	"XACKDEL": true, "XDELEX": true,
+
+	// phase 5: vector set type — every state-changing V* command.
+	"VADD": true, "VREM": true,
+	"VSETATTR": true, "VDELATTR": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

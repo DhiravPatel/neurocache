@@ -166,17 +166,31 @@ func commandKeySpec(name string) (first, last, step int) {
 	switch name {
 	case "MSET", "MSETNX":
 		return 1, -1, 2
-	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT":
+	case "MGET", "DEL", "UNLINK", "EXISTS", "WATCH", "TYPE", "OBJECT", "DUMP", "PFCOUNT", "TOUCH", "DIGEST":
 		return 1, -1, 1
-	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "BLMOVE", "SMOVE":
+	case "MSETEX":
+		// TTL at args[0]; keys at 1, 3, 5, ... — last key sits at the
+		// penultimate slot (-2), step is 2.
+		return 1, -2, 2
+	case "DELEX", "XACKDEL", "XDELEX", "XCFGSET":
+		// All single-key, first-arg.
+		return 1, 1, 1
+	case "VADD", "VREM", "VSIM", "VEMB", "VSETATTR", "VGETATTR", "VDELATTR",
+		"VLINKS", "VINFO", "VCARD", "VDIM", "VRANDMEMBER", "VSCAN":
+		// Every V* command takes the vector-set key at args[0].
+		return 1, 1, 1
+	case "RENAME", "RENAMENX", "COPY", "RPOPLPUSH", "LMOVE", "BLMOVE", "SMOVE", "GEOSEARCHSTORE":
 		return 1, 2, 1
+	case "GEORADIUS", "GEORADIUS_RO", "GEORADIUSBYMEMBER", "GEORADIUSBYMEMBER_RO",
+		"HGETDEL", "HGETEX", "HSETEX", "HEXPIRETIME", "HPEXPIRETIME":
+		return 1, 1, 1
 	case "BITOP":
 		return 2, -1, 1
 	case "ZADD", "XADD", "GEOADD", "PFADD", "PFMERGE", "SADD", "SREM", "HSET", "HDEL", "LPUSH", "RPUSH":
 		return 1, 1, 1
 	case "BLPOP", "BRPOP", "BZPOPMIN", "BZPOPMAX":
 		return 1, -2, 1
-	case "MIGRATE", "XREAD", "XREADGROUP", "WAIT", "WAITAOF":
+	case "MIGRATE", "XREAD", "XREADGROUP", "WAIT", "WAITAOF", "HOTKEYS":
 		return 0, 0, 0
 	}
 	if name == "" {

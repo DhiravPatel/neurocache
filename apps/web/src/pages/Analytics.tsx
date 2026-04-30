@@ -40,6 +40,7 @@ export default function Analytics() {
   const { data: summary } = usePolling<MetricsSummary>(api.metricsSummary, 2000);
   const { data: timelineData } = usePolling(api.metricsTimeline, 1000);
   const { data: hotKeysData } = usePolling(api.metricsHotKeys, 3000);
+  const { data: hotTrackerData } = usePolling(() => api.hotKeysTracker(15), 3000);
   const [breakdown, setBreakdown] = useState<CommandCount[]>([]);
 
   useEffect(() => {
@@ -64,6 +65,8 @@ export default function Analytics() {
   }, [timelineData]);
 
   const hotKeys: HotKey[] = hotKeysData?.keys ?? [];
+  const trackerKeys = hotTrackerData?.keys ?? [];
+  const trackerStats = hotTrackerData?.stats;
   const topCommands = breakdown.slice(0, 8);
 
   return (
@@ -173,10 +176,10 @@ export default function Analytics() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="mt-6 grid gap-4 md:grid-cols-3">
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-            <Flame size={15} className="text-rose-400" /> Hot Keys
+            <Flame size={15} className="text-rose-400" /> Hot Keys (GET hits)
           </div>
           {hotKeys.length === 0 ? (
             <div className="py-6 text-center text-sm text-slate-500">No GET activity yet.</div>
@@ -186,6 +189,31 @@ export default function Analytics() {
                 <div key={k.key} className="flex items-center gap-3 rounded-md border border-border bg-bg/40 px-3 py-2">
                   <div className="flex-1 truncate font-mono text-sm text-primary">{k.key}</div>
                   <span className="pill">{fmt(k.hits)} hits</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+            <Flame size={15} className="text-orange-400" /> Hot Keys (writes)
+          </div>
+          {trackerStats && (
+            <div className="mb-2 text-xs text-slate-500">
+              K={trackerStats.K} · sample 1/{trackerStats.SampleEvery} · {fmt(trackerStats.Events)} events
+            </div>
+          )}
+          {trackerKeys.length === 0 ? (
+            <div className="py-6 text-center text-sm text-slate-500">
+              No keyspace mutations recorded yet.
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {trackerKeys.map((k) => (
+                <div key={k.key} className="flex items-center gap-3 rounded-md border border-border bg-bg/40 px-3 py-2">
+                  <div className="flex-1 truncate font-mono text-sm text-accent">{k.key}</div>
+                  <span className="pill">{fmt(k.count)} ops</span>
                 </div>
               ))}
             </div>

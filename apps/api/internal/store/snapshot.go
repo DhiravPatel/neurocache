@@ -19,6 +19,30 @@ type ExportEntry struct {
 	Set      []string
 	ZSet     []ExportZMember
 	Stream   []ExportStreamEntry
+	// Vector-set payload — config + members. Empty for non-vector entries.
+	VectorOpts    ExportVectorOpts
+	VectorMembers []ExportVectorMember
+}
+
+// ExportVectorOpts captures the index geometry so a fresh
+// vectorindex.Index can be reconstructed at restore time. Fields
+// mirror vectorindex.Options but use plain strings so the snapshot
+// schema doesn't depend on the vectorindex package's typed enums.
+type ExportVectorOpts struct {
+	Algo   string // "FLAT" | "HNSW"
+	Dim    int
+	Metric string // "COSINE" | "L2" | "IP"
+	M      int
+	EFC    int
+	EFR    int
+}
+
+// ExportVectorMember is one (id, vec, attr) triple in the snapshot.
+// Vec is the FP32 binary form (`Dim*4` little-endian bytes).
+type ExportVectorMember struct {
+	ID   string
+	Vec  string
+	Attr string // empty when no JSON attribute is set
 }
 
 // ExportZMember and ExportStreamEntry carry the minimal payload for
@@ -94,6 +118,30 @@ func (s *Store) Export() []ExportEntry {
 				e.Stream.mu.Unlock()
 				ent.Stream = xs
 			}
+		case TypeVector:
+			if e.Vector != nil && e.Vector.Index != nil {
+				idx := e.Vector.Index
+				ent.VectorOpts = ExportVectorOpts{
+					Algo:   string(idx.Algo()),
+					Dim:    idx.Dim(),
+					Metric: string(idx.Metric()),
+					M:      idx.M(),
+					EFC:    idx.EFC(),
+					EFR:    idx.EFR(),
+				}
+				ids := idx.IDs()
+				members := make([]ExportVectorMember, 0, len(ids))
+				for _, id := range ids {
+					vec, _ := idx.Get(id)
+					attr, _ := idx.GetAttr(id)
+					members = append(members, ExportVectorMember{
+						ID:   id,
+						Vec:  encodeVectorString(vec),
+						Attr: attr,
+					})
+				}
+				ent.VectorMembers = members
+			}
 		}
 		out = append(out, ent)
 	}
@@ -158,6 +206,11 @@ func (s *Store) Restore(entries []ExportEntry) {
 					e.Stream.lastID = id
 				}
 			}
+		case "vectorset":
+			e.Type = TypeVector
+			if !restoreVectorSet(e, ent) {
+				continue
+			}
 		default:
 			continue
 		}
@@ -168,6 +221,9 @@ func (s *Store) Restore(entries []ExportEntry) {
 
 // getOrCreateInline allocates the type-specific container for an Entry
 // that's already been partially populated (used only by Restore).
+// Vector sets need richer construction (algo / dim / metric) than the
+// other types; we leave Vector creation to restoreVectorSet so this
+// helper stays signature-compatible.
 func (s *Store) getOrCreateInline(e *Entry) (*Entry, error) {
 	switch e.Type {
 	case TypeList:
@@ -182,4 +238,26 @@ func (s *Store) getOrCreateInline(e *Entry) (*Entry, error) {
 		e.Stream = newStream()
 	}
 	return e, nil
+}
+
+// restoreVectorSet reconstructs a vector index from an ExportEntry.
+// Returns false when the export payload is corrupt — caller skips the
+// key entirely so a single bad row doesn't drop the whole snapshot.
+func restoreVectorSet(e *Entry, ent ExportEntry) bool {
+	idx, err := newVectorIndexFromExport(ent.VectorOpts)
+	if err != nil {
+		return false
+	}
+	e.Vector = &VectorSet{Index: idx}
+	for _, m := range ent.VectorMembers {
+		vec, err := decodeVectorString(m.Vec, ent.VectorOpts.Dim)
+		if err != nil {
+			continue
+		}
+		_ = idx.Set(m.ID, vec)
+		if m.Attr != "" {
+			idx.SetAttr(m.ID, m.Attr)
+		}
+	}
+	return true
 }

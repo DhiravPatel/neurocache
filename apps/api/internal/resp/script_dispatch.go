@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/vectorindex"
 )
 
 // scriptDispatch is the value-returning subset of the dispatcher used
@@ -284,6 +285,368 @@ func scriptDispatch(c *conn, cmd string, args []string) (any, error) {
 			}
 		}
 		return ret, nil
+
+	// phase 1 fillers — same shape as the dispatcher handlers, with the
+	// reply lowered to a plain Go value so Lua can consume it via the
+	// resp <-> Lua bridge in lua_real.go.
+	case "TOUCH":
+		return int64(c.eng.KV.Touch(args...)), nil
+	case "EXPIRETIME":
+		return c.eng.KV.ExpireTime(args[0]), nil
+	case "PEXPIRETIME":
+		return c.eng.KV.PExpireTime(args[0]), nil
+	case "LMOVE":
+		if len(args) < 4 {
+			return nil, errors.New("LMOVE requires source destination LEFT|RIGHT LEFT|RIGHT")
+		}
+		v, ok, err := c.eng.KV.LMove(args[0], args[1], strings.EqualFold(args[2], "RIGHT"), strings.EqualFold(args[3], "RIGHT"))
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, nil
+		}
+		c.eng.RecordWrite("LMOVE", args)
+		return v, nil
+	case "ZMSCORE":
+		scores, hits, err := c.eng.KV.ZMScore(args[0], args[1:]...)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(hits))
+		for i, h := range hits {
+			if !h {
+				out[i] = nil
+				continue
+			}
+			out[i] = strconv.FormatFloat(scores[i], 'f', -1, 64)
+		}
+		return out, nil
+	case "ZREMRANGEBYRANK":
+		s, _ := strconv.Atoi(args[1])
+		e, _ := strconv.Atoi(args[2])
+		n, err := c.eng.KV.ZRemRangeByRank(args[0], s, e)
+		c.eng.RecordWrite("ZREMRANGEBYRANK", args)
+		return int64(n), err
+	case "ZREMRANGEBYSCORE":
+		n, err := c.eng.KV.ZRemRangeByScore(args[0], args[1], args[2])
+		c.eng.RecordWrite("ZREMRANGEBYSCORE", args)
+		return int64(n), err
+	case "ZREMRANGEBYLEX":
+		n, err := c.eng.KV.ZRemRangeByLex(args[0], args[1], args[2])
+		c.eng.RecordWrite("ZREMRANGEBYLEX", args)
+		return int64(n), err
+
+	// phase 2 hash extras — same shapes as the dispatcher handlers.
+	// The reply value is the bare Go object so the gopher-lua bridge
+	// translates it into a Lua table without an extra wrapper.
+	case "HGETDEL":
+		// Layout: HGETDEL key FIELDS n field [field ...]
+		if len(args) < 4 || !strings.EqualFold(args[1], "FIELDS") {
+			return nil, errors.New("HGETDEL key FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[2])
+		if err != nil || n <= 0 || 3+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		fields := args[3 : 3+n]
+		values, hits, err := c.eng.KV.HGetDel(args[0], fields)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HGETDEL", args)
+		out := make([]any, len(fields))
+		for i := range fields {
+			if hits[i] {
+				out[i] = values[i]
+			}
+		}
+		return out, nil
+	case "HEXPIRETIME", "HPEXPIRETIME":
+		if len(args) < 4 || !strings.EqualFold(args[1], "FIELDS") {
+			return nil, errors.New(cmd + " key FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[2])
+		if err != nil || n <= 0 || 3+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		ms := cmd == "HPEXPIRETIME"
+		out, err := c.eng.KV.HExpireTime(args[0], args[3:3+n], ms)
+		if err != nil {
+			return nil, err
+		}
+		flat := make([]any, len(out))
+		for i, v := range out {
+			flat[i] = v
+		}
+		return flat, nil
+	case "HGETEX":
+		// Layout: HGETEX key [EX|PX|EXAT|PXAT v|PERSIST] FIELDS n field [...]
+		if len(args) < 4 {
+			return nil, errors.New("HGETEX requires key + TTL clause + FIELDS")
+		}
+		mode, value := "", int64(0)
+		i := 1
+	hexLoop:
+		for ; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "EX", "PX", "EXAT", "PXAT":
+				if i+1 >= len(args) {
+					return nil, errors.New("syntax error")
+				}
+				mode = strings.ToUpper(args[i])
+				v, err := strconv.ParseInt(args[i+1], 10, 64)
+				if err != nil {
+					return nil, errors.New("value is not an integer")
+				}
+				value = v
+				i++
+			case "PERSIST":
+				mode = "PERSIST"
+			case "FIELDS":
+				break hexLoop
+			}
+		}
+		if i+2 >= len(args) || !strings.EqualFold(args[i], "FIELDS") {
+			return nil, errors.New("HGETEX FIELDS numfields field [...]")
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err != nil || n <= 0 || i+2+n > len(args) {
+			return nil, errors.New("ERR numfields must match the field count")
+		}
+		fields := args[i+2 : i+2+n]
+		values, hits, err := c.eng.KV.HGetEx(args[0], fields, mode, value)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HGETEX", args)
+		out := make([]any, len(fields))
+		for j := range fields {
+			if hits[j] {
+				out[j] = values[j]
+			}
+		}
+		return out, nil
+	// phase 4 niche additions
+	case "DELEX":
+		if len(args) < 2 {
+			return nil, errors.New("DELEX key value")
+		}
+		n, err := c.eng.KV.DelEx(args[0], args[1])
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("DELEX", args)
+		return int64(n), nil
+	case "DIGEST":
+		out := make([]any, len(args))
+		for i, k := range args {
+			d, ok, err := c.eng.KV.Digest(k)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out[i] = d
+			}
+		}
+		return out, nil
+	case "MSETEX":
+		if len(args) < 3 {
+			return nil, errors.New("MSETEX seconds key value [...]")
+		}
+		secs, err := strconv.Atoi(args[0])
+		if err != nil || secs <= 0 {
+			return nil, errors.New("invalid expire time in 'msetex'")
+		}
+		rest := args[1:]
+		if len(rest)%2 != 0 {
+			return nil, errors.New("wrong number of arguments for MSETEX")
+		}
+		if err := c.eng.KV.MSetEx(time.Duration(secs)*time.Second, rest...); err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("MSETEX", args)
+		return "OK", nil
+	case "XACKDEL":
+		if len(args) < 3 {
+			return nil, errors.New("XACKDEL key group id [...]")
+		}
+		n, err := c.eng.KV.XAckDel(args[0], args[1], args[2:]...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("XACKDEL", args)
+		return int64(n), nil
+	// phase 5 — vector-set type. Cover the high-traffic V* commands
+	// scripts actually reach for (read paths + the basic insert).
+	case "VADD":
+		if len(args) < 3 {
+			return nil, errors.New("VADD key id vec [opts ...]")
+		}
+		key, id := args[0], args[1]
+		dim, _, _ := c.eng.KV.VDim(key)
+		opts := vectorindex.Options{Algo: vectorindex.AlgoHNSW, Metric: vectorindex.MetricCosine, Dim: dim}
+		// Light option parser — same shape as the dispatcher handler
+		// but limited to what scripts realistically pass.
+		for i := 3; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "DIM":
+				if i+1 < len(args) {
+					opts.Dim, _ = strconv.Atoi(args[i+1])
+					i++
+				}
+			case "METRIC":
+				if i+1 < len(args) {
+					opts.Metric = vectorindex.Metric(strings.ToUpper(args[i+1]))
+					i++
+				}
+			case "TYPE":
+				if i+1 < len(args) {
+					opts.Algo = vectorindex.Algo(strings.ToUpper(args[i+1]))
+					i++
+				}
+			}
+		}
+		if opts.Dim == 0 {
+			return nil, errors.New("DIM is required for the first VADD on this key")
+		}
+		vec, err := vectorindex.ParseVector(args[2], opts.Dim)
+		if err != nil {
+			return nil, err
+		}
+		n, err := c.eng.KV.VAdd(key, id, vec, opts)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("VADD", args)
+		return int64(n), nil
+	case "VREM":
+		if len(args) < 2 {
+			return nil, errors.New("VREM key id [id ...]")
+		}
+		n, err := c.eng.KV.VRem(args[0], args[1:]...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("VREM", args)
+		return int64(n), nil
+	case "VSIM":
+		if len(args) < 2 {
+			return nil, errors.New("VSIM key vec [COUNT n]")
+		}
+		count := 10
+		for i := 2; i < len(args); i++ {
+			if strings.EqualFold(args[i], "COUNT") && i+1 < len(args) {
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		}
+		dim, ok, _ := c.eng.KV.VDim(args[0])
+		if !ok {
+			return []any{}, nil
+		}
+		query, err := vectorindex.ParseVector(args[1], dim)
+		if err != nil {
+			return nil, err
+		}
+		results, err := c.eng.KV.VSim(args[0], query, count)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, 0, len(results)*2)
+		for _, r := range results {
+			out = append(out, r.ID)
+			out = append(out, strconv.FormatFloat(r.Distance, 'f', -1, 64))
+		}
+		return out, nil
+	case "VCARD":
+		if len(args) < 1 {
+			return nil, errors.New("VCARD key")
+		}
+		n, err := c.eng.KV.VCard(args[0])
+		return int64(n), err
+	case "VDIM":
+		if len(args) < 1 {
+			return nil, errors.New("VDIM key")
+		}
+		d, ok, err := c.eng.KV.VDim(args[0])
+		if err != nil || !ok {
+			return nil, err
+		}
+		return int64(d), nil
+	case "VEMB":
+		if len(args) < 2 {
+			return nil, errors.New("VEMB key id")
+		}
+		vec, ok, err := c.eng.KV.VEmb(args[0], args[1])
+		if err != nil || !ok {
+			return nil, err
+		}
+		return vectorindex.EncodeVector(vec), nil
+
+	case "XDELEX":
+		if len(args) < 2 {
+			return nil, errors.New("XDELEX key [REF|KEEPREF|ACKED] id [...]")
+		}
+		mode := store.XDelExKeepRef
+		rest := args[1:]
+		if len(rest) > 0 {
+			switch strings.ToUpper(rest[0]) {
+			case "KEEPREF", "REF", "ACKED":
+				m, err := store.ParseXDelExMode(rest[0])
+				if err != nil {
+					return nil, err
+				}
+				mode = m
+				rest = rest[1:]
+			}
+		}
+		if len(rest) == 0 {
+			return nil, errors.New("XDELEX requires at least one ID")
+		}
+		n, err := c.eng.KV.XDelEx(args[0], mode, rest...)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("XDELEX", args)
+		return int64(n), nil
+
+	case "HSETEX":
+		// Layout: HSETEX key seconds [FNX|FXX] FIELDS n field value [...]
+		if len(args) < 5 {
+			return nil, errors.New("HSETEX key seconds [FNX|FXX] FIELDS n field value [...]")
+		}
+		secs, err := strconv.Atoi(args[1])
+		if err != nil || secs < 0 {
+			return nil, errors.New("invalid expire time in 'hsetex'")
+		}
+		cond := ""
+		i := 2
+		switch strings.ToUpper(args[i]) {
+		case "FNX", "FXX":
+			cond = strings.ToUpper(args[i])
+			i++
+		}
+		if i >= len(args) || !strings.EqualFold(args[i], "FIELDS") {
+			return nil, errors.New("HSETEX FIELDS clause required")
+		}
+		if i+2 >= len(args) {
+			return nil, errors.New("ERR FIELDS numfields field value [...]")
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err != nil || n <= 0 {
+			return nil, errors.New("ERR numfields must be a positive integer")
+		}
+		rest := args[i+2:]
+		if len(rest) != 2*n {
+			return nil, errors.New("ERR numfields does not match the supplied field/value count")
+		}
+		res, err := c.eng.KV.HSetEx(args[0], time.Duration(secs)*time.Second, cond, rest)
+		if err != nil {
+			return nil, err
+		}
+		c.eng.RecordWrite("HSETEX", args)
+		return int64(res), nil
 
 	// pub/sub
 	case "PUBLISH":

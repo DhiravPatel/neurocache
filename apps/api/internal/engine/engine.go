@@ -82,6 +82,12 @@ type Engine struct {
 	History     *primitives.HistoryStore
 	Recommender *primitives.Recommender
 
+	// HotKeys is the runtime top-K access tracker driven by the
+	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
+	// scan + LFU-only OBJECT FREQ approach with a HeavyKeeper-backed
+	// streaming top-K answerable in O(K log K).
+	HotKeys *introspect.HotKeys
+
 	// replayRunner is the command applier the replica client uses. We
 	// stash it so (a) FollowMaster can restart the client after a role
 	// flip without re-wiring, and (b) tests can swap in a no-op.
@@ -157,10 +163,20 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.CostTable = primitives.NewCostTable()
 	e.History = primitives.NewHistoryStore(64, 24*time.Hour)
 	e.Recommender = primitives.NewRecommender()
+	e.HotKeys = introspect.NewHotKeys(introspect.HotKeysOptions{
+		K:           cfg.HotKeysK,
+		SampleEvery: cfg.HotKeysSample,
+	})
 	e.KV.SetNotifier(func(event, key string) {
 		e.BumpKey(key)
 		if key == "" {
 			return
+		}
+		// Feed the hot-key tracker. Sampling + atomic counter live
+		// inside HotKeys so this branch is essentially a single load
+		// + one atomic add when sampling skips the event.
+		if e.HotKeys != nil {
+			e.HotKeys.Record(key)
 		}
 		e.PubSub.Publish("__keyspace__:"+key, event)
 		e.PubSub.Publish("__keyevent__:"+event, key)

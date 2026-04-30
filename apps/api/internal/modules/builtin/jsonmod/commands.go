@@ -81,6 +81,8 @@ func initModule(ctx *modules.RegisterCtx) error {
 		{"JSON.RESP", -2, false, modules.KeyAt(1), jsonResp},
 		{"JSON.MGET", -3, false, modules.KeyRange(1, -1, 1), jsonMGet},
 		{"JSON.MSET", -4, true, modules.KeyRange(1, -1, 3), jsonMSet},
+		{"JSON.MERGE", -4, true, modules.KeyAt(1), jsonMerge},
+		{"JSON.ARRINDEX", -4, false, modules.KeyAt(1), jsonArrIndex},
 	}
 	for _, c := range cmds {
 		if err := register(c.name, c.arity, c.write, c.key, c.run); err != nil {

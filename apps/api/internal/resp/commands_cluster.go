@@ -184,6 +184,18 @@ func (c *conn) clusterCmd(args []string) {
 		writeBulk(c.bw, "BUMPED "+strconv.FormatInt(st.BumpEpoch(), 10))
 	case "LINKS":
 		c.clusterLinksCmd()
+	case "REPLICAS", "SLAVES":
+		c.clusterReplicasCmd(args[1:])
+	case "MYSHARDID":
+		c.clusterMyShardIDCmd()
+	case "FLUSHSLOTS":
+		c.clusterFlushSlotsCmd()
+	case "SAVECONFIG":
+		c.clusterSaveConfigCmd()
+	case "SLOT-STATS":
+		c.clusterSlotStatsCmd(args[1:])
+	case "MIGRATION":
+		c.clusterMigrationCmd()
 	default:
 		writeError(c.bw, "Unknown CLUSTER subcommand "+sub)
 	}

@@ -37,7 +37,7 @@ func (c *conn) blpopCmd(args []string, fromTail bool) {
 		deadline = time.Now().Add(timeout)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		// Re-check the keys after registering — a producer might have
 		// pushed between the fast-path miss and registration.
 		if k, v, ok := c.tryListPop(keys, fromTail); ok {
@@ -58,8 +58,18 @@ func (c *conn) blpopCmd(args []string, fromTail bool) {
 		// parking — without this, the kernel may hold the reply buffer.
 		_ = c.bw.Flush()
 		_, woke := w.Wait(remaining)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}
@@ -129,7 +139,7 @@ func (c *conn) blmoveCmd(args []string) {
 		deadline = time.Now().Add(timeout)
 	}
 	for {
-		w := c.eng.Blocker.Register(src)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, src)
 		if v, ok := c.tryLMove(src, dst, srcEnd == "RIGHT", dstEnd == "RIGHT"); ok {
 			w.Cancel()
 			writeBulk(c.bw, v)
@@ -146,8 +156,18 @@ func (c *conn) blmoveCmd(args []string) {
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(remaining)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNil(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNil(c.bw)
 			return
 		}
@@ -214,7 +234,7 @@ func (c *conn) bzpopCmd(args []string, max bool) {
 		deadline = time.Now().Add(timeout)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		if k, m, sc, ok := c.tryZPop(keys, max); ok {
 			w.Cancel()
 			writeValue(c.bw, []any{k, m, strconv.FormatFloat(sc, 'f', -1, 64)})
@@ -231,8 +251,18 @@ func (c *conn) bzpopCmd(args []string, max bool) {
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(remaining)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}

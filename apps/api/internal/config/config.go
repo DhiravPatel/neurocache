@@ -67,6 +67,10 @@ type Config struct {
 
 	// Auto-failover via cluster gossip (data-plane nodes only)
 	ClusterAutoFailover bool
+
+	// HotKeys runtime tracker (HOTKEYS / HOTKEYS RESET / ...)
+	HotKeysK      int    // size of the heavy-keeper top-K (default 128)
+	HotKeysSample uint64 // 1-in-N event sampling rate (default 1 = sample everything)
 }
 
 func Load() Config {
@@ -121,6 +125,9 @@ func Load() Config {
 		SentinelEnabled:     envBool("NEUROCACHE_SENTINEL_ENABLED", false),
 		SentinelMonitor:     env("NEUROCACHE_SENTINEL_MONITOR", ""),
 		ClusterAutoFailover: envBool("NEUROCACHE_CLUSTER_AUTO_FAILOVER", false),
+
+		HotKeysK:      envInt("NEUROCACHE_HOTKEYS_K", 128),
+		HotKeysSample: uint64(envInt("NEUROCACHE_HOTKEYS_SAMPLE", 1)),
 	}
 }
 

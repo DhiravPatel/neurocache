@@ -153,7 +153,7 @@ streams:
 		deadline = time.Now().Add(block)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		out, err = c.eng.KV.XReadGroup(group, consumer, keys, ids, count, noack)
 		if err != nil {
 			w.Cancel()
@@ -176,8 +176,18 @@ streams:
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(remaining)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}

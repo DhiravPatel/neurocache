@@ -90,6 +90,10 @@ export default function Commands() {
           { cmd: "PERSIST key", desc: "Clear the TTL; key stops expiring." },
           { cmd: "TTL key", desc: "Remaining seconds. -1 = no expiry, -2 = missing." },
           { cmd: "PTTL key", desc: "Remaining milliseconds." },
+          { cmd: "EXPIRETIME key", desc: "Absolute expiry as Unix seconds. -1 no TTL, -2 missing." },
+          { cmd: "PEXPIRETIME key", desc: "Absolute expiry in milliseconds." },
+          { cmd: "TOUCH key [key ...]", desc: "Refresh last-read time on each existing key without reading the value. Returns count touched." },
+          { cmd: "DIGEST key [key ...]", desc: "40-char hex SHA1 of each key's content. Insertion-order independent for collections — drop-in for ETags, replication consistency probes, change detection." },
           { cmd: "KEYS pattern", desc: "Glob-matched key list. Supports *, ?, [abc]." },
           { cmd: "RENAME src dst", desc: "Atomic rename. Overwrites dst." },
           { cmd: "RENAMENX src dst", desc: "Rename only if dst doesn't exist." },
@@ -122,6 +126,8 @@ export default function Commands() {
           { cmd: "INCR key / DECR key", desc: "Atomic +/-1 integer counter." },
           { cmd: "INCRBY key delta / DECRBY key delta", desc: "Atomic counter by any int." },
           { cmd: "INCRBYFLOAT key delta", desc: "Atomic floating-point counter." },
+          { cmd: "DELEX key value", desc: "Compare-and-delete. Returns 1 (matched + deleted), 0 (mismatch / wrong type), -1 (missing). Safe lease-release pattern without a Lua script." },
+          { cmd: "MSETEX seconds key value [key value ...]", desc: "Atomic multi-set with shared TTL. All-or-nothing — either every pair lands with the expiry or none do." },
         ]}
       />
 
@@ -141,6 +147,7 @@ export default function Commands() {
           { cmd: "LTRIM key start stop", desc: "Truncate list to the [start, stop] slice." },
           { cmd: "LINSERT key BEFORE|AFTER pivot value", desc: "Insert relative to pivot." },
           { cmd: "RPOPLPUSH src dst", desc: "Pop from src tail, push to dst head, atomically." },
+          { cmd: "LMOVE src dst LEFT|RIGHT LEFT|RIGHT", desc: "Atomic pop-then-push across all four directions; src == dst is a single-element rotate." },
         ]}
       />
 
@@ -162,6 +169,15 @@ export default function Commands() {
           { cmd: "HINCRBYFLOAT key field delta", desc: "Atomic float field increment." },
           { cmd: "HSTRLEN key field", desc: "Byte length of a field's value." },
           { cmd: "HSCAN key cursor [MATCH pat] [COUNT n]", desc: "Cursor-based field iteration." },
+          { cmd: "HEXPIRE / HPEXPIRE key sec FIELDS n field [...]", desc: "Per-field TTL (seconds / ms). Supports NX/XX/GT/LT conditional flags." },
+          { cmd: "HEXPIREAT / HPEXPIREAT key ts FIELDS n field [...]", desc: "Absolute per-field expiry." },
+          { cmd: "HTTL / HPTTL key FIELDS n field [...]", desc: "Remaining per-field TTL. -1 no TTL, -2 missing." },
+          { cmd: "HEXPIRETIME / HPEXPIRETIME key FIELDS n field [...]", desc: "Absolute Unix expiry per field (s / ms)." },
+          { cmd: "HPERSIST key FIELDS n field [...]", desc: "Clear per-field TTL." },
+          { cmd: "HRANDFIELD key [count [WITHVALUES]]", desc: "Random field(s); negative count allows repeats." },
+          { cmd: "HGETDEL key FIELDS n field [...]", desc: "Atomic read+delete on hash fields. Hash key disappears when last field is removed." },
+          { cmd: "HGETEX key [EX|PX|EXAT|PXAT v|PERSIST] FIELDS n field [...]", desc: "Atomic read with per-field TTL adjust." },
+          { cmd: "HSETEX key seconds [FNX|FXX] FIELDS n field value [...]", desc: "Atomic set + per-field TTL. FNX/FXX is all-or-nothing across the call." },
         ]}
       />
 
@@ -206,6 +222,41 @@ export default function Commands() {
           { cmd: "ZCOUNT key min max", desc: "Count members with score in range." },
           { cmd: "ZPOPMIN key / ZPOPMAX key", desc: "Remove and return lowest/highest-scoring member." },
           { cmd: "ZSCAN key cursor [MATCH pat] [COUNT n]", desc: "Cursor-based iteration with scores." },
+          { cmd: "ZMSCORE key member [member ...]", desc: "Parallel ZSCORE; one reply per member, nil for absent." },
+          { cmd: "ZRANDMEMBER key [count [WITHSCORES]]", desc: "Random members. count > 0 unique, < 0 with replacement." },
+          { cmd: "ZREMRANGEBYRANK key start stop", desc: "Remove members in [start, stop] rank range." },
+          { cmd: "ZREMRANGEBYSCORE key min max", desc: "Remove members with score in range. (exclusive bounds and ±inf supported." },
+          { cmd: "ZREMRANGEBYLEX key min max", desc: "Remove members in lex range; tokens accept -/+, [v, (v." },
+        ]}
+      />
+
+      {/* ── vector sets ──────────────────────────────────────────── */}
+      <h2 id="vectorsets">Vector Sets</h2>
+      <p>
+        First-class vector-set type backed by a per-key index (HNSW or
+        FLAT). Distance metrics: <code>COSINE</code> (1 − cosine
+        similarity), <code>L2</code> (squared euclidean),{" "}
+        <code>IP</code> (negated inner product) — every metric returns
+        "smaller = better" so a single comparator serves all three.
+        Vectors accept the FP32 binary form (<code>dim*4</code>{" "}
+        little-endian bytes) or a comma-separated decimal CSV
+        (<code>"1.0,2.0,3.0"</code>) for the playground.
+      </p>
+      <CmdTable
+        rows={[
+          { cmd: "VADD key id vec [DIM n] [METRIC L2|IP|COSINE] [TYPE FLAT|HNSW] [M m] [EFCONSTRUCTION n] [EFRUNTIME n] [SETATTR json]", desc: "Insert/replace a vector. Trailing options configure the new index on a fresh key — ignored on existing keys (you can't change algo / metric / dim post-creation; VREM-and-recreate). Returns 1 (id was new) or 0 (id replaced)." },
+          { cmd: "VREM key id [id ...]", desc: "Remove members. Returns count actually removed; per-member JSON attributes are dropped too." },
+          { cmd: "VSIM key vec [COUNT n] [WITHSCORES] [WITHATTRS]", desc: "KNN — top-N nearest members. WITHSCORES interleaves the distance after each id; WITHATTRS interleaves the JSON attribute (or empty bulk when none)." },
+          { cmd: "VEMB key id", desc: "Fetch the stored vector as FP32 binary." },
+          { cmd: "VSETATTR key id <json>", desc: "Set the JSON attribute blob for one id. Returns 1 (id existed) / 0 (id missing — attr ignored)." },
+          { cmd: "VGETATTR key id", desc: "Read the JSON attribute, nil when absent." },
+          { cmd: "VDELATTR key id", desc: "Drop the attribute. Returns 1/0." },
+          { cmd: "VLINKS key id", desc: "HNSW neighbour lists per layer (empty array on FLAT or when id is missing)." },
+          { cmd: "VINFO key", desc: "Index metadata: algo, dim, metric, M, ef-construction, ef-runtime, card, bytes-approx." },
+          { cmd: "VCARD key", desc: "Member count." },
+          { cmd: "VDIM key", desc: "Configured vector dimension. nil when the key doesn't exist." },
+          { cmd: "VRANDMEMBER key [count]", desc: "Random ids. Behaviour mirrors SRANDMEMBER (single id when no count, unique cap when positive, with-replacement sample when negative)." },
+          { cmd: "VSCAN key cursor [MATCH pat] [COUNT n]", desc: "Cursor-based id iteration. Sort-stabilised so SCAN's see-every-key guarantee holds across calls." },
         ]}
       />
 
@@ -247,6 +298,9 @@ export default function Commands() {
           { cmd: "XCLAIM key group consumer min-idle-ms id [id ...] [IDLE ms] [TIME t] [RETRYCOUNT n] [FORCE] [JUSTID]", desc: "Re-assign pending entries to a new consumer." },
           { cmd: "XAUTOCLAIM key group consumer min-idle-ms start [COUNT n] [JUSTID]", desc: "Scan the PEL and bulk-claim idle entries. Returns cursor, claimed entries, and deleted IDs." },
           { cmd: "XINFO STREAM|GROUPS|CONSUMERS key [group]", desc: "Metadata: stream length + last-id, group cursors, per-consumer pending counts + idle time." },
+          { cmd: "XACKDEL key group id [id ...]", desc: "Atomic ACK + DEL — closes the race where a second consumer grabs the entry between a separate XACK / XDEL pair." },
+          { cmd: "XDELEX key [REF|KEEPREF|ACKED] id [id ...]", desc: "Reference-aware XDEL. KEEPREF (default) is classic XDEL; REF refuses to delete entries still pending in any group; ACKED removes only entries no group still references." },
+          { cmd: "XCFGSET key group [MAXDELIVERIES n] [MINIDLE ms]", desc: "Per-group runtime config (poison-message cap, XAUTOCLAIM idle floor). Returns the post-change values." },
         ]}
       />
 
@@ -262,7 +316,11 @@ export default function Commands() {
           { cmd: "GEOPOS key member [member ...]", desc: "Return [lon, lat] for each member (nil for missing)." },
           { cmd: "GEODIST key a b [m|km|mi|ft]", desc: "Distance between two members." },
           { cmd: "GEOSEARCH key FROMLONLAT lon lat BYRADIUS r unit [COUNT n]", desc: "Members within a radius of a point." },
+          { cmd: "GEOSEARCHSTORE dest src ...search-args [STOREDIST]", desc: "Same shape as GEOSEARCH, but writes results into dest. Default keeps source geohashes; STOREDIST writes haversine distances." },
           { cmd: "GEOHASH key member [member ...]", desc: "Standard 11-char base32 geohash per member." },
+          { cmd: "GEORADIUS key lon lat r unit [WITHCOORD|WITHDIST|WITHHASH] [COUNT n [ANY]] [ASC|DESC] [STORE|STOREDIST dest]", desc: "Deprecated; kept for legacy drivers. STORE/STOREDIST routes through GEOSEARCHSTORE." },
+          { cmd: "GEORADIUSBYMEMBER key member r unit [...]", desc: "Same as GEORADIUS but the centre is a member's coordinates; centre is excluded from results." },
+          { cmd: "GEORADIUS_RO / GEORADIUSBYMEMBER_RO ...", desc: "Read-only variants — STORE / STOREDIST options return ERR." },
         ]}
       />
 
@@ -416,10 +474,13 @@ AUTH alice s3cret`}</Code>
       <CmdTable
         rows={[
           { cmd: "EVAL script numkeys [key ...] [arg ...]", desc: "Run a script. KEYS and ARGV are pre-populated Lua tables (1-indexed)." },
+          { cmd: "EVAL_RO script numkeys [key ...] [arg ...]", desc: "Read-only EVAL: redis.call refuses every keyspace-mutating command. Safe on read-only replicas." },
           { cmd: "EVALSHA sha1 numkeys [key ...] [arg ...]", desc: "Same but looks the script up by hash. Returns NOSCRIPT when absent." },
+          { cmd: "EVALSHA_RO sha1 numkeys [key ...] [arg ...]", desc: "Read-only EVALSHA." },
           { cmd: "SCRIPT LOAD script", desc: "Precompile a script and return its sha1." },
           { cmd: "SCRIPT EXISTS sha1 [sha1 ...]", desc: "1/0 vector for whether each hash is cached." },
           { cmd: "SCRIPT FLUSH", desc: "Drop every cached script." },
+          { cmd: "SCRIPT KILL / FUNCTION KILL", desc: "Wake the kill flag the EVAL/FCALL bridge polls between redis.call invocations." },
         ]}
       />
       <p>
@@ -449,9 +510,12 @@ return n`}</Code>
           { cmd: "CLIENT INFO", desc: "One-line summary of the current connection." },
           { cmd: "CLIENT LIST", desc: "Newline-separated summary of every connected client." },
           { cmd: "CLIENT KILL ID id", desc: "Evict a client by ID. Returns 1 / 0." },
+          { cmd: "CLIENT UNBLOCK id [TIMEOUT|ERROR]", desc: "Wake a blocked client. TIMEOUT (default) replies nil; ERROR replies -UNBLOCKED. Returns 1/0 (1 = was blocked)." },
           { cmd: "CLIENT PAUSE ms / CLIENT UNPAUSE", desc: "Pause new command execution on every client for ms milliseconds." },
           { cmd: "CLIENT REPLY ON|OFF|SKIP", desc: "Silence replies for this connection (ON reverts; SKIP drops the next reply only)." },
           { cmd: "CLIENT NO-EVICT ON|OFF", desc: "Mark this connection as no-evict (advisory flag)." },
+          { cmd: "HOTKEYS [count]", desc: "Top-K hot keys by estimated frequency. NeuroCache-native — replaces redis-cli --hotkeys + LFU dance with a real-time HeavyKeeper tracker fed by the engine notifier." },
+          { cmd: "HOTKEYS RESET / STATS / COUNT key / THRESHOLD [min] / RESIZE k / SAMPLE [every] / ENABLE | DISABLE / HELP", desc: "Tracker management. STATS exposes config + observation counts + memory cost. SAMPLE 1 records every event; bump to thin under load." },
           { cmd: "SLOWLOG GET [count]", desc: "Most-recent slow executions (id, timestamp, micros, command, client)." },
           { cmd: "SLOWLOG LEN / SLOWLOG RESET", desc: "Entry count / wipe the ring buffer." },
           { cmd: "LATENCY LATEST", desc: "One row per event name with the most recent sample." },
@@ -628,6 +692,13 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "CLUSTER RESET [HARD|SOFT]", desc: "Wipe peers + slots; HARD also mints a fresh node ID." },
           { cmd: "CLUSTER BUMPEPOCH", desc: "Increment the current epoch (last-write-wins coordination)." },
           { cmd: "CLUSTER COUNT-FAILURE-REPORTS node-id", desc: "Always 0 in this build (no quorum-based failure detection yet)." },
+          { cmd: "CLUSTER REPLICAS / CLUSTER SLAVES node-id", desc: "List replicas of the named master in CLUSTER NODES line format." },
+          { cmd: "CLUSTER MYSHARDID", desc: "Shard ID — the master's own ID, or its master-id when called on a replica." },
+          { cmd: "CLUSTER FLUSHSLOTS", desc: "Release every slot this node owns. Use before re-sharding." },
+          { cmd: "CLUSTER SAVECONFIG", desc: "Bump epoch so gossip persists the latest cluster state on the next tick." },
+          { cmd: "CLUSTER SLOT-STATS [SLOTSRANGE start end] [ORDERBY key-count [ASC|DESC] [LIMIT n]]", desc: "Per-slot key-count stats with optional range + ordering." },
+          { cmd: "CLUSTER MIGRATION", desc: "Slots currently in MIGRATING / IMPORTING state with peer node ID + address. Operator's window into in-flight re-shards without parsing CLUSTER NODES suffixes." },
+          { cmd: "CLUSTER LINKS", desc: "Open gossip connections (peer ID, direction, age, ping/pong stats)." },
           { cmd: "ASKING", desc: "Single-shot — bypass an IMPORTING block on the very next command." },
           { cmd: "READONLY / READWRITE", desc: "Per-conn flag controlling reads on imported slots from a replica perspective." },
           { cmd: "MIGRATE host port key|\"\" db timeout-ms [COPY] [REPLACE] [AUTH pw] [AUTH2 user pw] [KEYS key ...]", desc: "Cross-node key transfer via DUMP+RESTORE; deletes the source unless COPY." },
@@ -672,7 +743,8 @@ curl -X POST http://localhost:8080/api/exec \\
         <code>$[0]</code> (negatives ok), <code>$[*]</code>,{" "}
         <code>$.*</code>, <code>$..field</code> (recursive descent).
         Filter expressions like <code>[?(@.qty &gt; 0)]</code> are
-        deferred — use JSON.GET on a subtree and filter client-side.
+        supported — use them inside any path segment to narrow the
+        result set server-side.
       </p>
       <CmdTable
         rows={[
@@ -696,6 +768,8 @@ curl -X POST http://localhost:8080/api/exec \\
           { cmd: "JSON.RESP key [path]", desc: "Return the value as a flattened RESP-shaped array." },
           { cmd: "JSON.MGET key [key ...] path", desc: "Same path on multiple keys." },
           { cmd: "JSON.MSET key path value [key path value ...]", desc: "Atomic multi-document set." },
+          { cmd: "JSON.MERGE key path value", desc: "RFC 7396 JSON Merge Patch — object members merge recursively, null deletes, scalars/arrays replace wholesale." },
+          { cmd: "JSON.ARRINDEX key path value [start [stop]]", desc: "First-match index of value in the array(s) at path; deep equality on objects/arrays, numeric int/float matching." },
         ]}
       />
 
@@ -776,26 +850,37 @@ curl -X POST http://localhost:8080/api/exec \\
       {/* ── Search ──────────────────────────────────────────────── */}
       <h2 id="search">Search (module: <code>search</code>)</h2>
       <p>
-        RediSearch-compatible subset: TEXT / NUMERIC / TAG fields,
-        recursive-descent query parser (boolean ops, field qualifiers,
-        numeric ranges, tag sets, phrases, prefix), full BM25 scoring
-        with per-field weights, and a streaming aggregation pipeline.
-        Deferred: GEO + VECTOR fields, fuzzy queries, suggestions,
-        synonyms, spellcheck, server-side cursors, profile.
+        RediSearch-compatible subset: TEXT / NUMERIC / TAG / GEO /
+        VECTOR (FLAT + HNSW) fields, recursive-descent query parser
+        (boolean ops, field qualifiers, numeric ranges, tag sets,
+        phrases with positional matching, prefix, fuzzy), full BM25
+        scoring with per-field weights, and a streaming aggregation
+        pipeline. Suggestions, synonyms, spellcheck, server-side
+        cursors, and profile are all live.
       </p>
       <CmdTable
         rows={[
-          { cmd: "FT.CREATE index [ON HASH] [PREFIX n p1 ...] SCHEMA name TYPE [WEIGHT n] [SORTABLE] [NOINDEX] [NOSTEM] [SEPARATOR sep] ...", desc: "Define an index. Field types: TEXT | NUMERIC | TAG." },
-          { cmd: "FT.DROPINDEX index [DD]", desc: "Drop the index." },
+          { cmd: "FT.CREATE index [ON HASH] [PREFIX n p1 ...] SCHEMA name TYPE [WEIGHT n] [SORTABLE] [NOINDEX] [NOSTEM] [SEPARATOR sep] ...", desc: "Define an index. Field types: TEXT | NUMERIC | TAG | GEO | VECTOR." },
+          { cmd: "FT.DROPINDEX index [DD]", desc: "Drop the index. Sweeps any aliases pointing at it." },
           { cmd: "FT.ALTER index SCHEMA ADD field type [flags ...]", desc: "Add fields to an existing index." },
           { cmd: "FT.ADD index docID score [REPLACE] FIELDS field value [...]", desc: "Index a document." },
           { cmd: "FT.DEL index docID", desc: "Remove a document from the index." },
           { cmd: "FT.GET index docID", desc: "Fetch a stored document." },
-          { cmd: "FT.SEARCH index query [NOCONTENT] [WITHSCORES] [LIMIT off n] [SORTBY field [ASC|DESC]] [RETURN n field ...]", desc: "Run a query. Supports `term`, `term*`, `\"phrase\"`, `@field:term`, `@field:[lo hi]`, `@field:{tag1|tag2}`, `A B` (AND), `A | B` (OR), `-A` (NOT), parentheses." },
-          { cmd: "FT.AGGREGATE index query [LOAD ...] [pipeline-stages ...]", desc: "Stages: GROUPBY n key... REDUCE fn nargs args... [AS alias]; SORTBY n field [ASC|DESC] ...; LIMIT off n; APPLY expr AS alias." },
+          { cmd: "FT.SEARCH index query [NOCONTENT] [WITHSCORES] [LIMIT off n] [SORTBY field [ASC|DESC]] [RETURN n field ...] [PARAMS n k v ...] [DIALECT n]", desc: "Run a query. Supports `term`, `term*`, `\"phrase\"`, `%term%` (fuzzy), `@field:term`, `@field:[lo hi]`, `@field:{tag1|tag2}`, `*=>[KNN k @field $vec]`, `A B` (AND), `A | B` (OR), `-A` (NOT), parentheses." },
+          { cmd: "FT.AGGREGATE index query [LOAD ...] [pipeline-stages ...]", desc: "Stages: GROUPBY n key... REDUCE fn nargs args... [AS alias]; SORTBY n field [ASC|DESC] ...; LIMIT off n; FILTER expr; APPLY expr AS alias." },
           { cmd: "FT.EXPLAIN index query", desc: "Pretty-print the parsed query tree." },
           { cmd: "FT.INFO index", desc: "Schema, field flags, document count." },
           { cmd: "FT._LIST", desc: "Every defined index name." },
+          { cmd: "FT.SUGADD / FT.SUGGET / FT.SUGDEL / FT.SUGLEN", desc: "Auto-complete suggestion dictionary." },
+          { cmd: "FT.SYNUPDATE / FT.SYNDUMP", desc: "Synonym groups." },
+          { cmd: "FT.SPELLCHECK index query [DISTANCE n] [TERMS INCLUDE|EXCLUDE dict ...]", desc: "Levenshtein-based spellcheck honouring custom dictionaries." },
+          { cmd: "FT.CURSOR READ|DEL index cursor [COUNT n]", desc: "Resume a paginated FT.AGGREGATE WITHCURSOR session." },
+          { cmd: "FT.PROFILE index SEARCH|AGGREGATE QUERY ...", desc: "Wrap a SEARCH/AGGREGATE invocation with timing data." },
+          { cmd: "FT.ALIASADD / FT.ALIASUPDATE / FT.ALIASDEL alias index", desc: "Alternate names that resolve to a canonical index. Honoured by every FT.* read path; FT.DROPINDEX cleans up dangling aliases." },
+          { cmd: "FT.DICTADD / FT.DICTDEL / FT.DICTDUMP dict term [...]", desc: "Custom term dictionaries used by FT.SPELLCHECK ... TERMS INCLUDE/EXCLUDE." },
+          { cmd: "FT.TAGVALS index field", desc: "Distinct values present on a TAG field, sorted." },
+          { cmd: "FT.CONFIG GET pattern | SET key value | RESETSTAT", desc: "Runtime tunables. Ships with MAXEXPANSIONS / MAXSEARCHRESULTS / DEFAULT_DIALECT / TIMEOUT defaults; unknown keys round-trip." },
+          { cmd: "FT.HYBRID index \"<text>\" KNN k @field $vec [WEIGHTS sw dw] [NORMALIZE rrf|minmax|none] [LIMIT off n] [PARAMS n k v ...] [WITHSCORES] [RETURN n field ...]", desc: "Single-call hybrid retrieval: runs sparse (BM25) + dense (vector KNN) legs server-side and blends them. Default fusion is Reciprocal Rank Fusion (rank-based, no scale issues)." },
         ]}
       />
       <p>
@@ -808,31 +893,18 @@ curl -X POST http://localhost:8080/api/exec \\
         parentheses.
       </p>
 
-      <h2>Not yet implemented</h2>
+      <h2>Known gaps</h2>
       <p>
-        Open an issue if any of the rest blocks you:
+        The remaining cosmetic gaps versus stock Redis 8.6:
       </p>
       <ul>
         <li>
-          <strong>Search subset gaps:</strong> GEO + VECTOR fields,
-          fuzzy queries (<code>%term%</code>), <code>FT.SUGADD</code>{" "}
-          / <code>FT.SUGGET</code>, <code>FT.SYNUPDATE</code> /{" "}
-          <code>FT.SYNDUMP</code>, <code>FT.SPELLCHECK</code>,{" "}
-          <code>FT.CURSOR</code>, <code>FT.PROFILE</code>, the{" "}
-          <code>FILTER</code> aggregate stage, strict positional
-          phrase matching.
-        </li>
-        <li>
-          <strong>Advanced sorted-set ops:</strong>{" "}
-          <code>ZUNIONSTORE</code>, <code>ZINTERSTORE</code>,{" "}
-          <code>ZDIFFSTORE</code>, <code>ZRANGEBYLEX</code>,{" "}
-          <code>ZRANGESTORE</code>, <code>ZMPOP</code> /{" "}
-          <code>BZMPOP</code>.
-        </li>
-        <li>
-          <strong>Functions / FCALL:</strong> the stateful successor
-          to EVAL. EVAL itself is implemented via a Lua-subset
-          interpreter (see <a href="#scripting">Scripting</a>).
+          <strong>OBJECT ENCODING precise variants</strong> — we report
+          uniform encoding labels (<code>raw</code> /{" "}
+          <code>linkedlist</code> / <code>hashtable</code> /{" "}
+          <code>skiplist</code> / <code>stream</code>); Redis
+          distinguishes ziplist vs listpack vs hashtable based on
+          internal encoding heuristics.
         </li>
       </ul>
     </>

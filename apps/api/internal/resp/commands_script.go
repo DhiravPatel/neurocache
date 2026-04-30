@@ -1,6 +1,7 @@
 package resp
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -11,7 +12,10 @@ import (
 // evalCmd implements EVAL script numkeys [key ...] [arg ...]. The script
 // runs through the embedded interpreter; redis.call() bridges back into
 // the dispatcher so any RESP command works inside scripts.
-func (c *conn) evalCmd(args []string) {
+//
+// readOnly is set true for EVAL_RO so the bridge rejects any
+// keyspace-mutating command before it can reach the store.
+func (c *conn) evalCmd(args []string, readOnly bool) {
 	if len(args) < 2 {
 		writeError(c.bw, "wrong number of arguments for 'eval'")
 		return
@@ -28,11 +32,11 @@ func (c *conn) evalCmd(args []string) {
 	}
 	keys := args[2 : 2+numKeys]
 	argv := args[2+numKeys:]
-	c.runScript(src, keys, argv)
+	c.runScript(src, keys, argv, readOnly)
 }
 
 // evalshaCmd resolves the sha1 to source via the cache, then runs it.
-func (c *conn) evalshaCmd(args []string) {
+func (c *conn) evalshaCmd(args []string, readOnly bool) {
 	if len(args) < 2 {
 		writeError(c.bw, "wrong number of arguments for 'evalsha'")
 		return
@@ -53,11 +57,14 @@ func (c *conn) evalshaCmd(args []string) {
 	}
 	keys := args[2 : 2+numKeys]
 	argv := args[2+numKeys:]
-	c.runScript(src, keys, argv)
+	c.runScript(src, keys, argv, readOnly)
 }
 
-// runScript runs src under the deadline, then encodes the reply.
-func (c *conn) runScript(src string, keys, argv []string) {
+// runScript runs src under the deadline, then encodes the reply. The
+// readOnly flag (set by EVAL_RO / EVALSHA_RO) makes the bridged
+// callFromScript reject any keyspace-mutating command — letting clients
+// run scripts on read-only replicas without risking accidental writes.
+func (c *conn) runScript(src string, keys, argv []string, readOnly bool) {
 	timeout := time.Duration(c.eng.Cfg.ScriptTimeoutMs) * time.Millisecond
 	deadline := time.Time{}
 	if timeout > 0 {
@@ -66,8 +73,14 @@ func (c *conn) runScript(src string, keys, argv []string) {
 	// Cache it so EVALSHA works even after the first EVAL.
 	c.eng.Scripts.Load(src)
 	caller := scripting.Caller(func(cmd string, a []string) (any, error) {
-		return c.callFromScript(cmd, a)
+		return c.callFromScript(cmd, a, readOnly)
 	})
+	scriptInProgress.Store(true)
+	scriptKillRequested.Store(false)
+	defer func() {
+		scriptInProgress.Store(false)
+		scriptKillRequested.Store(false)
+	}()
 	v, err := scripting.Run(src, keys, argv, caller, deadline)
 	if err != nil {
 		writeError(c.bw, err.Error())
@@ -78,9 +91,21 @@ func (c *conn) runScript(src string, keys, argv []string) {
 
 // callFromScript dispatches a redis.call() invocation back into the
 // engine. Auth/ACL gating still applies — we go through the same
-// permission check the conn uses for native commands.
-func (c *conn) callFromScript(cmd string, args []string) (any, error) {
+// permission check the conn uses for native commands. When readOnly is
+// true (EVAL_RO / EVALSHA_RO / FCALL_RO) any write-classified command
+// is refused before it can mutate the keyspace.
+func (c *conn) callFromScript(cmd string, args []string, readOnly bool) (any, error) {
 	cmd = strings.ToUpper(cmd)
+	// SCRIPT KILL signals the polling site between Lua VM instructions
+	// via the deadline path; this extra check catches a kill that
+	// landed mid-bridge and aborts the redis.call so partial side
+	// effects don't accumulate.
+	if scriptKillRequested.Load() {
+		return nil, errors.New("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.")
+	}
+	if readOnly && isWriteCommand(cmd) {
+		return nil, errors.New("ERR Write commands are not allowed from read-only scripts")
+	}
 	if c.user != nil {
 		if err := c.eng.ACL.Allowed(c.user, cmd, scriptKeysFor(cmd, args), nil); err != nil {
 			return nil, err

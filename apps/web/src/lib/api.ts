@@ -154,4 +154,41 @@ export const api = {
     req<{ keys: HotKey[] }>(`/api/metrics/hot-keys?k=${k}`),
   metricsBreakdown: () =>
     req<{ commands: CommandCount[] }>("/api/metrics/breakdown"),
+
+  // HOTKEYS — runtime HeavyKeeper-backed top-K (every keyspace
+  // mutation, downsampled). Distinct from metricsHotKeys which only
+  // tracks GET hits.
+  // Vector sets — first-class V* type inventory.
+  vectorSets: () =>
+    req<{
+      sets: {
+        key: string;
+        algo: string;
+        dim: number;
+        metric: string;
+        m: number;
+        ef_construct: number;
+        ef_runtime: number;
+        card: number;
+        bytes_approx: number;
+      }[];
+    }>("/api/vector/sets"),
+
+  hotKeysTracker: (k = 25) =>
+    req<{
+      keys: { key: string; count: number }[];
+      stats: {
+        Enabled: boolean;
+        K: number;
+        Width: number;
+        Depth: number;
+        Decay: number;
+        SampleEvery: number;
+        Threshold: number;
+        Tracked: number;
+        Observations: number;
+        Events: number;
+        BytesApprox: number;
+      };
+    }>(`/api/hotkeys?k=${k}`),
 };

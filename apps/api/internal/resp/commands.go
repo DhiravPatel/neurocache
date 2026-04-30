@@ -73,15 +73,21 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "RESTORE":
 		c.restoreCmd(args)
 	case "EVAL":
-		c.evalCmd(args)
+		c.evalCmd(args, false)
+	case "EVAL_RO":
+		c.evalCmd(args, true)
 	case "EVALSHA":
-		c.evalshaCmd(args)
+		c.evalshaCmd(args, false)
+	case "EVALSHA_RO":
+		c.evalshaCmd(args, true)
 	case "SCRIPT":
 		c.scriptCmd(args)
 	case "BLPOP":
 		c.blpopCmd(args, false)
 	case "BRPOP":
 		c.blpopCmd(args, true)
+	case "LMOVE":
+		c.lmoveCmd(args)
 	case "BLMOVE":
 		c.blmoveCmd(args)
 	case "BZPOPMIN":
@@ -224,6 +230,94 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.waitaofCmd(args)
 	case "XSETID":
 		c.xsetidCmd(args)
+
+	// ─── phase 1: driver-critical fillers ─────────────────────────
+	case "TOUCH":
+		c.touchCmd(args)
+	case "EXPIRETIME":
+		c.expireTimeCmd(args)
+	case "PEXPIRETIME":
+		c.pexpireTimeCmd(args)
+	case "ZMSCORE":
+		c.zmscoreCmd(args)
+	case "ZRANDMEMBER":
+		c.zrandmemberCmd(args)
+	case "ZREMRANGEBYRANK":
+		c.zremrangebyrankCmd(args)
+	case "ZREMRANGEBYSCORE":
+		c.zremrangebyscoreCmd(args)
+	case "ZREMRANGEBYLEX":
+		c.zremrangebylexCmd(args)
+	case "GEOSEARCHSTORE":
+		c.geosearchstoreCmd(args)
+
+	// ─── phase 2: hash field TTL extras ───────────────────────────
+	case "HGETDEL":
+		c.hgetdelCmd(args)
+	case "HGETEX":
+		c.hgetexCmd(args)
+	case "HSETEX":
+		c.hsetexCmd(args)
+	case "HEXPIRETIME":
+		c.hexpireTimeCmd(args, false)
+	case "HPEXPIRETIME":
+		c.hexpireTimeCmd(args, true)
+
+	// ─── phase 2: deprecated geo family ───────────────────────────
+	case "GEORADIUS":
+		c.georadiusCmd(args, false)
+	case "GEORADIUS_RO":
+		c.georadiusCmd(args, true)
+	case "GEORADIUSBYMEMBER":
+		c.georadiusByMemberCmd(args, false)
+	case "GEORADIUSBYMEMBER_RO":
+		c.georadiusByMemberCmd(args, true)
+
+	// ─── phase 3: hot-key tracker ─────────────────────────────────
+	case "HOTKEYS":
+		c.hotkeysCmd(args)
+
+	// ─── phase 5: vector set type ────────────────────────────────
+	case "VADD":
+		c.vaddCmd(args)
+	case "VREM":
+		c.vremCmd(args)
+	case "VSIM":
+		c.vsimCmd(args)
+	case "VEMB":
+		c.vembCmd(args)
+	case "VSETATTR":
+		c.vsetattrCmd(args)
+	case "VGETATTR":
+		c.vgetattrCmd(args)
+	case "VDELATTR":
+		c.vdelattrCmd(args)
+	case "VLINKS":
+		c.vlinksCmd(args)
+	case "VINFO":
+		c.vinfoCmd(args)
+	case "VCARD":
+		c.vcardCmd(args)
+	case "VDIM":
+		c.vdimCmd(args)
+	case "VRANDMEMBER":
+		c.vrandmemberCmd(args)
+	case "VSCAN":
+		c.vscanCmd(args)
+
+	// ─── phase 4: niche 8.x-pattern additions ─────────────────────
+	case "DELEX":
+		c.delexCmd(args)
+	case "DIGEST":
+		c.digestCmd(args)
+	case "MSETEX":
+		c.msetexCmd(args)
+	case "XACKDEL":
+		c.xackdelCmd(args)
+	case "XDELEX":
+		c.xdelexCmd(args)
+	case "XCFGSET":
+		c.xcfgsetCmd(args)
 
 	// ─── plumbing additions ────────────────────────────────────────
 	case "COMMAND":
@@ -2060,7 +2154,7 @@ streams:
 		deadline = time.Now().Add(block)
 	}
 	for {
-		w := c.eng.Blocker.Register(keys...)
+		w := c.eng.Blocker.RegisterFor(c.info.ID, keys...)
 		out, err = c.eng.KV.XRead(keys, ids, count)
 		if err != nil {
 			w.Cancel()
@@ -2083,8 +2177,18 @@ streams:
 		}
 		_ = c.bw.Flush()
 		_, woke := w.Wait(remaining)
+		external := w.UnblockedExternal()
+		errored := w.UnblockedByError()
 		w.Cancel()
 		if !woke {
+			writeNilArray(c.bw)
+			return
+		}
+		if external {
+			if errored {
+				writeTypedError(c.bw, "UNBLOCKED", "client unblocked via CLIENT UNBLOCK")
+				return
+			}
 			writeNilArray(c.bw)
 			return
 		}

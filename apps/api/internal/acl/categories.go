@@ -205,6 +205,61 @@ var registry = map[string]commandInfo{
 	"EVAL": {[]string{CatScripting, CatSlow, CatDangerous}}, "EVALSHA": {[]string{CatScripting, CatSlow, CatDangerous}},
 	"SCRIPT": {[]string{CatScripting, CatSlow, CatDangerous}},
 
+	// phase 1: driver-critical fillers — registered so COMMAND DOCS,
+	// ACL CAT, and key-spec lookups treat them as first-class.
+	"TOUCH":            {[]string{CatKeyspace, CatRead, CatFast}},
+	"EXPIRETIME":       {[]string{CatKeyspace, CatRead, CatFast}},
+	"PEXPIRETIME":      {[]string{CatKeyspace, CatRead, CatFast}},
+	"LMOVE":            {[]string{CatList, CatWrite, CatFast}},
+	"ZMSCORE":          {[]string{CatSortedSet, CatRead, CatFast}},
+	"ZRANDMEMBER":      {[]string{CatSortedSet, CatRead, CatSlow}},
+	"ZREMRANGEBYRANK":  {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"ZREMRANGEBYSCORE": {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"ZREMRANGEBYLEX":   {[]string{CatSortedSet, CatWrite, CatSlow}},
+	"GEOSEARCHSTORE":   {[]string{CatGeo, CatWrite, CatSlow}},
+	"EVAL_RO":          {[]string{CatScripting, CatSlow, CatRead}},
+	"EVALSHA_RO":       {[]string{CatScripting, CatSlow, CatRead}},
+
+	// phase 2: hash field TTL extras
+	"HGETDEL":     {[]string{CatHash, CatWrite, CatFast}},
+	"HGETEX":      {[]string{CatHash, CatWrite, CatFast}},
+	"HSETEX":      {[]string{CatHash, CatWrite, CatFast}},
+	"HEXPIRETIME": {[]string{CatHash, CatRead, CatFast}},
+	"HPEXPIRETIME": {[]string{CatHash, CatRead, CatFast}},
+
+	// phase 2: deprecated geo family
+	"GEORADIUS":              {[]string{CatGeo, CatWrite, CatSlow}},
+	"GEORADIUS_RO":           {[]string{CatGeo, CatRead, CatSlow}},
+	"GEORADIUSBYMEMBER":      {[]string{CatGeo, CatWrite, CatSlow}},
+	"GEORADIUSBYMEMBER_RO":   {[]string{CatGeo, CatRead, CatSlow}},
+
+	// phase 3: HOTKEYS — admin-class observability command.
+	"HOTKEYS": {[]string{CatAdmin, CatRead, CatFast}},
+
+	// phase 5: vector-set type. Sits in its own implicit category
+	// (CatRead/CatWrite + CatSlow for the index-touching ops).
+	"VADD":        {[]string{CatWrite, CatSlow}},
+	"VREM":        {[]string{CatWrite, CatFast}},
+	"VSIM":        {[]string{CatRead, CatSlow}},
+	"VEMB":        {[]string{CatRead, CatFast}},
+	"VSETATTR":    {[]string{CatWrite, CatFast}},
+	"VGETATTR":    {[]string{CatRead, CatFast}},
+	"VDELATTR":    {[]string{CatWrite, CatFast}},
+	"VLINKS":      {[]string{CatRead, CatFast}},
+	"VINFO":       {[]string{CatRead, CatFast}},
+	"VCARD":       {[]string{CatRead, CatFast}},
+	"VDIM":        {[]string{CatRead, CatFast}},
+	"VRANDMEMBER": {[]string{CatRead, CatFast}},
+	"VSCAN":       {[]string{CatRead, CatSlow}},
+
+	// phase 4: niche 8.x-pattern additions
+	"DELEX":   {[]string{CatString, CatWrite, CatFast}},
+	"DIGEST":  {[]string{CatKeyspace, CatRead, CatFast}},
+	"MSETEX":  {[]string{CatString, CatWrite, CatSlow}},
+	"XACKDEL": {[]string{CatStream, CatWrite, CatFast}},
+	"XDELEX":  {[]string{CatStream, CatWrite, CatFast}},
+	"XCFGSET": {[]string{CatStream, CatWrite, CatFast}},
+
 	// NeuroCache AI-native
 	"SEMANTIC_SET": {[]string{CatAI, CatWrite, CatFast}},
 	"SEMANTIC_GET": {[]string{CatAI, CatRead, CatFast}},
