@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "contextos": {
+      "args": [
+        "serve",
+        "--root",
+        "/Users/dhiravpatel/Documents/Project 2/neurocache"
+      ],
+      "command": "/Users/dhiravpatel/.local/bin/contextos",
+      "type": "stdio"
+    }
+  }
+}
