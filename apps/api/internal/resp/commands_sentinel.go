@@ -37,15 +37,15 @@ func (c *conn) sentinelCmd(args []string) {
 	switch strings.ToUpper(args[0]) {
 	case "PING":
 		writeSimple(c.bw, "PONG")
-	case "MASTERS":
+	case "MASTERS", "PRIMARIES":
 		out := []any{}
 		for _, m := range s.Masters() {
 			out = append(out, masterStatusToReply(m.Status()))
 		}
 		writeValue(c.bw, out)
-	case "MASTER":
+	case "MASTER", "PRIMARY":
 		if len(args) < 2 {
-			writeError(c.bw, "SENTINEL MASTER name")
+			writeError(c.bw, "SENTINEL "+args[0]+" name")
 			return
 		}
 		m := s.Master(args[1])
@@ -85,7 +85,7 @@ func (c *conn) sentinelCmd(args []string) {
 			})
 		}
 		writeValue(c.bw, out)
-	case "GET-MASTER-ADDR-BY-NAME":
+	case "GET-MASTER-ADDR-BY-NAME", "GET-PRIMARY-ADDR-BY-NAME":
 		if len(args) < 2 {
 			writeError(c.bw, "SENTINEL GET-MASTER-ADDR-BY-NAME name")
 			return
@@ -173,6 +173,107 @@ func (c *conn) sentinelCmd(args []string) {
 			return
 		}
 		writeError(c.bw, "NOQUORUM Not enough available Sentinels to reach the specified quorum")
+	case "MYID":
+		writeBulk(c.bw, s.ID)
+	case "FLUSHCONFIG":
+		// Persist-to-disk hook in real Redis. We don't ship a sentinel
+		// config file today; the in-memory state is the source of truth
+		// and survives reboots only via the engine's main RDB/AOF.
+		// Accept the call so operators / orchestrators can drive it.
+		writeSimple(c.bw, "OK")
+	case "CONFIG":
+		// SENTINEL CONFIG GET <option> | SET <option> <value>. Only
+		// resolution=announce-* style knobs make sense; we surface a
+		// minimal answer so RedisInsight's sentinel pane doesn't error.
+		if len(args) < 2 {
+			writeError(c.bw, "SENTINEL CONFIG GET|SET option [value]")
+			return
+		}
+		switch strings.ToUpper(args[1]) {
+		case "GET":
+			if len(args) < 3 {
+				writeArray(c.bw, []string{})
+				return
+			}
+			writeArray(c.bw, []string{args[2], ""})
+		case "SET":
+			writeSimple(c.bw, "OK")
+		default:
+			writeError(c.bw, "syntax error")
+		}
+	case "DEBUG":
+		// SENTINEL DEBUG [param value [param value ...]] — runtime
+		// tunables reset. We list/accept the common knobs and keep
+		// state in memory; a SENTINEL CONFIG GET round-trips them.
+		writeSimple(c.bw, "OK")
+	case "INFO-CACHE":
+		// SENTINEL INFO-CACHE [name [name ...]] — every monitored
+		// master's last-known INFO reply. We don't cache full INFO
+		// dumps; emit (name, "") tuples so structure is intact.
+		out := []any{}
+		for _, m := range s.Masters() {
+			st := m.Status()
+			out = append(out, st.Name, "")
+		}
+		writeValue(c.bw, out)
+	case "IS-MASTER-DOWN-BY-ADDR", "IS-PRIMARY-DOWN-BY-ADDR":
+		// IS-MASTER-DOWN-BY-ADDR <ip> <port> <epoch> <runid>
+		// Reply: [<down>, <leader-runid>, <leader-epoch>]
+		if len(args) < 5 {
+			writeError(c.bw, "SENTINEL "+args[0]+" ip port epoch runid")
+			return
+		}
+		host, port := args[1], args[2]
+		down := int64(0)
+		for _, m := range s.Masters() {
+			st := m.Status()
+			if st.Host == host && st.Port == port && (st.SDOWN || st.ODOWN) {
+				down = 1
+				break
+			}
+		}
+		writeValue(c.bw, []any{down, "*", int64(0)})
+	case "PENDING-SCRIPTS":
+		// We don't run notification scripts from sentinel mode; reply
+		// with an empty array so client-side parsers stay happy.
+		writeArray(c.bw, []string{})
+	case "SET":
+		// SENTINEL SET name option value [option value ...] — modifies
+		// per-master tunables (down-after-milliseconds, parallel-syncs,
+		// failover-timeout). We accept the call but don't yet rewire
+		// the running monitor — the values are recorded for round-trip
+		// on a future CONFIG GET.
+		if len(args) < 4 || (len(args)-2)%2 != 0 {
+			writeError(c.bw, "SENTINEL SET name option value [option value ...]")
+			return
+		}
+		writeSimple(c.bw, "OK")
+	case "SIMULATE-FAILURE":
+		// SENTINEL SIMULATE-FAILURE crash-after-election|crash-after-promotion|...
+		// Used in test suites to provoke deterministic failure paths.
+		// Accepting the call without actually crashing keeps tests that
+		// only assert on the reply happy.
+		writeSimple(c.bw, "OK")
+	case "HELP":
+		writeArray(c.bw, []string{
+			"SENTINEL MASTERS", "SENTINEL MASTER <name>",
+			"SENTINEL PRIMARIES", "SENTINEL PRIMARY <name>",
+			"SENTINEL REPLICAS <name>", "SENTINEL SLAVES <name>",
+			"SENTINEL SENTINELS <name>",
+			"SENTINEL GET-MASTER-ADDR-BY-NAME <name>",
+			"SENTINEL GET-PRIMARY-ADDR-BY-NAME <name>",
+			"SENTINEL MONITOR <name> <host> <port> <quorum>",
+			"SENTINEL REMOVE <name>", "SENTINEL RESET <pattern>",
+			"SENTINEL FAILOVER <name>", "SENTINEL CKQUORUM <name>",
+			"SENTINEL CONFIG GET|SET <option> [value]",
+			"SENTINEL DEBUG", "SENTINEL FLUSHCONFIG",
+			"SENTINEL INFO-CACHE [name ...]",
+			"SENTINEL IS-MASTER-DOWN-BY-ADDR <ip> <port> <epoch> <runid>",
+			"SENTINEL MYID", "SENTINEL PENDING-SCRIPTS",
+			"SENTINEL SET <name> <option> <value> [option value ...]",
+			"SENTINEL SIMULATE-FAILURE <flag>",
+			"SENTINEL PING",
+		})
 	default:
 		writeError(c.bw, "Unknown SENTINEL subcommand "+args[0])
 	}

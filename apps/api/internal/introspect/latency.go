@@ -97,6 +97,48 @@ func (l *LatencyMonitor) Reset(names ...string) int {
 	return n
 }
 
+// Histogram returns power-of-two latency buckets (in microseconds) for
+// the named event and the total observation count. Bucket boundaries
+// match Redis's LATENCY HISTOGRAM shape: 1µs, 2µs, 4µs, 8µs, … up to
+// the largest bucket the data needed. An empty/missing event returns
+// zero buckets.
+func (l *LatencyMonitor) Histogram(name string) (calls int64, buckets map[int64]int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, ok := l.events[name]
+	if !ok || len(r.entries) == 0 {
+		return 0, nil
+	}
+	buckets = map[int64]int64{}
+	for _, e := range r.entries {
+		usec := e.Latency.Microseconds()
+		if usec < 1 {
+			usec = 1
+		}
+		// Round up to the next power of two — the bucket label is the
+		// upper bound of values that fell into it.
+		bucket := int64(1)
+		for bucket < usec {
+			bucket <<= 1
+		}
+		buckets[bucket]++
+		calls++
+	}
+	return calls, buckets
+}
+
+// EventNames returns the set of recorded event/command names in
+// insertion-stable order. Used by LATENCY HISTOGRAM with no args.
+func (l *LatencyMonitor) EventNames() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, 0, len(l.events))
+	for name := range l.events {
+		out = append(out, name)
+	}
+	return out
+}
+
 // Doctor returns a one-shot diagnostic summary string. Mirrors Redis'
 // human-readable LATENCY DOCTOR output style.
 func (l *LatencyMonitor) Doctor() string {

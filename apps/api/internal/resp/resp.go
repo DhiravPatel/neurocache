@@ -178,6 +178,10 @@ type conn struct {
 	// nil until the client opts into tracking; closed on disconnect.
 	invalidateCh chan []string
 
+	// cachingNext is set by CLIENT CACHING YES|NO and consumed (cleared)
+	// by the very next command — matches Redis's single-shot semantics.
+	cachingNext bool
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex

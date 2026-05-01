@@ -364,6 +364,50 @@ func (c *conn) clientCmd(args []string) {
 			c.info.NoTouch = false
 		}
 		writeSimple(c.bw, "OK")
+	case "CACHING":
+		// CLIENT CACHING YES|NO — toggles whether the next command's
+		// keys are tracked under OPTIN/OPTOUT mode. Without an active
+		// CLIENT TRACKING ON, real Redis errors out; we follow suit so
+		// drivers that probe for the response can detect support.
+		if len(args) < 2 {
+			writeError(c.bw, "syntax error")
+			return
+		}
+		mode := strings.ToUpper(args[1])
+		if mode != "YES" && mode != "NO" {
+			writeError(c.bw, "syntax error")
+			return
+		}
+		if c.invalidateCh == nil {
+			writeError(c.bw, "ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled")
+			return
+		}
+		c.cachingNext = (mode == "YES")
+		writeSimple(c.bw, "OK")
+	case "CAPA":
+		// CLIENT CAPA <cap> [cap ...] — Valkey 8.0. The client
+		// advertises connection capabilities (e.g. "redirect"). We
+		// record nothing today; replying OK satisfies feature detection.
+		writeSimple(c.bw, "OK")
+	case "SETINFO":
+		// CLIENT SETINFO <attr> <value>. Valkey 7.2 — used by official
+		// drivers to report their lib-name / lib-ver. Recording the
+		// metadata makes CLIENT INFO / LIST surface real values rather
+		// than leaving them blank.
+		if len(args) < 3 {
+			writeError(c.bw, "syntax error")
+			return
+		}
+		switch strings.ToLower(args[1]) {
+		case "lib-name":
+			c.info.LibName = args[2]
+		case "lib-ver":
+			c.info.LibVer = args[2]
+		default:
+			writeError(c.bw, "ERR Unrecognized option '"+args[1]+"'")
+			return
+		}
+		writeSimple(c.bw, "OK")
 	case "TRACKING":
 		c.clientTrackingCmd(args[1:])
 	case "TRACKINGINFO":
@@ -680,14 +724,70 @@ func (c *conn) latencyCmd(args []string) {
 		writeBulk(c.bw, c.eng.Latency.Doctor())
 	case "GRAPH":
 		writeBulk(c.bw, "")
+	case "HISTOGRAM":
+		// LATENCY HISTOGRAM [command [command ...]] (Redis 7.0):
+		// per-command cumulative-distribution buckets. We summarize the
+		// existing per-event ring as a power-of-two histogram so the
+		// shape matches what Redis returns; counts come from the raw
+		// observation set we already keep.
+		want := args[1:]
+		histos := buildLatencyHistogram(c.eng.Latency, want)
+		fmt.Fprintf(c.bw, "*%d\r\n", len(histos)*2)
+		for _, h := range histos {
+			writeBulk(c.bw, h.name)
+			writeValue(c.bw, []any{
+				"calls", h.calls,
+				"histogram_usec", h.bucketsUsec,
+			})
+		}
 	case "HELP":
 		writeArray(c.bw, []string{
 			"LATENCY HISTORY <event>", "LATENCY LATEST",
 			"LATENCY RESET [event ...]", "LATENCY DOCTOR", "LATENCY GRAPH",
+			"LATENCY HISTOGRAM [command ...]",
 		})
 	default:
 		writeError(c.bw, "unknown LATENCY subcommand")
 	}
+}
+
+// latencyHistogramRow is the per-command shape LATENCY HISTOGRAM emits.
+type latencyHistogramRow struct {
+	name        string
+	calls       int64
+	bucketsUsec []any
+}
+
+// buildLatencyHistogram resolves the requested event names (or every
+// known event when want is empty), pulls the bucket map for each, and
+// flattens to the [bound, count, bound, count, …] shape Redis uses.
+func buildLatencyHistogram(mon *introspect.LatencyMonitor, want []string) []latencyHistogramRow {
+	if len(want) == 0 {
+		want = mon.EventNames()
+	}
+	rows := make([]latencyHistogramRow, 0, len(want))
+	for _, name := range want {
+		calls, buckets := mon.Histogram(name)
+		if calls == 0 {
+			continue
+		}
+		bounds := make([]int64, 0, len(buckets))
+		for b := range buckets {
+			bounds = append(bounds, b)
+		}
+		// ascending bucket bounds match Redis's CDF shape
+		for i := 1; i < len(bounds); i++ {
+			for j := i; j > 0 && bounds[j-1] > bounds[j]; j-- {
+				bounds[j-1], bounds[j] = bounds[j], bounds[j-1]
+			}
+		}
+		flat := make([]any, 0, len(bounds)*2)
+		for _, b := range bounds {
+			flat = append(flat, b, buckets[b])
+		}
+		rows = append(rows, latencyHistogramRow{name: name, calls: calls, bucketsUsec: flat})
+	}
+	return rows
 }
 
 // copyCmd implements COPY src dst [REPLACE] [DB n].

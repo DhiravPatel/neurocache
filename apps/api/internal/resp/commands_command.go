@@ -85,6 +85,18 @@ func (c *conn) commandCmd(args []string) {
 		}
 		keys := keysForCommand(strings.ToUpper(args[1]), args[2:])
 		writeArray(c.bw, keys)
+	case "GETKEYSANDFLAGS":
+		// COMMAND GETKEYSANDFLAGS <cmd> <args ...> (Valkey 7.0).
+		// Same key extraction as GETKEYS but each key is paired with
+		// its access flags so cluster-aware drivers can decide whether
+		// a slot redirection should be RO or RW.
+		if len(args) < 2 {
+			writeError(c.bw, "wrong number of arguments for 'command|getkeysandflags'")
+			return
+		}
+		name := strings.ToUpper(args[1])
+		keys := keysForCommand(name, args[2:])
+		writeValue(c.bw, commandGetKeysAndFlagsReply(name, keys))
 	case "HELP":
 		writeArray(c.bw, []string{
 			"COMMAND",
@@ -93,6 +105,7 @@ func (c *conn) commandCmd(args []string) {
 			"COMMAND INFO [name [name ...]]",
 			"COMMAND LIST [FILTERBY MODULE name|ACLCAT cat|PATTERN pat]",
 			"COMMAND GETKEYS cmd [arg ...]",
+			"COMMAND GETKEYSANDFLAGS cmd [arg ...]",
 		})
 	default:
 		writeError(c.bw, "Unknown COMMAND subcommand "+args[0])

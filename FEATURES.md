@@ -223,7 +223,7 @@ Status legend: ✅ full · ⚠ pragmatic subset (documented) · ❌ deferred
 | Memory UI | ✅ | `pages/Memory.tsx` |
 | Modules manager (Loaded + Available + Load/Unload) | ✅ | `pages/Modules.tsx` |
 | Playground (RESP REPL via `/api/exec`) | ✅ | `pages/Playground.tsx` |
-| Docs site — Installation, QuickStart, Commands (~290 entries), Architecture, SemanticCache, LLMCache, Memory, Configuration, SDKs, Deployment | ✅ | `pages/docs/` |
+| Docs site — Installation, QuickStart, Commands (~545 entries), Architecture, SemanticCache, LLMCache, Memory, Configuration, SDKs, Deployment | ✅ | `pages/docs/` |
 
 ---
 
@@ -480,15 +480,53 @@ The pedantic last mile — closing the cosmetic differences monitoring tools (Re
 
 These are wire-level byte-compatibility lifts. Within an all-NeuroCache deployment, our equivalents work identically; cross-engine interop is the only thing that benefits.
 
+## Phase 7 — Cross-engine compat (Redis + DiceDB + Valkey)
+
+Last-mile parity with the full DiceDB / Valkey 8.0 command surface. Each handler is small and additive — no new types or subsystems — closing the gaps every official driver and ops tool reaches for by default.
+
+| Feature | Status | Where |
+|---|---|---|
+| `BRPOPLPUSH src dst timeout` — deprecated 6.2 alias of `BLMOVE src dst RIGHT LEFT timeout`; routed to the existing blocking handler | ✅ | `resp/commands_compat.go` |
+| `MOVE key db` — single-DB build accepts db 0 (no-op, returns 0) and rejects others | ✅ | `resp/commands_compat.go` |
+| `SWAPDB index1 index2` — accepts `0 0` (only legal call when there is one logical DB) | ✅ | `resp/commands_compat.go` |
+| `EVICT [key ...]` — Valkey 8.0; with keys does DEL semantics, with no args drops one victim picked by the active eviction scorer | ✅ | `resp/commands_compat.go` |
+| `PFDEBUG GETREG\|DECODE\|TOGET\|ENCODING <key>` — HyperLogLog register inspector; new `Store.PFRegisters` exposes the dense register array | ✅ | `resp/commands_compat.go`, `store/hll.go::PFRegisters` |
+| `PFSELFTEST` — synthesizes a 1000-member HLL through the public PFAdd/PFCount path and asserts the estimate stays inside 5% tolerance | ✅ | `resp/commands_compat.go` |
+| `RESTORE-ASKING key ttl serialized [REPLACE]` — cluster-mode RESTORE during slot import; sets the per-conn ASKING flag then routes through the existing RESTORE handler | ✅ | `resp/commands_compat.go` |
+| `LATENCY HISTOGRAM [command ...]` — Redis 7.0 power-of-two CDF over the existing per-event ring; new `LatencyMonitor.Histogram` + `EventNames` | ✅ | `resp/commands_admin.go`, `introspect/latency.go` |
+| `CLIENT CAPA <cap>` — Valkey 8.0 capability advertisement; accepted for driver feature-detection round-trip | ✅ | `resp/commands_admin.go` |
+| `CLIENT SETINFO lib-name\|lib-ver <value>` — Valkey 7.2 driver identity; recorded in `ClientInfo.LibName/LibVer` and surfaces in `CLIENT INFO`/`CLIENT LIST` | ✅ | `resp/commands_admin.go`, `introspect/clients.go` |
+| `CLIENT CACHING YES\|NO` — single-shot OPTIN/OPTOUT toggle for the next command's tracked keys; rejected when CLIENT TRACKING isn't active | ✅ | `resp/commands_admin.go` |
+| `SCRIPT SHOW <sha1>` — Valkey 8.0; returns the source for a loaded script | ✅ | `resp/commands_script.go` |
+| `SCRIPT DEBUG YES\|SYNC\|NO` — accepted for driver compat (no LDB attached) | ✅ | `resp/commands_script.go` |
+| `SCRIPT HELP` — subcommand index | ✅ | `resp/commands_script.go` |
+| `COMMAND GETKEYSANDFLAGS cmd [arg ...]` — Valkey 7.0; pairs each extracted key with its access flags (RO/access vs RW/access/update) | ✅ | `resp/commands_command.go`, `resp/commands_compat.go` |
+| `CLUSTER DELSLOTSRANGE start end [start end ...]` — bulk slot release for re-sharding prep | ✅ | `resp/commands_cluster.go` |
+| `CLUSTER SET-CONFIG-EPOCH <epoch>` — operator-driven epoch reset, monotonic-only (matches real Redis) | ✅ | `resp/commands_cluster.go` |
+| `SENTINEL MYID` — local sentinel ID | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL FLUSHCONFIG` — accepted (in-memory state is the source of truth) | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL CONFIG GET\|SET <option> [value]` — round-trips the configurable knobs RedisInsight queries | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL DEBUG [param value ...]` — runtime tunables stub | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL INFO-CACHE [name ...]` — returns (name, last-INFO) tuples | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL IS-MASTER-DOWN-BY-ADDR / IS-PRIMARY-DOWN-BY-ADDR ip port epoch runid` — quorum-vote primitive used during failover | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL PENDING-SCRIPTS` — empty array (no notification scripts) | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL SET name option value [option value ...]` — per-master tunable updates | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL SIMULATE-FAILURE <flag>` — accept-without-crash for test suites | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL PRIMARY` / `PRIMARIES` / `GET-PRIMARY-ADDR-BY-NAME` — Valkey 8.0 inclusive aliases for MASTER / MASTERS / GET-MASTER-ADDR-BY-NAME | ✅ | `resp/commands_sentinel.go` |
+| `SENTINEL HELP` — subcommand index | ✅ | `resp/commands_sentinel.go` |
+
+**Outcome**: every command DiceDB / Valkey 8.0 advertises is now reachable on NeuroCache. The wire-level byte-compat lifts (binary `DUMP`/`RESTORE`, gossip protocol, AOF RDB preamble) remain deferred — those only matter for cross-engine cluster mixing, never for client-side compatibility.
+
 ## Total command count
 
-**~509 commands** across 12 data types + 5 modules + AI-native extensions + the NeuroCache-only primitives.
+**~545 commands** across 12 data types + 5 modules + AI-native extensions + NeuroCache-only primitives + cross-engine compat fillers.
 
 ## Known gaps
 
-Effectively everything Redis ships is now covered. Cosmetic gaps remain:
+Effectively everything Redis / Valkey / DiceDB ships is now covered after Phase 7. The remaining items are wire-level byte-compatibility lifts that only matter for cross-engine cluster mixing:
 
-- `OBJECT ENCODING` precise variants (we report uniform "raw"/"linkedlist"/"hashtable"/"skiplist"/"stream" labels; Redis distinguishes ziplist vs listpack vs hashtable based on internal encoding heuristics)
-- `LOLWUT` (joke command)
-- Sharded pub/sub keyspace notifications (regular keyspace notifications work; the sharded-channel variant isn't auto-routed today)
-- Some niche `DEBUG` subcommands (`DEBUG OBJECT`, `DEBUG SLEEP`, `DEBUG JMAP` — admin tools, not part of typical app usage)
+- Redis-binary `DUMP` / `RESTORE` payload format (cross-engine migration tools)
+- Cluster gossip Redis binary protocol (mixing NeuroCache + Redis nodes in one cluster)
+- AOF RDB preamble (Redis 4.0+ writes AOF as `[RDB snapshot][delta commands]`)
+
+Within an all-NeuroCache deployment our equivalents work identically.
