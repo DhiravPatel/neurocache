@@ -538,6 +538,35 @@ func normalizeRange(start, stop, n int) (int, int, bool) {
 func (s *Store) Lock()   { s.mu.Lock() }
 func (s *Store) Unlock() { s.mu.Unlock() }
 
+// PeekTouchState reads (Hits, LastRead) without bumping either —
+// used by CLIENT NO-TOUCH to snapshot per-key touch state before a
+// read so it can be restored afterward. ok=false when the key is
+// missing (or expired) at peek time.
+func (s *Store) PeekTouchState(key string) (uint64, time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.data[key]
+	if !ok || e.expired(time.Now()) {
+		return 0, time.Time{}, false
+	}
+	return atomic.LoadUint64(&e.Hits), e.LastRead, true
+}
+
+// RestoreTouchState writes (hits, lastRead) back onto an entry —
+// the inverse of PeekTouchState. Silently no-ops on missing or
+// type-changed entries (a concurrent writer may have replaced the
+// value between the snapshot and the restore).
+func (s *Store) RestoreTouchState(key string, hits uint64, lastRead time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.data[key]
+	if !ok {
+		return
+	}
+	atomic.StoreUint64(&e.Hits, hits)
+	e.LastRead = lastRead
+}
+
 // joinErr wraps the underlying error with command context for nicer logs.
 func joinErr(cmd string, err error) error {
 	if err == nil {

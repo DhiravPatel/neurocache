@@ -34,6 +34,11 @@ type ClientInfo struct {
 	// Reply mode: "on" (default), "off" (silent), "skip" (skip next).
 	ReplyMode  string
 	NoEvict    bool
+	// NoTouch suppresses LastRead / hit-counter updates for this
+	// connection's reads. Operators set it before scrubbing the
+	// keyspace so the audit doesn't churn LRU/LFU statistics.
+	// Mirrors Redis 7.2's CLIENT NO-TOUCH.
+	NoTouch    bool
 }
 
 // NewClientRegistry returns an empty registry.
@@ -148,6 +153,9 @@ func (c *ClientInfo) FormatLine() string {
 	sb.add("reply=" + c.ReplyMode)
 	if c.NoEvict {
 		sb.add("no-evict=1")
+	}
+	if c.NoTouch {
+		sb.add("no-touch=1")
 	}
 	return sb.String()
 }

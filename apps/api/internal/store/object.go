@@ -5,6 +5,8 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"errors"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -21,13 +23,128 @@ type ObjectInfo struct {
 	Bytes    int64
 }
 
-var encodingByType = map[ValueType]string{
-	TypeString: "raw",
-	TypeList:   "linkedlist",
-	TypeHash:   "hashtable",
-	TypeSet:    "hashtable",
-	TypeZSet:   "skiplist",
-	TypeStream: "stream",
+// resolveEncoding returns the canonical Redis encoding label for an
+// entry. We follow the same size-heuristic Redis uses: small
+// collections use a packed representation (listpack / intset /
+// embstr); above the size or value-length threshold they "promote"
+// to the open-ended form (hashtable / quicklist / skiplist / raw).
+//
+// The thresholds here match Redis 7.x defaults — operators
+// monitoring NeuroCache via RedisInsight or similar tools see the
+// same encoding labels they'd see on real Redis, so memory-tuning
+// dashboards don't lie.
+func resolveEncoding(e *Entry) string {
+	switch e.Type {
+	case TypeString:
+		// Try integer parsing — Redis tags pure-integer strings as "int".
+		if n, err := strconv.ParseInt(e.Str, 10, 64); err == nil {
+			_ = n
+			return "int"
+		}
+		// embstr is the "small immutable" form — Redis uses it up to
+		// 44 bytes (the threshold has changed across versions; we use
+		// the long-standing default).
+		if len(e.Str) <= 44 {
+			return "embstr"
+		}
+		return "raw"
+	case TypeList:
+		// listpack for small lists with short values, otherwise quicklist
+		// (Redis no longer ships linkedlist; it was replaced in 3.2).
+		if e.List == nil || e.List.Len() <= 128 {
+			maxLen := 0
+			if e.List != nil {
+				for el := e.List.Front(); el != nil; el = el.Next() {
+					if l := len(el.Value.(string)); l > maxLen {
+						maxLen = l
+					}
+					if maxLen > 64 {
+						break
+					}
+				}
+			}
+			if maxLen <= 64 {
+				return "listpack"
+			}
+		}
+		return "quicklist"
+	case TypeHash:
+		if len(e.Hash) <= 128 {
+			maxLen := 0
+			for k, v := range e.Hash {
+				if l := len(k); l > maxLen {
+					maxLen = l
+				}
+				if l := len(v); l > maxLen {
+					maxLen = l
+				}
+				if maxLen > 64 {
+					break
+				}
+			}
+			if maxLen <= 64 {
+				return "listpack"
+			}
+		}
+		return "hashtable"
+	case TypeSet:
+		// intset when every member parses as int64.
+		allInt := len(e.Set) > 0
+		for m := range e.Set {
+			if _, err := strconv.ParseInt(m, 10, 64); err != nil {
+				allInt = false
+				break
+			}
+		}
+		if allInt && len(e.Set) <= 512 {
+			return "intset"
+		}
+		if len(e.Set) <= 128 {
+			maxLen := 0
+			for m := range e.Set {
+				if l := len(m); l > maxLen {
+					maxLen = l
+				}
+				if maxLen > 64 {
+					break
+				}
+			}
+			if maxLen <= 64 {
+				return "listpack"
+			}
+		}
+		return "hashtable"
+	case TypeZSet:
+		if e.ZSet == nil || e.ZSet.Len() <= 128 {
+			maxLen := 0
+			if e.ZSet != nil {
+				for _, m := range e.ZSet.members() {
+					if l := len(m); l > maxLen {
+						maxLen = l
+					}
+					if maxLen > 64 {
+						break
+					}
+				}
+			}
+			if maxLen <= 64 {
+				return "listpack"
+			}
+		}
+		return "skiplist"
+	case TypeStream:
+		return "stream"
+	case TypeVector:
+		// V* type isn't a Redis-native type so there's no canonical
+		// encoding label; we expose the algorithm choice instead.
+		if e.Vector != nil && e.Vector.Index != nil {
+			return strings.ToLower(string(e.Vector.Index.Algo()))
+		}
+		return "vectorset"
+	case TypeModule:
+		return "module"
+	}
+	return "raw"
 }
 
 // Object returns metadata for one key, (nil, false) when missing.
@@ -40,7 +157,7 @@ func (s *Store) Object(key string) (*ObjectInfo, bool) {
 	}
 	return &ObjectInfo{
 		Type:     e.Type.String(),
-		Encoding: encodingByType[e.Type],
+		Encoding: resolveEncoding(e),
 		IdleSec:  int64(time.Since(e.LastRead).Seconds()),
 		FreqHits: atomic.LoadUint64(&e.Hits),
 		Bytes:    int64(e.Bytes),

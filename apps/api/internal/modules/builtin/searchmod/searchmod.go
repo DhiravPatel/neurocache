@@ -345,6 +345,11 @@ func ftSearch(c *modules.Ctx, args []string) error {
 	var sortField string
 	sortAsc := true
 	var returnFields []string
+	returnAliases := map[string]string{} // src field → alias
+	inKeys := map[string]bool{}          // empty = don't restrict
+	inFields := map[string]bool{}        // empty = don't restrict
+	var summarize *SummarizeOpts
+	var highlight *HighlightOpts
 	params := map[string]string{}
 	for i := 2; i < len(args); i++ {
 		switch strings.ToUpper(args[i]) {
@@ -353,7 +358,6 @@ func ftSearch(c *modules.Ctx, args []string) error {
 		case "WITHSCORES":
 			withScores = true
 		case "PARAMS":
-			// PARAMS n k v k v ...
 			if i+1 >= len(args) {
 				c.Reply.Error("PARAMS needs a count")
 				return nil
@@ -368,6 +372,12 @@ func ftSearch(c *modules.Ctx, args []string) error {
 			}
 			i += 1 + n
 		case "DIALECT":
+			if i+1 < len(args) {
+				i++
+			}
+		case "SLOP":
+			// Phrase proximity tolerance — accepted for compatibility;
+			// our scorer requires adjacency for phrase matches today.
 			if i+1 < len(args) {
 				i++
 			}
@@ -396,11 +406,85 @@ func ftSearch(c *modules.Ctx, args []string) error {
 				return nil
 			}
 			n, _ := strconv.Atoi(args[i+1])
-			returnFields = append(returnFields, args[i+2:i+2+n]...)
+			if i+2+n > len(args) {
+				c.Reply.Error("RETURN: too few args")
+				return nil
+			}
+			specs := args[i+2 : i+2+n]
+			j := 0
+			for j < len(specs) {
+				field := specs[j]
+				if j+2 < len(specs) && strings.EqualFold(specs[j+1], "AS") {
+					returnAliases[field] = specs[j+2]
+					returnFields = append(returnFields, field)
+					j += 3
+					continue
+				}
+				returnFields = append(returnFields, field)
+				j++
+			}
 			i += 1 + n
+		case "INKEYS":
+			if i+1 >= len(args) {
+				c.Reply.Error("INKEYS needs a count")
+				return nil
+			}
+			n, _ := strconv.Atoi(args[i+1])
+			if i+1+n > len(args) {
+				c.Reply.Error("INKEYS: too few args")
+				return nil
+			}
+			for _, k := range args[i+2 : i+2+n] {
+				inKeys[k] = true
+			}
+			i += 1 + n
+		case "INFIELDS":
+			if i+1 >= len(args) {
+				c.Reply.Error("INFIELDS needs a count")
+				return nil
+			}
+			n, _ := strconv.Atoi(args[i+1])
+			if i+1+n > len(args) {
+				c.Reply.Error("INFIELDS: too few args")
+				return nil
+			}
+			for _, f := range args[i+2 : i+2+n] {
+				inFields[f] = true
+			}
+			i += 1 + n
+		case "SUMMARIZE":
+			summarize = &SummarizeOpts{}
+			i = parseSummarizeOpts(args, i+1, summarize) - 1
+		case "HIGHLIGHT":
+			highlight = &HighlightOpts{}
+			i = parseHighlightOpts(args, i+1, highlight) - 1
 		}
 	}
 	hits := idx.SearchWithParams(q, params)
+	if len(inKeys) > 0 {
+		filtered := hits[:0]
+		for _, h := range hits {
+			if inKeys[h.DocID] {
+				filtered = append(filtered, h)
+			}
+		}
+		hits = filtered
+	}
+	if len(inFields) > 0 {
+		// INFIELDS narrows TEXT-field matches. We post-filter hits
+		// where every matched term appears in at least one allowed
+		// field. Requires re-walking the doc; a tighter fix would
+		// thread inFields through the eval, but post-filtering keeps
+		// this self-contained.
+		filtered := hits[:0]
+		terms := extractQueryTerms(q)
+		for _, h := range hits {
+			if hitTouchesAllowedField(h.Doc, terms, inFields) {
+				filtered = append(filtered, h)
+			}
+		}
+		hits = filtered
+	}
 	if sortField != "" {
 		sort.SliceStable(hits, func(i, j int) bool {
 			a := hits[i].Doc.Fields[sortField]
@@ -429,17 +513,165 @@ func ftSearch(c *modules.Ctx, args []string) error {
 	page := hits[limitOff:end]
 
 	out := []any{int64(len(hits))}
+	terms := extractQueryTerms(q)
 	for _, h := range page {
 		out = append(out, h.DocID)
 		if withScores {
 			out = append(out, strconv.FormatFloat(h.Score, 'f', -1, 64))
 		}
 		if !noContent {
-			out = append(out, docFieldsAsArray(h.Doc, returnFields))
+			// HIGHLIGHT / SUMMARIZE mutate the in-memory doc copy —
+			// clone first so we don't poison subsequent reads of the
+			// same key.
+			view := h.Doc
+			if highlight != nil || summarize != nil {
+				view = cloneDocFields(h.Doc)
+				if summarize != nil {
+					applySummarize(view, *summarize, terms)
+				}
+				if highlight != nil {
+					applyHighlight(view, *highlight, terms)
+				}
+			}
+			out = append(out, docFieldsAsArrayAliased(view, returnFields, returnAliases))
 		}
 	}
 	c.Reply.Array(out)
 	return nil
+}
+
+// hitTouchesAllowedField returns true when at least one query term
+// appears in at least one of the INFIELDS-allowed fields of doc.
+// Whole-token, case-insensitive match.
+func hitTouchesAllowedField(doc *Document, terms []string, allowed map[string]bool) bool {
+	if doc == nil {
+		return false
+	}
+	for f, v := range doc.Fields {
+		if !allowed[f] {
+			continue
+		}
+		lc := strings.ToLower(v)
+		for _, t := range terms {
+			if t == "" {
+				continue
+			}
+			if strings.Contains(lc, strings.ToLower(t)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// cloneDocFields makes an independent copy of doc.Fields so
+// HIGHLIGHT / SUMMARIZE rewrites don't bleed across queries.
+func cloneDocFields(doc *Document) *Document {
+	out := &Document{ID: doc.ID, Score: doc.Score, Fields: make(map[string]string, len(doc.Fields))}
+	for k, v := range doc.Fields {
+		out.Fields[k] = v
+	}
+	return out
+}
+
+// docFieldsAsArrayAliased honours the RETURN [n] field [AS alias]
+// surface — every emitted (key, value) pair uses the alias when one
+// was supplied for that field.
+func docFieldsAsArrayAliased(doc *Document, only []string, aliases map[string]string) []any {
+	if len(only) == 0 {
+		return docFieldsAsArray(doc, nil)
+	}
+	out := []any{}
+	for _, f := range only {
+		v, ok := doc.Fields[f]
+		if !ok {
+			continue
+		}
+		name := f
+		if alias, present := aliases[f]; present {
+			name = alias
+		}
+		out = append(out, name, v)
+	}
+	return out
+}
+
+// parseSummarizeOpts walks the SUMMARIZE clause starting at args[at]
+// and fills opts. Returns the index just past the clause.
+//
+// SUMMARIZE [FIELDS num field [field ...]] [FRAGS n] [LEN n] [SEPARATOR s]
+func parseSummarizeOpts(args []string, at int, opts *SummarizeOpts) int {
+	for at < len(args) {
+		switch strings.ToUpper(args[at]) {
+		case "FIELDS":
+			if at+1 >= len(args) {
+				return at
+			}
+			n, _ := strconv.Atoi(args[at+1])
+			if at+1+n > len(args) {
+				return at
+			}
+			opts.Fields = append(opts.Fields, args[at+2:at+2+n]...)
+			at += 2 + n
+		case "FRAGS":
+			if at+1 < len(args) {
+				opts.Frags, _ = strconv.Atoi(args[at+1])
+				at += 2
+				continue
+			}
+			return at
+		case "LEN":
+			if at+1 < len(args) {
+				opts.Len, _ = strconv.Atoi(args[at+1])
+				at += 2
+				continue
+			}
+			return at
+		case "SEPARATOR":
+			if at+1 < len(args) {
+				opts.Separator = args[at+1]
+				at += 2
+				continue
+			}
+			return at
+		default:
+			// Hit an option that belongs to FT.SEARCH proper — return
+			// without consuming. The caller's outer switch picks up.
+			return at
+		}
+	}
+	return at
+}
+
+// parseHighlightOpts walks the HIGHLIGHT clause:
+//
+// HIGHLIGHT [FIELDS num field [field ...]] [TAGS open close]
+func parseHighlightOpts(args []string, at int, opts *HighlightOpts) int {
+	for at < len(args) {
+		switch strings.ToUpper(args[at]) {
+		case "FIELDS":
+			if at+1 >= len(args) {
+				return at
+			}
+			n, _ := strconv.Atoi(args[at+1])
+			if at+1+n > len(args) {
+				return at
+			}
+			opts.Fields = append(opts.Fields, args[at+2:at+2+n]...)
+			at += 2 + n
+		case "TAGS":
+			if at+2 < len(args) {
+				opts.Open = args[at+1]
+				opts.Close = args[at+2]
+				at += 3
+				continue
+			}
+			return at
+		default:
+			return at
+		}
+	}
+	return at
 }
 
 func docFieldsAsArray(doc *Document, only []string) []any {

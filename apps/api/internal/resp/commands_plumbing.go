@@ -101,11 +101,17 @@ func (c *conn) aclDryRunCmd(args []string) {
 	writeSimple(c.bw, "OK")
 }
 
-// debugCmd extends the existing DEBUG stub with SLEEP — the only
-// DEBUG subcommand most operators actually use. We accept the command
-// regardless of args and reply OK; SLEEP blocks the requested seconds.
+// debugCmd routes the DEBUG subcommand surface — the union of what
+// monitoring tools (RedisInsight, redis-cli --bigkeys, debug
+// helpers in driver test suites) probe for. Unknown subcommands fall
+// through to OK so old clients sniffing the surface don't error.
 func (c *conn) debugCmd(args []string) {
-	if len(args) >= 1 && strings.EqualFold(args[0], "SLEEP") {
+	if len(args) == 0 {
+		writeError(c.bw, "DEBUG requires a subcommand")
+		return
+	}
+	switch strings.ToUpper(args[0]) {
+	case "SLEEP":
 		secs := 0.0
 		if len(args) >= 2 {
 			secs, _ = strconv.ParseFloat(args[1], 64)
@@ -113,9 +119,43 @@ func (c *conn) debugCmd(args []string) {
 		_ = c.bw.Flush()
 		time.Sleep(time.Duration(secs * float64(time.Second)))
 		writeSimple(c.bw, "OK")
-		return
+	case "OBJECT":
+		c.debugObjectCmd(args[1:])
+	case "SDSLEN":
+		c.debugSdslenCmd(args[1:])
+	case "STRINGMATCH-LEN":
+		c.debugStringMatchLenCmd(args[1:])
+	case "RELOAD":
+		c.debugReloadCmd(args[1:])
+	case "CHANGE-REPL-ID":
+		c.debugChangeReplIDCmd()
+	case "JMAP":
+		c.debugJMapCmd()
+	case "QUICKLIST-PACKED-THRESHOLD":
+		// Single-knob tunable in real Redis; here it's a no-op since
+		// our encoding heuristics aren't operator-tunable. Accept the
+		// arg so client SETs don't error.
+		writeSimple(c.bw, "OK")
+	case "SET-ACTIVE-EXPIRE":
+		// 0/1 toggle for the LRU/LFU expire-loop. We always sweep —
+		// disabling would require a bigger refactor than this knob
+		// warrants. Accept and reply OK.
+		writeSimple(c.bw, "OK")
+	case "HELP":
+		writeArray(c.bw, []string{
+			"DEBUG OBJECT <key>",
+			"DEBUG SLEEP <seconds>",
+			"DEBUG SDSLEN <key>",
+			"DEBUG STRINGMATCH-LEN <pattern>",
+			"DEBUG RELOAD [NOSAVE]",
+			"DEBUG CHANGE-REPL-ID",
+			"DEBUG JMAP",
+			"DEBUG QUICKLIST-PACKED-THRESHOLD <bytes>",
+			"DEBUG SET-ACTIVE-EXPIRE 0|1",
+		})
+	default:
+		writeSimple(c.bw, "OK")
 	}
-	writeSimple(c.bw, "OK")
 }
 
 // looksLikeSelector tests whether the first arg of CLIENT KILL is a

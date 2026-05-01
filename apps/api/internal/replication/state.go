@@ -183,6 +183,19 @@ func (s *State) SetLinkState(ls LinkState) {
 	s.mu.Unlock()
 }
 
+// BumpReplID rotates the replication id (and slides the previous
+// id into the secondary slot) so any reconnecting replica's PSYNC
+// offset becomes stale and forces a full resync. Called by
+// `DEBUG CHANGE-REPL-ID` — the same primitive operators reach for
+// after a botched FAILOVER when the in-flight master state is
+// suspect.
+func (s *State) BumpReplID() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replIDPrev = s.replID
+	s.replID = randomReplID()
+}
+
 // SetReplID overrides the replid (replica-side: sync'd with the master
 // after FULLRESYNC, or on SetRoleMaster during promotion).
 func (s *State) SetReplID(id string) {

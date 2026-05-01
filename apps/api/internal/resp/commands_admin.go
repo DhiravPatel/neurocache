@@ -354,6 +354,16 @@ func (c *conn) clientCmd(args []string) {
 			c.info.NoEvict = false
 		}
 		writeSimple(c.bw, "OK")
+	case "NO-TOUCH":
+		// Redis 7.2: when ON, this conn's reads must NOT bump the
+		// per-key LRU / LFU counters. We honour the flag in the
+		// store layer via a per-call signal — see store.NoTouchKey().
+		if len(args) >= 2 && strings.EqualFold(args[1], "ON") {
+			c.info.NoTouch = true
+		} else {
+			c.info.NoTouch = false
+		}
+		writeSimple(c.bw, "OK")
 	case "TRACKING":
 		c.clientTrackingCmd(args[1:])
 	case "TRACKINGINFO":
@@ -568,6 +578,32 @@ func (c *conn) memoryCmd(args []string) {
 	case "PURGE":
 		runtime.GC()
 		writeSimple(c.bw, "OK")
+	case "MALLOC-STATS":
+		// Real Redis dumps jemalloc's per-arena stats here. We don't
+		// link jemalloc; we surface the Go runtime equivalent so any
+		// monitoring tool that prints MEMORY MALLOC-STATS gets a
+		// sensible bulk string instead of an unknown-subcommand error.
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		out := fmt.Sprintf(
+			"runtime: go-mallocstats\n"+
+				"  HeapAlloc:    %d bytes\n"+
+				"  HeapSys:      %d bytes\n"+
+				"  HeapInuse:    %d bytes\n"+
+				"  HeapIdle:     %d bytes\n"+
+				"  HeapReleased: %d bytes\n"+
+				"  HeapObjects:  %d\n"+
+				"  StackInuse:   %d bytes\n"+
+				"  MSpanInuse:   %d bytes\n"+
+				"  MCacheInuse:  %d bytes\n"+
+				"  GCSys:        %d bytes\n"+
+				"  NextGC:       %d bytes\n"+
+				"  NumGC:        %d\n",
+			m.HeapAlloc, m.HeapSys, m.HeapInuse, m.HeapIdle, m.HeapReleased,
+			m.HeapObjects, m.StackInuse, m.MSpanInuse, m.MCacheInuse,
+			m.GCSys, m.NextGC, m.NumGC,
+		)
+		writeBulk(c.bw, out)
 	default:
 		writeError(c.bw, "Unknown MEMORY subcommand")
 	}
