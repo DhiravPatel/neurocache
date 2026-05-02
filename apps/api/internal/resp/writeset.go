@@ -83,6 +83,35 @@ var writeCommands = map[string]bool{
 	// phase 5: vector set type — every state-changing V* command.
 	"VADD": true, "VREM": true,
 	"VSETATTR": true, "VDELATTR": true,
+
+	// AI-stack: embedding cache, conversation management, prompt
+	// templates. Each mutates in-memory state that needs to survive
+	// restart, so they all flow through AOF + replication.
+	"EMB.CACHE_SET": true, "EMB.CACHE_DEL": true, "EMB.PURGE": true, "EMB.COST": true,
+	"CONV.APPEND": true, "CONV.SUMMARIZE": true, "CONV.RESET": true,
+	"PROMPT.SET": true, "PROMPT.DELETE": true,
+
+	// Phase 11 — every command that mutates aiops manager state.
+	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
+	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
+	// writeset because they don't change durable state. Inferred
+	// follow-on writes (e.g. AGENT.CALL caching a fresh upstream
+	// result) flow through their own AGENT.STORE invocation, which
+	// is in the writeset.
+	"AGENT.STORE": true, "AGENT.PROFILE": true, "AGENT.FORGET": true, "AGENT.PURGE": true,
+	"STREAM.SET": true, "STREAM.FORGET": true, "STREAM.PURGE": true,
+	"COST.BUDGET": true, "COST.CHARGE": true, "COST.RESET": true,
+	"SHADOW.PUT": true, "SHADOW.FORGET": true,
+	"PERSONA.SET": true, "PERSONA.FORGET": true,
+	"SAFE.SET": true, "SAFE.FORGET": true, "SAFE.PURGE": true,
+	"LINEAGE.RECORD": true, "LINEAGE.FORGET": true,
+	"SLO.SET": true, "SLO.RESET": true,
+	"AB.DEFINE": true, "AB.EXPOSE": true, "AB.RECORD": true, "AB.RESET": true, "AB.DELETE": true,
+	"GRAPH.LINK": true, "GRAPH.UNLINK": true,
+	"SCHEDULE.AT": true, "SCHEDULE.IN": true, "SCHEDULE.CANCEL": true,
+	"EVENT.APPEND": true, "EVENT.PROJECT": true,
+	"POLICY.SET": true, "POLICY.PURGE": true,
+	"INFER.FORGET": true, "INFER.PURGE": true, "INFER.DEFAULT": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

@@ -10,50 +10,57 @@ func (s *Store) SAdd(key string, members ...string) (int, error) {
 	if len(members) == 0 {
 		return 0, errors.New("SADD requires at least one member")
 	}
-	s.mu.Lock()
-	e, err := s.getOrCreate(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	e, err := s.getOrCreate(sh, key, TypeSet)
 	if err != nil {
-		s.mu.Unlock()
+		sh.mu.Unlock()
 		return 0, err
 	}
 	added := 0
+	delta := 0
 	for _, m := range members {
 		if _, exists := e.Set[m]; !exists {
 			e.Set[m] = struct{}{}
 			added++
+			delta += len(m)
 		}
 	}
-	s.recomputeBytes(e)
-	s.mu.Unlock()
+	s.addBytes(e, delta)
+	sh.mu.Unlock()
 	s.fire("sadd", key)
 	return added, nil
 }
 
 // SRem deletes members; returns the count actually removed.
 func (s *Store) SRem(key string, members ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return 0, err
 	}
 	removed := 0
+	delta := 0
 	for _, m := range members {
 		if _, exists := e.Set[m]; exists {
 			delete(e.Set, m)
 			removed++
+			delta -= len(m)
 		}
 	}
-	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.addBytes(e, delta)
+	s.removeIfEmpty(sh, e)
 	return removed, nil
 }
 
 // SIsMember reports membership.
 func (s *Store) SIsMember(key, member string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -63,9 +70,10 @@ func (s *Store) SIsMember(key, member string) (bool, error) {
 
 // SMembers returns every member.
 func (s *Store) SMembers(key string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -78,9 +86,10 @@ func (s *Store) SMembers(key string) ([]string, error) {
 
 // SCard returns set cardinality, 0 when missing.
 func (s *Store) SCard(key string) (int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -89,16 +98,17 @@ func (s *Store) SCard(key string) (int, error) {
 
 // SPop removes and returns a random member.
 func (s *Store) SPop(key string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return "", false, err
 	}
 	for m := range e.Set {
 		delete(e.Set, m)
-		s.recomputeBytes(e)
-		s.removeIfEmpty(e)
+		s.addBytes(e, -len(m))
+		s.removeIfEmpty(sh, e)
 		return m, true, nil
 	}
 	return "", false, nil
@@ -109,9 +119,10 @@ func (s *Store) SPop(key string) (string, bool, error) {
 // repetition. count == 0 returns a single random member as a one-element
 // slice (caller passes 1 for "just one").
 func (s *Store) SRandMember(key string, count int) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -139,24 +150,26 @@ func (s *Store) SRandMember(key string, count int) ([]string, error) {
 
 // SMove atomically moves a member from src to dst.
 func (s *Store) SMove(src, dst, member string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	se, ok, err := s.get(src, TypeSet)
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	se, ok, err := shS.get(src, TypeSet)
 	if err != nil || !ok {
 		return false, err
 	}
 	if _, exists := se.Set[member]; !exists {
 		return false, nil
 	}
-	de, err := s.getOrCreate(dst, TypeSet)
+	de, err := s.getOrCreate(shD, dst, TypeSet)
 	if err != nil {
 		return false, err
 	}
 	delete(se.Set, member)
-	de.Set[member] = struct{}{}
-	s.recomputeBytes(se)
-	s.recomputeBytes(de)
-	s.removeIfEmpty(se)
+	s.addBytes(se, -len(member))
+	if _, dup := de.Set[member]; !dup {
+		de.Set[member] = struct{}{}
+		s.addBytes(de, len(member))
+	}
+	s.removeIfEmpty(shS, se)
 	return true, nil
 }
 
@@ -165,8 +178,9 @@ func (s *Store) SInter(keys ...string) ([]string, error) {
 	if len(keys) == 0 {
 		return []string{}, nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	sets, err := s.loadSets(keys)
 	if err != nil {
 		return nil, err
@@ -199,8 +213,9 @@ next:
 
 // SUnion returns the union of all sets.
 func (s *Store) SUnion(keys ...string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	sets, err := s.loadSets(keys)
 	if err != nil {
 		return nil, err
@@ -223,8 +238,9 @@ func (s *Store) SDiff(keys ...string) ([]string, error) {
 	if len(keys) == 0 {
 		return []string{}, nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	sets, err := s.loadSets(keys)
 	if err != nil {
 		return nil, err
@@ -273,11 +289,13 @@ func (s *Store) SDiffStore(dst string, keys ...string) (int, error) {
 }
 
 // loadSets dereferences keys into raw member maps. Missing keys are
-// treated as empty, wrong-typed keys raise WRONGTYPE.
+// treated as empty, wrong-typed keys raise WRONGTYPE. Caller must
+// already hold read locks on every shard owning the input keys.
 func (s *Store) loadSets(keys []string) ([]map[string]struct{}, error) {
 	out := make([]map[string]struct{}, 0, len(keys))
 	for _, k := range keys {
-		e, ok, err := s.get(k, TypeSet)
+		sh := s.shardForKey(k)
+		e, ok, err := sh.get(k, TypeSet)
 		if err != nil {
 			return nil, err
 		}
@@ -293,16 +311,17 @@ func (s *Store) loadSets(keys []string) ([]map[string]struct{}, error) {
 // storeSetResult writes a computed member slice into a destination key,
 // replacing anything already there. Empty results delete the key.
 func (s *Store) storeSetResult(dst string, members []string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old, ok := s.data[dst]; ok {
+	sh := s.shardForKey(dst)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if old, ok := sh.data[dst]; ok {
 		s.bytes.Add(-int64(old.Bytes))
-		delete(s.data, dst)
+		delete(sh.data, dst)
 	}
 	if len(members) == 0 {
 		return 0, nil
 	}
-	e, err := s.getOrCreate(dst, TypeSet)
+	e, err := s.getOrCreate(sh, dst, TypeSet)
 	if err != nil {
 		return 0, err
 	}

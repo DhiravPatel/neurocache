@@ -27,10 +27,11 @@ type ModuleValue struct {
 // SetModule stores a module-owned value at key. If the key already
 // holds a different type the operation fails with WRONGTYPE.
 func (s *Store) SetModule(key string, typeIDLo, typeIDHi uint64, value any, byteSize int64, ttl time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 	now := time.Now()
-	old, exists := s.data[key]
+	old, exists := sh.data[key]
 	if exists && !old.expired(now) && old.Type != TypeModule {
 		return ErrWrongType
 	}
@@ -46,7 +47,7 @@ func (s *Store) SetModule(key string, typeIDLo, typeIDHi uint64, value any, byte
 		e.ExpireAt = now.Add(ttl)
 	}
 	e.Bytes = int(byteSize) + len(key)
-	s.data[key] = e
+	sh.data[key] = e
 	s.bytes.Add(int64(e.Bytes))
 	s.fire("module.set", key)
 	return nil
@@ -56,9 +57,10 @@ func (s *Store) SetModule(key string, typeIDLo, typeIDHi uint64, value any, byte
 // reading from the wrong type returns WRONGTYPE so a JSON command can't
 // silently see Bloom data.
 func (s *Store) GetModule(key string, typeIDLo, typeIDHi uint64) (any, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return nil, false, nil
 	}
@@ -74,9 +76,10 @@ func (s *Store) GetModule(key string, typeIDLo, typeIDHi uint64) (any, bool, err
 // DelModule removes a module-typed key (no-op for missing keys).
 // Returns true when something was deleted.
 func (s *Store) DelModule(key string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok := sh.data[key]
 	if !ok {
 		return false
 	}
@@ -85,7 +88,7 @@ func (s *Store) DelModule(key string) bool {
 		return false
 	}
 	s.bytes.Add(-int64(e.Bytes))
-	delete(s.data, key)
+	delete(sh.data, key)
 	s.fire("module.del", key)
 	return true
 }

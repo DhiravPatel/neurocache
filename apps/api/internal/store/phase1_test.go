@@ -163,18 +163,19 @@ func TestTouchUpdatesLastRead(t *testing.T) {
 	s.Set("a", "v", 0)
 	s.Set("b", "v", 0)
 	// step LastRead back so we can detect the bump
-	s.mu.Lock()
-	s.data["a"].LastRead = time.Now().Add(-time.Hour)
-	s.mu.Unlock()
+	shA := s.shardForKey("a")
+	shA.mu.Lock()
+	shA.data["a"].LastRead = time.Now().Add(-time.Hour)
+	shA.mu.Unlock()
 	n := s.Touch("a", "b", "missing")
 	if n != 2 {
 		t.Fatalf("touch count = %d", n)
 	}
-	s.mu.RLock()
-	if time.Since(s.data["a"].LastRead) > time.Second {
+	shA.mu.RLock()
+	if time.Since(shA.data["a"].LastRead) > time.Second {
 		t.Fatalf("a LastRead not refreshed")
 	}
-	s.mu.RUnlock()
+	shA.mu.RUnlock()
 }
 
 func TestExpireTimeAndPExpireTime(t *testing.T) {

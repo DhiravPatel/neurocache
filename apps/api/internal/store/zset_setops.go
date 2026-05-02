@@ -39,13 +39,13 @@ type zsetSource struct {
 	members []ZPair // populated for Set sources (treat each member as score 1)
 }
 
-// CollectZSetMembers returns (member -> score) for one input. Sets
+// collectZSetMembers returns (member -> score) for one input. Sets
 // behave as zsets-with-score-1, mirroring Redis. Missing keys return
-// an empty map.
+// an empty map. Caller must already hold the read lock on the shard
+// owning `key`.
 func (s *Store) collectZSetMembers(key string) (map[string]float64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	e, ok := sh.data[key]
 	if !ok {
 		return map[string]float64{}, nil
 	}
@@ -70,26 +70,38 @@ func (s *Store) collectZSetMembers(key string) (map[string]float64, error) {
 // ZUnionStore writes the weighted union into dest. Returns its size.
 // weights == nil means every input contributes 1×.
 func (s *Store) ZUnionStore(dest string, keys []string, weights []float64, agg ZSetOpAggregate) (int, error) {
+	all := append([]string{dest}, keys...)
+	involved := s.shardsFor(all)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
 	merged, err := s.zsetUnion(keys, weights, agg)
 	if err != nil {
 		return 0, err
 	}
-	return s.replaceZSet(dest, merged)
+	return s.replaceZSetLocked(dest, merged)
 }
 
 // ZInterStore writes the weighted intersection into dest.
 func (s *Store) ZInterStore(dest string, keys []string, weights []float64, agg ZSetOpAggregate) (int, error) {
+	all := append([]string{dest}, keys...)
+	involved := s.shardsFor(all)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
 	merged, err := s.zsetInter(keys, weights, agg)
 	if err != nil {
 		return 0, err
 	}
-	return s.replaceZSet(dest, merged)
+	return s.replaceZSetLocked(dest, merged)
 }
 
 // ZDiffStore writes (keys[0] minus the union of keys[1:]) into dest.
 func (s *Store) ZDiffStore(dest string, keys []string) (int, error) {
+	all := append([]string{dest}, keys...)
+	involved := s.shardsFor(all)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
 	if len(keys) == 0 {
-		return s.replaceZSet(dest, nil)
+		return s.replaceZSetLocked(dest, nil)
 	}
 	primary, err := s.collectZSetMembers(keys[0])
 	if err != nil {
@@ -104,12 +116,15 @@ func (s *Store) ZDiffStore(dest string, keys []string) (int, error) {
 			delete(primary, m)
 		}
 	}
-	return s.replaceZSet(dest, primary)
+	return s.replaceZSetLocked(dest, primary)
 }
 
 // ZUnion returns the weighted union without storing — backs the
 // non-STORE forms ZUNION / ZINTER / ZDIFF added in Redis 6.2.
 func (s *Store) ZUnion(keys []string, weights []float64, agg ZSetOpAggregate) ([]ZRangeResult, error) {
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	merged, err := s.zsetUnion(keys, weights, agg)
 	if err != nil {
 		return nil, err
@@ -118,6 +133,9 @@ func (s *Store) ZUnion(keys []string, weights []float64, agg ZSetOpAggregate) ([
 }
 
 func (s *Store) ZInter(keys []string, weights []float64, agg ZSetOpAggregate) ([]ZRangeResult, error) {
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	merged, err := s.zsetInter(keys, weights, agg)
 	if err != nil {
 		return nil, err
@@ -129,6 +147,9 @@ func (s *Store) ZDiff(keys []string) ([]ZRangeResult, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	primary, err := s.collectZSetMembers(keys[0])
 	if err != nil {
 		return nil, err
@@ -148,6 +169,9 @@ func (s *Store) ZDiff(keys []string) ([]ZRangeResult, error) {
 // ZInterCard counts the intersection without materialising it. limit > 0
 // short-circuits the scan as soon as the count is reached.
 func (s *Store) ZInterCard(keys []string, limit int) (int, error) {
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	merged, err := s.zsetInter(keys, nil, ZAggSum)
 	if err != nil {
 		return 0, err
@@ -159,7 +183,8 @@ func (s *Store) ZInterCard(keys []string, limit int) (int, error) {
 }
 
 // zsetUnion is the shared internal — returns the merged map. Default
-// aggregator SUM, default weight 1.
+// aggregator SUM, default weight 1. Caller must hold read locks on
+// every shard owning an input key.
 func (s *Store) zsetUnion(keys []string, weights []float64, agg ZSetOpAggregate) (map[string]float64, error) {
 	out := map[string]float64{}
 	seen := map[string]bool{}
@@ -242,18 +267,29 @@ func combine(a, b float64, agg ZSetOpAggregate) float64 {
 }
 
 // replaceZSet wipes dest and writes merged into it. Returns the
-// resulting cardinality.
+// resulting cardinality. Locks the destination's shard internally —
+// for use by callers that don't hold any locks (GeoSearchStore,
+// ZRangeStore).
 func (s *Store) replaceZSet(dest string, merged map[string]float64) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old, ok := s.data[dest]; ok {
+	sh := s.shardForKey(dest)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return s.replaceZSetLocked(dest, merged)
+}
+
+// replaceZSetLocked is the internal variant — caller must already
+// hold the destination shard's write lock. Used by the *Store ops
+// that take all involved shards up front for atomicity.
+func (s *Store) replaceZSetLocked(dest string, merged map[string]float64) (int, error) {
+	sh := s.shardForKey(dest)
+	if old, ok := sh.data[dest]; ok {
 		s.bytes.Add(-int64(old.Bytes))
-		delete(s.data, dest)
+		delete(sh.data, dest)
 	}
 	if len(merged) == 0 {
 		return 0, nil
 	}
-	e, err := s.getOrCreate(dest, TypeZSet)
+	e, err := s.getOrCreate(sh, dest, TypeZSet)
 	if err != nil {
 		return 0, err
 	}
@@ -296,9 +332,10 @@ func (s *Store) ZRangeByLex(key, minStr, maxStr string, offset, count int, rever
 	if err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return []string{}, err
 	}
@@ -367,15 +404,16 @@ func (s *Store) ZRangeStore(dest, src, startStr, stopStr, rangeBy string, offset
 			return 0, err
 		}
 		// Lex range — every member keeps its original score.
-		for _, m := range members {
-			s.mu.RLock()
-			e, ok, _ := s.get(src, TypeZSet)
-			if ok {
+		shS := s.shardForKey(src)
+		shS.mu.RLock()
+		e, ok, _ := shS.get(src, TypeZSet)
+		if ok {
+			for _, m := range members {
 				sc, _ := e.ZSet.Score(m)
 				merged[m] = sc
 			}
-			s.mu.RUnlock()
 		}
+		shS.mu.RUnlock()
 	default:
 		// INDEX
 		start, _ := atoiSafe(startStr)
@@ -447,14 +485,15 @@ func (s *Store) ZMPop(keys []string, reverse bool, count int) (string, []ZRangeR
 		count = 1
 	}
 	for _, k := range keys {
-		s.mu.Lock()
-		e, ok, err := s.get(k, TypeZSet)
+		sh := s.shardForKey(k)
+		sh.mu.Lock()
+		e, ok, err := sh.get(k, TypeZSet)
 		if err != nil {
-			s.mu.Unlock()
+			sh.mu.Unlock()
 			return "", nil, err
 		}
 		if !ok || e.ZSet.Len() == 0 {
-			s.mu.Unlock()
+			sh.mu.Unlock()
 			continue
 		}
 		out := []ZRangeResult{}
@@ -469,8 +508,8 @@ func (s *Store) ZMPop(keys []string, reverse bool, count int) (string, []ZRangeR
 			out = append(out, ZRangeResult{Member: m, Score: sc})
 		}
 		s.recomputeBytes(e)
-		s.removeIfEmpty(e)
-		s.mu.Unlock()
+		s.removeIfEmpty(sh, e)
+		sh.mu.Unlock()
 		s.fire("zpop", k)
 		return k, out, nil
 	}
@@ -484,14 +523,15 @@ func (s *Store) LMPop(keys []string, fromTail bool, count int) (string, []string
 		count = 1
 	}
 	for _, k := range keys {
-		s.mu.Lock()
-		e, ok, err := s.get(k, TypeList)
+		sh := s.shardForKey(k)
+		sh.mu.Lock()
+		e, ok, err := sh.get(k, TypeList)
 		if err != nil {
-			s.mu.Unlock()
+			sh.mu.Unlock()
 			return "", nil, err
 		}
 		if !ok || e.List.Len() == 0 {
-			s.mu.Unlock()
+			sh.mu.Unlock()
 			continue
 		}
 		out := []string{}
@@ -509,8 +549,8 @@ func (s *Store) LMPop(keys []string, fromTail bool, count int) (string, []string
 			out = append(out, el.(string))
 		}
 		s.recomputeBytes(e)
-		s.removeIfEmpty(e)
-		s.mu.Unlock()
+		s.removeIfEmpty(sh, e)
+		sh.mu.Unlock()
 		s.fire("lpop", k)
 		return k, out, nil
 	}

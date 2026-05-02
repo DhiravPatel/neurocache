@@ -108,9 +108,10 @@ func hllRegAndCount(h uint64) (int, uint8) {
 // PFAdd inserts members into the HLL at key. Returns 1 if the internal
 // register state changed (cardinality estimate moved), else 0.
 func (s *Store) PFAdd(key string, members ...string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil {
 		return 0, err
 	}
@@ -133,7 +134,7 @@ func (s *Store) PFAdd(key string, members ...string) (int, error) {
 	if !ok {
 		now := time.Now()
 		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
-		s.data[key] = e
+		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
 	}
@@ -149,11 +150,13 @@ func (s *Store) PFCount(keys ...string) (int64, error) {
 	if len(keys) == 0 {
 		return 0, errors.New("PFCOUNT requires at least one key")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	merged := newHLL()
 	for _, k := range keys {
-		e, ok, err := s.get(k, TypeString)
+		sh := s.shardForKey(k)
+		e, ok, err := sh.get(k, TypeString)
 		if err != nil {
 			return 0, err
 		}
@@ -177,10 +180,13 @@ func (s *Store) PFCount(keys ...string) (int64, error) {
 
 // PFMerge computes the union of srcs and stores it at dst.
 func (s *Store) PFMerge(dst string, srcs ...string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	all := append([]string{dst}, srcs...)
+	involved := s.shardsFor(all)
+	unlock := s.lockShardsW(involved)
+	defer unlock()
+	shD := s.shardForKey(dst)
 	var buf []byte
-	if e, ok, err := s.get(dst, TypeString); err != nil {
+	if e, ok, err := shD.get(dst, TypeString); err != nil {
 		return err
 	} else if ok && isHLL([]byte(e.Str)) {
 		buf = []byte(e.Str)
@@ -188,7 +194,8 @@ func (s *Store) PFMerge(dst string, srcs ...string) error {
 		buf = newHLL()
 	}
 	for _, k := range srcs {
-		e, ok, err := s.get(k, TypeString)
+		shS := s.shardForKey(k)
+		e, ok, err := shS.get(k, TypeString)
 		if err != nil {
 			return err
 		}
@@ -207,12 +214,12 @@ func (s *Store) PFMerge(dst string, srcs ...string) error {
 			}
 		}
 	}
-	if old, ok := s.data[dst]; ok {
+	if old, ok := shD.data[dst]; ok {
 		s.bytes.Add(-int64(old.Bytes))
 	}
 	now := time.Now()
 	e := &Entry{Key: dst, Type: TypeString, Str: string(buf), CreatedAt: now, LastRead: now, Bytes: len(dst) + len(buf)}
-	s.data[dst] = e
+	shD.data[dst] = e
 	s.bytes.Add(int64(e.Bytes))
 	return nil
 }
@@ -222,9 +229,10 @@ func (s *Store) PFMerge(dst string, srcs ...string) error {
 // monitoring tools can inspect dense-encoding state without reaching
 // past the public store API.
 func (s *Store) PFRegisters(key string) ([]uint8, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeString)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeString)
 	if err != nil || !ok {
 		return nil, false
 	}

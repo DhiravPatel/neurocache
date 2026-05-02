@@ -502,9 +502,10 @@ type PendingDetail struct {
 // XGroupCreate creates a consumer group on key. mkstream creates an
 // empty stream when missing — matching XGROUP CREATE ... MKSTREAM.
 func (s *Store) XGroupCreate(key, group, idStr string, mkstream bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil {
 		return err
 	}
@@ -512,7 +513,7 @@ func (s *Store) XGroupCreate(key, group, idStr string, mkstream bool) error {
 		if !mkstream {
 			return errors.New("ERR The XGROUP subcommand requires the key to exist. Note that for CREATE you may want to use the MKSTREAM option to create an empty stream automatically.")
 		}
-		e, err = s.getOrCreate(key, TypeStream)
+		e, err = s.getOrCreate(sh, key, TypeStream)
 		if err != nil {
 			return err
 		}
@@ -524,9 +525,10 @@ func (s *Store) XGroupCreate(key, group, idStr string, mkstream bool) error {
 
 // XGroupDestroy removes a group; returns whether anything was removed.
 func (s *Store) XGroupDestroy(key, group string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -537,9 +539,10 @@ func (s *Store) XGroupDestroy(key, group string) (bool, error) {
 
 // XGroupSetID resets a group's last-delivered-id.
 func (s *Store) XGroupSetID(key, group, idStr string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil {
 		return err
 	}
@@ -553,9 +556,10 @@ func (s *Store) XGroupSetID(key, group, idStr string) error {
 
 // XGroupCreateConsumer ensures a consumer exists; returns 1 if created.
 func (s *Store) XGroupCreateConsumer(key, group, consumer string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil {
 		return 0, err
 	}
@@ -577,9 +581,10 @@ func (s *Store) XGroupCreateConsumer(key, group, consumer string) (int, error) {
 // XGroupDelConsumer deletes a consumer; returns the number of pending
 // entries it owned (mirrors Redis).
 func (s *Store) XGroupDelConsumer(key, group, consumer string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -595,10 +600,12 @@ func (s *Store) XReadGroup(group, consumer string, keys, ids []string, count int
 		return nil, errors.New("ERR Unbalanced XREADGROUP keys and IDs")
 	}
 	out := map[string][]StreamEntry{}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	involved := s.shardsFor(keys)
+	unlock := s.lockShardsR(involved)
+	defer unlock()
 	for i, k := range keys {
-		e, ok, err := s.get(k, TypeStream)
+		sh := s.shardForKey(k)
+		e, ok, err := sh.get(k, TypeStream)
 		if err != nil {
 			return nil, err
 		}
@@ -629,9 +636,10 @@ func (s *Store) XReadGroup(group, consumer string, keys, ids []string, count int
 
 // XAck removes ids from the group's PEL. Returns count actually acked.
 func (s *Store) XAck(key, group string, ids []string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return 0, err
 	}
@@ -651,9 +659,10 @@ func (s *Store) XAck(key, group string, ids []string) (int, error) {
 // XPending returns either the summary form (no filters) or the long
 // form (with start/end/count and optional consumer).
 func (s *Store) XPending(key, group string, summary bool, start, end string, count int, consumer string) (any, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -672,9 +681,10 @@ func (s *Store) XPending(key, group string, summary bool, start, end string, cou
 
 // XClaim re-assigns one or more pending entries to a new consumer.
 func (s *Store) XClaim(key, group, consumer string, minIdleMs int64, ids []string, opts XClaimOpts) ([]StreamEntry, []string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, nil, err
 	}
@@ -695,9 +705,10 @@ func (s *Store) XClaim(key, group, consumer string, minIdleMs int64, ids []strin
 // starting at startID, reassigning up to count of them to consumer.
 // Returns (entries, justIDs, nextCursor, deletedIDs).
 func (s *Store) XAutoClaim(key, group, consumer string, minIdleMs int64, startStr string, count int, justIDs bool) ([]StreamEntry, []string, string, []string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, nil, "0-0", nil, err
 	}
@@ -714,9 +725,10 @@ func (s *Store) XAutoClaim(key, group, consumer string, minIdleMs int64, startSt
 // XINFO returns. Each renders to a Redis-style flat key/value list.
 
 func (s *Store) XInfoStream(key string) ([]any, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -726,9 +738,10 @@ func (s *Store) XInfoStream(key string) ([]any, error) {
 }
 
 func (s *Store) XInfoGroups(key string) ([]any, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -738,9 +751,10 @@ func (s *Store) XInfoGroups(key string) ([]any, error) {
 }
 
 func (s *Store) XInfoConsumers(key, group string) ([]any, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeStream)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeStream)
 	if err != nil || !ok {
 		return nil, err
 	}

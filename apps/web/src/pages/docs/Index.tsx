@@ -9,10 +9,15 @@ export default function DocsIndex() {
       <p className="lead">
         NeuroCache is an AI-aware, Redis-compatible in-memory data store.
         It implements the full Redis 8.6 / Valkey 8.0 / DiceDB 1.0
-        command surface (~545 commands, 12 data types, 5 stack modules)
-        plus AI-native commands that make LLM applications dramatically
-        cheaper and more coherent: semantic caching, LLM response
-        caching, and per-user memory.
+        command surface (~640 commands, 12 data types, 5 stack modules)
+        plus a complete AI stack: semantic cache, LLM response cache,
+        per-user memory, embedding cache, conversation/session
+        management, versioned prompt templates, and a full set of
+        AI-ops primitives (agent tool cache, stream cache, cost budgets,
+        moderation, lineage, SLO breach signals, A/B experiments,
+        knowledge graph, scheduler, event log, policy cache, inference
+        proxy, MCP server) — every primitive an LLM app rebuilds in
+        client code, server-side, persistent, replicated.
       </p>
 
       <h2>Why another cache?</h2>
@@ -49,8 +54,10 @@ export default function DocsIndex() {
           Persistent per-user context with semantic recall.
         </Card>
         <Card to="/docs/commands"       icon={Database} title="Commands">
-          ~545 commands — full Redis 8.6 / Valkey 8.0 / DiceDB surface
-          plus AI-native extensions and NeuroCache-only primitives.
+          ~640 commands — full Redis 8.6 / Valkey 8.0 / DiceDB surface
+          plus AI-native extensions, the LLM stack (EMB / CONV / PROMPT),
+          AI-ops primitives (agents, streams, cost, moderation, graph,
+          MCP, …), and NeuroCache-only primitives.
         </Card>
         <Card to="/docs/commands#modules" icon={Boxes}  title="Modules">
           JSON, TimeSeries, Search, Bloom / Cuckoo / CMS &mdash; activate

@@ -272,6 +272,130 @@ var registry = map[string]commandInfo{
 	"MEMORY_ADD":   {[]string{CatAI, CatWrite, CatFast}},
 	"MEMORY_QUERY": {[]string{CatAI, CatRead, CatFast}},
 	"MEMORY_LIST":  {[]string{CatAI, CatRead, CatFast}},
+
+	// NeuroCache AI-stack — embedding cache, conversation management,
+	// versioned prompt templates. All scoped under @ai so a single
+	// `+@ai` rule grants the whole AI surface.
+	"EMB.CACHE_SET":  {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.CACHE_GET":  {[]string{CatAI, CatRead, CatFast}},
+	"EMB.CACHE_DEL":  {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.STATS":      {[]string{CatAI, CatRead, CatFast}},
+	"EMB.PURGE":      {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.COST":       {[]string{CatAI, CatWrite, CatFast}},
+
+	"CONV.APPEND":    {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.WINDOW":    {[]string{CatAI, CatRead, CatFast}},
+	"CONV.SUMMARIZE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.LEN":       {[]string{CatAI, CatRead, CatFast}},
+	"CONV.LIST":      {[]string{CatAI, CatRead, CatFast}},
+
+	"PROMPT.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"PROMPT.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.RENDER":  {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"PROMPT.DELETE":  {[]string{CatAI, CatWrite, CatFast}},
+	"PROMPT.VERSIONS": {[]string{CatAI, CatRead, CatFast}},
+
+	// Phase 11 — extended AI-ops primitives. Every command in @ai so
+	// `+@ai` grants the whole AI surface; +@write grants the subset
+	// that mutates state.
+	"AGENT.CALL":    {[]string{CatAI, CatRead, CatFast}},
+	"AGENT.STORE":   {[]string{CatAI, CatWrite, CatFast}},
+	"AGENT.PROFILE": {[]string{CatAI, CatWrite, CatFast}},
+	"AGENT.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"AGENT.STATS":   {[]string{CatAI, CatRead, CatFast}},
+	"AGENT.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+
+	"STREAM.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.REPLAY": {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"COST.BUDGET": {[]string{CatAI, CatWrite, CatFast}},
+	"COST.CHARGE": {[]string{CatAI, CatWrite, CatFast}},
+	"COST.USAGE":  {[]string{CatAI, CatRead, CatFast}},
+	"COST.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"COST.LIST":   {[]string{CatAI, CatRead, CatFast}},
+
+	"SHADOW.PUT":    {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"PERSONA.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"PERSONA.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"PERSONA.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"PERSONA.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+
+	"SAFE.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"SAFE.CHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"SAFE.INJECT": {[]string{CatAI, CatRead, CatFast}},
+	"SAFE.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"SAFE.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"SAFE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"LINEAGE.RECORD":    {[]string{CatAI, CatWrite, CatFast}},
+	"LINEAGE.LIST":      {[]string{CatAI, CatRead, CatFast}},
+	"LINEAGE.SOURCES":   {[]string{CatAI, CatRead, CatFast}},
+	"LINEAGE.CONSUMERS": {[]string{CatAI, CatRead, CatFast}},
+	"LINEAGE.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
+	"LINEAGE.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	"SLO.SET":      {[]string{CatAI, CatWrite, CatFast}},
+	"SLO.SNAPSHOT": {[]string{CatAI, CatRead, CatFast}},
+	"SLO.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+
+	"AB.DEFINE":  {[]string{CatAI, CatWrite, CatFast}},
+	"AB.ASSIGN":  {[]string{CatAI, CatRead, CatFast}},
+	"AB.EXPOSE":  {[]string{CatAI, CatWrite, CatFast}},
+	"AB.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"AB.STATS":   {[]string{CatAI, CatRead, CatFast}},
+	"AB.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"AB.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"AB.DELETE":  {[]string{CatAI, CatWrite, CatFast}},
+
+	"GRAPH.LINK":      {[]string{CatAI, CatWrite, CatFast}},
+	"GRAPH.UNLINK":    {[]string{CatAI, CatWrite, CatFast}},
+	"GRAPH.NEIGHBORS": {[]string{CatAI, CatRead, CatFast}},
+	"GRAPH.IN":        {[]string{CatAI, CatRead, CatFast}},
+	"GRAPH.PATH":      {[]string{CatAI, CatRead, CatFast}},
+	"GRAPH.SUBJECTS":  {[]string{CatAI, CatRead, CatFast}},
+	"GRAPH.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	"SCHEDULE.AT":     {[]string{CatAI, CatWrite, CatFast}},
+	"SCHEDULE.IN":     {[]string{CatAI, CatWrite, CatFast}},
+	"SCHEDULE.CANCEL": {[]string{CatAI, CatWrite, CatFast}},
+	"SCHEDULE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"SCHEDULE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"EVENT.APPEND":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVENT.PROJECT": {[]string{CatAI, CatWrite, CatFast}},
+	"EVENT.READ":    {[]string{CatAI, CatRead, CatFast}},
+	"EVENT.RANGE":   {[]string{CatAI, CatRead, CatFast}},
+	"EVENT.LEN":     {[]string{CatAI, CatRead, CatFast}},
+
+	"POLICY.ALLOW": {[]string{CatAI, CatRead, CatFast}},
+	"POLICY.SET":   {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.PURGE": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.STATS": {[]string{CatAI, CatRead, CatFast}},
+
+	"INFER.GENERATE": {[]string{CatAI, CatWrite, CatSlow}},
+	"INFER.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"INFER.PURGE":    {[]string{CatAI, CatWrite, CatFast}},
+	"INFER.STATS":    {[]string{CatAI, CatRead, CatFast}},
+	"INFER.DEFAULT":  {[]string{CatAI, CatWrite, CatFast}},
+
+	"MCP.TOOLS":     {[]string{CatAI, CatRead, CatFast}},
+	"MCP.RESOURCES": {[]string{CatAI, CatRead, CatFast}},
+	"MCP.CALL":      {[]string{CatAI, CatWrite, CatSlow}},
+	"MCP.READ":      {[]string{CatAI, CatRead, CatFast}},
+	"MCP.RPC":       {[]string{CatAI, CatWrite, CatSlow}},
+
+	"KV.SUBSCRIBE":   {[]string{CatPubSub, CatRead, CatFast}},
+	"KV.UNSUBSCRIBE": {[]string{CatPubSub, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

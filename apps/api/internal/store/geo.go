@@ -93,9 +93,10 @@ func (s *Store) GeoAdd(key string, entries ...GeoAddEntry) (int, error) {
 // returned as nil by the caller — this method returns (nil, false) for
 // them so the dispatch layer can emit nil arrays properly.
 func (s *Store) GeoPos(key string, members ...string) ([]*GeoPoint, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil {
 		return nil, err
 	}
@@ -117,9 +118,10 @@ func (s *Store) GeoPos(key string, members ...string) ([]*GeoPoint, error) {
 // GeoDist returns the distance between two members in the specified
 // unit ("m" meters, "km", "mi", "ft"). Returns -1 when either is missing.
 func (s *Store) GeoDist(key, a, b, unit string) (float64, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return 0, false, err
 	}
@@ -145,9 +147,10 @@ type GeoSearchResult struct {
 // unit). Simple O(n) scan; a production build with huge datasets would
 // use geohash prefix buckets, but this keeps the algorithm transparent.
 func (s *Store) GeoSearch(key string, centerLat, centerLon, radius float64, unit string, count int) ([]GeoSearchResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return []GeoSearchResult{}, err
 	}
@@ -196,8 +199,9 @@ func (s *Store) GeoSearchStore(dest, src string, centerLat, centerLon, radius fl
 		}
 	} else {
 		// preserve original geohash scores for ZRANGE-style ordering
-		s.mu.RLock()
-		se, ok, _ := s.get(src, TypeZSet)
+		shS := s.shardForKey(src)
+		shS.mu.RLock()
+		se, ok, _ := shS.get(src, TypeZSet)
 		if ok {
 			for _, h := range hits {
 				if sc, had := se.ZSet.Score(h.Member); had {
@@ -205,7 +209,7 @@ func (s *Store) GeoSearchStore(dest, src string, centerLat, centerLon, radius fl
 				}
 			}
 		}
-		s.mu.RUnlock()
+		shS.mu.RUnlock()
 	}
 	return s.replaceZSet(dest, merged)
 }
@@ -213,9 +217,10 @@ func (s *Store) GeoSearchStore(dest, src string, centerLat, centerLon, radius fl
 // GeoHash returns the standard 11-char base32 geohash for each member.
 // Missing members come back as empty strings.
 func (s *Store) GeoHash(key string, members ...string) ([]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil {
 		return nil, err
 	}

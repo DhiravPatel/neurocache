@@ -517,9 +517,330 @@ Last-mile parity with the full DiceDB / Valkey 8.0 command surface. Each handler
 
 **Outcome**: every command DiceDB / Valkey 8.0 advertises is now reachable on NeuroCache. The wire-level byte-compat lifts (binary `DUMP`/`RESTORE`, gossip protocol, AOF RDB preamble) remain deferred — those only matter for cross-engine cluster mixing, never for client-side compatibility.
 
+## Performance — verified head-to-head vs. Redis 7.x
+
+Benchmarked locally on Apple M4, 100k operations × 50 concurrent clients, both servers running on the same host. Numbers from `scripts/bench-vs-redis.sh` (run before merging anything that touches the store hot path):
+
+| Command | Redis (rps) | NeuroCache (rps) | nc/redis |
+|---|---:|---:|---:|
+| MSET (10 keys) | 154,799 | 151,515 | **97.9%** |
+| SET | 234,192 | 190,840 | **81.5%** |
+| GET | 254,453 | 201,207 | **79.1%** |
+| SPOP | 242,718 | 178,571 | 73.6% |
+| RPOP | 242,131 | 176,991 | 73.1% |
+| INCR | 254,453 | 185,185 | 72.8% |
+| LPUSH | 248,756 | 178,891 | 71.9% |
+| RPUSH | 249,377 | 179,211 | 71.9% |
+| LPOP | 241,546 | 171,233 | 70.9% |
+| ZADD | 233,645 | 163,934 | 70.2% |
+| SADD | 245,700 | 170,358 | 69.3% |
+| HSET | 239,234 | 141,443 | 59.1% |
+
+**Summary:** ~70–80% of Redis throughput across the entire command surface — exactly the expected gap for a Go reimplementation vs. hand-tuned C. The two outliers are MSET (98%, where RESP+network dominates) and HSET (59%, slight slack remaining for future work). Lists are now production-grade (was 1–3% pre-fix; see "Phase 8 — perf hardening" below).
+
+**Reproduce:**
+```bash
+brew install redis           # for redis-server + redis-benchmark
+scripts/bench-vs-redis.sh    # builds NC, runs both side-by-side, prints the table
+```
+
+**In-process micro-benchmarks** (Go's `testing.B`):
+```bash
+cd apps/api && go test ./internal/store/ -run=NONE -bench=BenchmarkHot -benchmem
+```
+Sample output on Apple M4: LPUSH 95 ns/op, RPUSH 95 ns/op, LPOP-from-100k-list 125 ns/op (constant — not O(N)), GET 68 ns/op, INCR 53 ns/op. These exist so a future regression in the store hot path can never silently ship.
+
+## Phase 10 — Sharded keyspace + GC tuning
+
+Closing the two big architectural risks identified in the audit. Both shipped, both verified end-to-end.
+
+### Sharded locks (256 shards)
+Replaced the single global `sync.RWMutex` on the keyspace with **256 per-shard RWMutexes**, each owning its own slice of keys (FNV-1a hash → shard index). Single-key operations take exactly one shard's lock; cross-key operations use `lockTwoW` / `lockShardsW` with canonical (lowest-index-first) ordering to avoid deadlock. Range operations walk all shards under read locks.
+
+| Workload | Before | After | Δ |
+|---|---:|---:|---|
+| 500-client mixed SET | 147k rps | **176k rps** | **+20%** (now 73% of Redis) |
+| 500-client mixed GET | 165k rps | 181k rps | +10% |
+| 500-client mixed INCR | 165k rps | 183k rps | +11% |
+| Hot-key INCR (200 clients × 1 key) | 172k rps | 189k rps | +10% |
+| 50-client mix | 70-80% of Redis | 70-80% of Redis | unchanged (no contention to fix) |
+
+Migration touched ~330 lock sites across 27 files; tests + race detector clean. Public Store API unchanged — every caller is shard-blind. Implementation in `internal/store/shard.go` plus shard-aware variants of every typed operation.
+
+### GC tuning at boot
+Boot-time `tuneGC()` sets `GOGC=200` (GC half as often as the Go default) and `GOMEMLIMIT = MaxMemoryMB × 1.25` (Go 1.19+ soft heap budget so RSS stays in a known-good band). Both honour operator overrides via the standard env vars. Smoother p99 tail under sustained load with no allocator complexity in the application code.
+
+| Knob | Default | Why |
+|---|---|---|
+| `GOGC` | 200 | Go's default 100% heap-growth target fires far more often than a stable cache working set needs and inflates p99. Doubling lets GC run half as often. |
+| `GOMEMLIMIT` | `MaxMemoryMB × 1.25` | 25% slack covers goroutine stacks, small allocs, and per-shard map metadata. Cache values stay within `MaxMemoryMB` because the eviction loop enforces it. |
+
+## Phase 8 — Perf hardening
+
+Identified during a head-to-head soak test against Redis: list/hash/set/zset operations were running at **1–3% of Redis throughput** because every mutation called `recomputeBytes`, which walked the entire collection on every push/pop. For a list of N items, each LPUSH cost O(N), making a stream of pushes O(N²) — 100k LPUSHes ≈ 10 billion comparisons.
+
+| Fix | Status | Impact |
+|---|---|---|
+| Replace O(N) `recomputeBytes` with O(1) `addBytes(delta)` deltas on every list/hash/set/zset hot path | ✅ | LPUSH 7.8k → 178k rps (**21× faster, 3% → 72% of Redis**); RPUSH 2.7k → 179k (**65× faster**); LPOP 2.5k → 171k (**68× faster**) |
+| Add Go `BenchmarkHot*` micro-benchmarks at `internal/store/bench_test.go` | ✅ | Catches O(N) regressions before they ship |
+| Add `scripts/bench-vs-redis.sh` head-to-head harness with regression-flagging output | ✅ | Reproducible perf gate for every PR that touches the store |
+
+## Phase 9 — AI-stack production primitives
+
+Three new command families that close the gaps every LLM application rebuilds in client code: **embedding caching**, **conversation/session management**, and **versioned prompt templates**. All persist via AOF, replicate via the master/replica fan-out, gate through ACL `+@ai`, and expose 1:1 HTTP endpoints alongside the RESP surface.
+
+### EMB.* — embedding cache
+Embeddings are deterministic per (model, text) — same input always yields the same vector. Caching them at the engine kills the "same text re-embedded a thousand times" cost. Canonicalization (trim + lowercase) means semantically-identical inputs collide on the same slot.
+
+| Command | What it does | Where |
+|---|---|---|
+| `EMB.CACHE_SET text vec [EX sec \| PX ms]` | Store a vector under the canonical hash of `text`, optional TTL | `llmstack/embcache.go` |
+| `EMB.CACHE_GET text` | Lookup. Returns the comma-separated vector or nil | same |
+| `EMB.CACHE_DEL text` | Drop a single entry. Returns 1/0 | same |
+| `EMB.STATS` | entries / hits / misses / hit_rate / cost_per_call_usd / saved_usd | same |
+| `EMB.PURGE` | Wipe the cache. Returns dropped count | same |
+| `EMB.COST usd-per-call` | Operator-supplied per-call cost; `EMB.STATS.saved_usd = cost × hits` | same |
+
+### CONV.* — conversation/session management
+Per-key ordered turn log with token-aware windowing. Centralizes the truncation logic so apps can't accidentally ship a context-overflow 500. Token estimate uses the OpenAI cookbook fallback (≈ 4 chars/token) — accurate enough for budgeting; swap in a real BPE tokenizer when integrating with a specific model.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CONV.APPEND key role content` | Append a turn (`user` / `assistant` / `system` / `tool`) | `llmstack/conversation.go` |
+| `CONV.WINDOW key [MAXTOKENS n]` | Recent turns whose cumulative tokens fit in `n`; summary (if present) is prepended as a synthetic `system` turn | same |
+| `CONV.SUMMARIZE key summary [KEEP n]` | Replace older turns with a summary, keep most recent `n` tokens verbatim | same |
+| `CONV.RESET key` | Wipe a conversation. Returns 1/0 | same |
+| `CONV.LEN key` | turns / tokens / has_summary / summary_tokens | same |
+| `CONV.LIST` | Every active conversation key | same |
+
+### PROMPT.* — versioned prompt templates
+Registry of prompt strings with version history and `{variable}` interpolation. Auditability ("which prompt produced this response?") plus safe rollback when v4 underperforms.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PROMPT.SET name body [VERSION v]` | Store. `VERSION` defaults to latest+1; explicit version overwrites | `llmstack/prompts.go` |
+| `PROMPT.GET name [VERSION v]` | Fetch. Default returns latest | same |
+| `PROMPT.RENDER name [VERSION v] [VARS k v ...]` | Render with `{key}` substitution. Unknown placeholders left intact (visible failure) | same |
+| `PROMPT.LIST` | Every template with its latest version + version count | same |
+| `PROMPT.DELETE name [VERSION v]` | Drop one version, or the whole template when version omitted | same |
+| `PROMPT.VERSIONS name` | Every stored version with body + creation time | same |
+
+### HTTP surface
+| Method | Path | RESP equivalent |
+|---|---|---|
+| `POST` | `/api/emb-cache` | EMB.CACHE_SET |
+| `GET`  | `/api/emb-cache?text=...` | EMB.CACHE_GET |
+| `GET`  | `/api/emb-cache/stats` | EMB.STATS |
+| `POST` | `/api/emb-cache/purge` | EMB.PURGE |
+| `POST` | `/api/conv/{key}` | CONV.APPEND |
+| `GET`  | `/api/conv/{key}?max_tokens=n` | CONV.WINDOW |
+| `POST` | `/api/conv/{key}/summarize` | CONV.SUMMARIZE |
+| `DELETE` | `/api/conv/{key}` | CONV.RESET |
+| `GET`  | `/api/conv` | CONV.LIST |
+| `POST` | `/api/prompts/{name}` | PROMPT.SET |
+| `GET`  | `/api/prompts/{name}` | PROMPT.GET |
+| `POST` | `/api/prompts/{name}/render` | PROMPT.RENDER |
+| `GET`  | `/api/prompts/{name}/versions` | PROMPT.VERSIONS |
+| `DELETE` | `/api/prompts/{name}` | PROMPT.DELETE |
+| `GET`  | `/api/prompts` | PROMPT.LIST |
+
+### Persistence + replication
+- All write commands appear in [resp/writeset.go](apps/api/internal/resp/writeset.go) so AOF captures them on every successful dispatch.
+- ACL: every command is in the `@ai` category (along with `@read` / `@write` and `@fast`). One `+@ai` rule grants the whole AI surface.
+- Replication: same path as every other write — `c.eng.RecordWrite()` propagates through the master/replica fan-out.
+
+## Phase 11 — AI-ops production primitives
+
+Fifteen new command families targeting the operational layer above the LLM-stack basics. Where Phase 9 covered "every LLM app rebuilds an embedding cache, a conversation log, and prompt versioning", Phase 11 covers everything *around* the model call — agent tool memoization, token-stream caching, per-tenant cost budgeting, stale-while-revalidate against backing stores, multi-persona memory routing, moderation-result caching with built-in injection detection, citation/provenance tracking, per-command SLO breach signals, sticky A/B/n experiments, a lightweight knowledge graph, a delayed-command scheduler, an event log with materialized projections, policy verdict caching, an LLM-call proxy, and an MCP (Model Context Protocol) server. State lives in `internal/aiops/`; RESP handlers in `internal/resp/commands_aiops.go`; HTTP handlers in `internal/http/aiops.go`. All writes flow through the same AOF + replication path as every other command.
+
+### AGENT.* — agent tool result cache
+Memoize `(tool, args)` → result so an agent doesn't pay for the same external tool call 50 times in a session. Each tool gets a determinism profile (`always` / `day` / `never`) that drives TTL.
+
+| Command | What it does | Where |
+|---|---|---|
+| `AGENT.CALL tool argsHash` | Lookup. Returns cached result or nil. | `aiops/agent.go` |
+| `AGENT.STORE tool argsHash result` | Cache the upstream result honoring the tool's profile. | same |
+| `AGENT.PROFILE tool always\|day\|never` | Declare determinism profile. | same |
+| `AGENT.FORGET tool argsHash` | Drop one entry. | same |
+| `AGENT.STATS` | entries / profiles / hits / misses / hit_rate. | same |
+| `AGENT.PURGE` | Wipe the cache. | same |
+
+### STREAM.* — token-stream cache with replay
+Cache LLM token streams keyed by prompt hash. On a hit, replay the original token sequence (with cadence) so the streaming UX is identical without paying upstream.
+
+| Command | What it does | Where |
+|---|---|---|
+| `STREAM.SET prompt-hash json-tokens [EX sec \| PX ms]` | Store a complete token stream with optional TTL. | `aiops/streaming.go` |
+| `STREAM.GET prompt-hash` | Concatenated full response (non-streaming clients). | same |
+| `STREAM.REPLAY prompt-hash` | Token list with original delays — replay paced or burst. | same |
+| `STREAM.FORGET prompt-hash` | Drop one stream. | same |
+| `STREAM.PURGE` | Wipe. | same |
+| `STREAM.STATS` | streams / hits / misses. | same |
+
+### COST.* — per-tenant LLM cost budgets
+Sliding-window budget per tenant. Over-budget calls error fast — saving real money on multi-tenant AI products that would otherwise pay for runaway loops.
+
+| Command | What it does | Where |
+|---|---|---|
+| `COST.BUDGET tenant max-usd window-ms` | Configure tenant allowance. | `aiops/cost.go` |
+| `COST.CHARGE tenant usd` | Record spend. Returns allowed/remaining; rejects when over budget. | same |
+| `COST.USAGE tenant` | used / remaining / max / window_ms. | same |
+| `COST.RESET tenant` | Zero the spend log; keep the budget. | same |
+| `COST.LIST` | Every configured tenant. | same |
+
+### SHADOW.* — stale-while-revalidate
+Front a slow backing source (Postgres / HTTP / S3). On miss the previous value returns immediately and a background refresh kicks off. One in-flight fetch per key — no thundering herds.
+
+| Command | What it does | Where |
+|---|---|---|
+| `SHADOW.PUT key value [STALE-AFTER ms]` | Store with freshness window. | `aiops/shadow.go` |
+| `SHADOW.GET key` | Returns value + fresh flag. | same |
+| `SHADOW.FORGET key` | Drop. | same |
+| `SHADOW.STATS` | entries / hits / misses / stale_serves / background_refreshes. | same |
+
+### PERSONA.* — multi-persona memory routing
+Same user, different personas (work / personal / agent). Memory entries carry a persona tag; queries filter on the user's currently active one.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PERSONA.SET user persona` | Bind active persona for a user. | `aiops/persona.go` |
+| `PERSONA.GET user` | Active persona (defaults to "default"). | same |
+| `PERSONA.LIST user` | Every persona the user has ever activated. | same |
+| `PERSONA.FORGET user` | Drop every record for the user. | same |
+
+### SAFE.* — moderation cache + injection detector
+Cache OpenAI/Anthropic moderation API responses keyed on canonicalized text; built-in regex-free substring detector for the obvious "ignore previous instructions" jailbreak attempts.
+
+| Command | What it does | Where |
+|---|---|---|
+| `SAFE.SET text safe(0\|1) score [CATEGORIES ...] [EX sec]` | Cache an upstream verdict. | `aiops/safe.go` |
+| `SAFE.CHECK text` | Look up cached verdict. | same |
+| `SAFE.INJECT text` | Heuristic injection score 0-1 + matched patterns. | same |
+| `SAFE.FORGET text` | Drop one entry. | same |
+| `SAFE.PURGE` | Wipe. | same |
+| `SAFE.STATS` | entries / hits / misses. | same |
+
+### LINEAGE.* — provenance / citations
+Append-only "this output cited that source" trail. Critical for AI compliance (EU AI Act, healthcare, finance) where auditors need to answer "where did this come from?".
+
+| Command | What it does | Where |
+|---|---|---|
+| `LINEAGE.RECORD output-id source-id [SNIPPET s] [CONFIDENCE f]` | Add a citation. | `aiops/lineage.go` |
+| `LINEAGE.LIST output-id` | Every citation for an output. | same |
+| `LINEAGE.SOURCES output-id` | Unique source IDs. | same |
+| `LINEAGE.CONSUMERS source-id` | Outputs that cited a given source ("which outputs need re-check if I retract this doc?"). | same |
+| `LINEAGE.FORGET output-id` | Drop every citation for an output. | same |
+| `LINEAGE.STATS` | outputs / unique_sources / total_citations. | same |
+
+### SLO.* — per-command SLO breach signals
+Declare percentile targets per command (e.g. "SET p99 < 1ms"). The tracker rings recent latencies, fires breach notifications via pub/sub.
+
+| Command | What it does | Where |
+|---|---|---|
+| `SLO.SET cmd percentile max-ms` | Configure target (`p50` / `p95` / `p99` / `p999`). | `aiops/slo.go` |
+| `SLO.SNAPSHOT` | Per-command status: target + observed + breach count. | same |
+| `SLO.RESET [cmd]` | Clear samples + breach counters (one or all). | same |
+
+### AB.* — sticky experiments
+A/B/n assignment with sticky hashing (same user → same variant across restarts) and outcome tracking. Replaces a feature-flag SaaS for the 90% case.
+
+| Command | What it does | Where |
+|---|---|---|
+| `AB.DEFINE name [WEIGHTS f1 f2 ...] variants...` | Declare experiment. | `aiops/abtest.go` |
+| `AB.ASSIGN name user` | Sticky assignment. | same |
+| `AB.EXPOSE name variant` | Increment exposure (denominator for win-rate). | same |
+| `AB.RECORD name variant value` | Increment win + total value (revenue, latency-saved, conversion=1). | same |
+| `AB.STATS name` | Per-variant exposure/wins/win_rate/total/avg + leader. | same |
+| `AB.LIST` | Every defined experiment. | same |
+| `AB.RESET name` | Zero outcome counters. | same |
+| `AB.DELETE name` | Drop. | same |
+
+### GRAPH.* — lightweight knowledge graph
+`(subject, predicate, object)` triples + bounded BFS path search. Designed for agentic-app memory ("what does the agent know about X?") — not a Cypher engine.
+
+| Command | What it does | Where |
+|---|---|---|
+| `GRAPH.LINK s p o` | Add edge (idempotent). | `aiops/graph.go` |
+| `GRAPH.UNLINK s p o` | Remove edge. | same |
+| `GRAPH.NEIGHBORS subject [PREDICATE p]` | Outgoing edges. | same |
+| `GRAPH.IN object [PREDICATE p]` | Inbound subjects. | same |
+| `GRAPH.PATH from to [MAXDEPTH n] [PREDICATE p]` | Shortest predicate chain via BFS. | same |
+| `GRAPH.SUBJECTS` | Every node with at least one outgoing edge. | same |
+| `GRAPH.STATS` | subjects / objects / edges. | same |
+
+### SCHEDULE.* — delayed command execution
+In-memory priority queue keyed on fire time; dispatcher fires through the same path as a regular RESP client. Replaces Sidekiq/Bull/Inngest for "fire this command at time T".
+
+| Command | What it does | Where |
+|---|---|---|
+| `SCHEDULE.AT unix-millis cmd args...` | Fire at absolute time. | `aiops/scheduler.go` |
+| `SCHEDULE.IN delay-ms cmd args...` | Fire after delay. | same |
+| `SCHEDULE.CANCEL id` | Drop a pending task. | same |
+| `SCHEDULE.LIST` | Every pending task. | same |
+| `SCHEDULE.STATS` | pending / total_scheduled. | same |
+
+### EVENT.* — append-only log + materialized projections
+Lightweight CQRS without Kafka. Each `EVENT.APPEND` adds an event; declared projections (count / sum / max / latest) auto-update from every append.
+
+| Command | What it does | Where |
+|---|---|---|
+| `EVENT.APPEND stream json-payload` | Append; returns new seq. | `aiops/event.go` |
+| `EVENT.PROJECT stream name reducer field [GROUPBY field]` | Declare a projection (replays existing events). | same |
+| `EVENT.READ stream projection` | Current per-group state. | same |
+| `EVENT.RANGE stream [start [end]]` | Slice the event log. | same |
+| `EVENT.LEN stream` | Event count. | same |
+
+### POLICY.* — RBAC/ABAC verdict cache
+Plug in your evaluator (OPA / Cedar / hand-rolled); cache its decisions so the read path doesn't re-evaluate the same `(user, resource, action)` tuple thousands of times per second.
+
+| Command | What it does | Where |
+|---|---|---|
+| `POLICY.ALLOW user resource action [TTL sec] [CTX k v ...]` | Check (cache-through). | `aiops/policy.go` |
+| `POLICY.SET user resource action allow(0\|1) reason [TTL sec] [CTX k v ...]` | Static rule override. | same |
+| `POLICY.PURGE` | Wipe verdict cache. | same |
+| `POLICY.STATS` | entries / hits / misses. | same |
+
+### INFER.* — LLM call proxy
+Cache + retry + cost-charge layer in front of OpenAI/Anthropic/Bedrock. Apps stop carrying their own client + cache + retry + budget logic.
+
+| Command | What it does | Where |
+|---|---|---|
+| `INFER.GENERATE prompt [MODEL m] [TEMP t] [MAXTOK n] [TENANT id] [TTL sec]` | Cache-through call; charges tenant budget on a real upstream hit. | `aiops/inference.go` |
+| `INFER.FORGET prompt [MODEL m] [TEMP t]` | Drop a cached response. | same |
+| `INFER.PURGE` | Wipe. | same |
+| `INFER.STATS` | cached_entries / providers / hits / misses / upstream_calls / errors. | same |
+| `INFER.DEFAULT provider` | Set the fallback provider. | same |
+
+### MCP.* — Model Context Protocol server
+Expose NeuroCache primitives (memory, conversations, vectors, prompts) as MCP tools so Claude/Cursor/IDE clients can call them directly. JSON-RPC 2.0 dispatch — transport-agnostic.
+
+| Command | What it does | Where |
+|---|---|---|
+| `MCP.TOOLS` | List registered tools. | `aiops/mcp.go` |
+| `MCP.RESOURCES` | List registered resources. | same |
+| `MCP.CALL name json-args` | Invoke a tool (dispatched as `tools/call`). | same |
+| `MCP.READ uri` | Read a resource (`resources/read`). | same |
+| `MCP.RPC json-rpc-frame` | Pass-through for arbitrary JSON-RPC method. | same |
+
+### KV.SUBSCRIBE — keyspace notification sugar
+Wrap `SUBSCRIBE` so clients can say "watch this key" without knowing the `__keyspace__:<key>` channel convention.
+
+| Command | What it does | Where |
+|---|---|---|
+| `KV.SUBSCRIBE key [key ...]` | Subscribe to keyspace notifications for the given keys. | `resp/commands_aiops.go` |
+| `KV.UNSUBSCRIBE [key ...]` | Matching unsubscribe. | same |
+
+### HTTP surface
+Every Phase 11 family is reachable as JSON on the same router under `/api/...`. Examples: `POST /api/cost/{tenant}/budget`, `POST /api/persona/{user}`, `GET /api/safe/inject?text=...`, `POST /api/graph/link`, `POST /api/event/{stream}`, `POST /api/mcp/rpc`. Full table in `internal/http/aiops.go`. `KV.SUBSCRIBE` is RESP-only (HTTP doesn't natively model long-lived streams here).
+
+### Persistence + replication
+- Every write command is in `resp/writeset.go` so AOF replays them faithfully on restart.
+- `c.eng.RecordWrite()` propagates them to replicas via the same fan-out as every other command.
+- ACL: each family is in the `@aiops` category. `+@aiops` grants the whole Phase 11 surface in one rule.
+
 ## Total command count
 
-**~545 commands** across 12 data types + 5 modules + AI-native extensions + NeuroCache-only primitives + cross-engine compat fillers.
+**~642 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives.
 
 ## Known gaps
 

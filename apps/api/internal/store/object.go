@@ -149,9 +149,10 @@ func resolveEncoding(e *Entry) string {
 
 // Object returns metadata for one key, (nil, false) when missing.
 func (s *Store) Object(key string) (*ObjectInfo, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
 		return nil, false
 	}
@@ -170,10 +171,11 @@ func (s *Store) Object(key string) (*ObjectInfo, bool) {
 // versioned and tied to its on-disk encoding. Anyone needing real
 // inter-Redis migration should swap this for the rdb-style payload.
 func (s *Store) Dump(key string) (string, bool, error) {
-	s.mu.RLock()
-	e, ok := s.data[key]
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	e, ok := sh.data[key]
 	if !ok || e.expired(time.Now()) {
-		s.mu.RUnlock()
+		sh.mu.RUnlock()
 		return "", false, nil
 	}
 	exp := ExportEntry{Key: e.Key, Type: e.Type.String()}
@@ -228,7 +230,7 @@ func (s *Store) Dump(key string) (string, bool, error) {
 			}
 		}
 	}
-	s.mu.RUnlock()
+	sh.mu.RUnlock()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	enc := gob.NewEncoder(gz)
@@ -245,9 +247,10 @@ func (s *Store) Dump(key string) (string, bool, error) {
 // 0 means "no TTL". replace == true overwrites an existing key. (Kept
 // distinct from Store.Restore which restores a whole snapshot at boot.)
 func (s *Store) RestoreKey(key string, ttlMs int64, blob string, replace bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.data[key]; exists && !replace {
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if _, exists := sh.data[key]; exists && !replace {
 		return errors.New("BUSYKEY Target key name already exists.")
 	}
 	gz, err := gzip.NewReader(bytes.NewReader([]byte(blob)))
@@ -271,13 +274,13 @@ func (s *Store) RestoreKey(key string, ttlMs int64, blob string, replace bool) e
 // overwritten. Returns false when src is missing or dst exists without
 // replace.
 func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	se, ok := s.data[src]
+	shS, shD, unlock := s.lockTwoW(src, dst)
+	defer unlock()
+	se, ok := shS.data[src]
 	if !ok || se.expired(time.Now()) {
 		return false, nil
 	}
-	if _, exists := s.data[dst]; exists && !replace {
+	if _, exists := shD.data[dst]; exists && !replace {
 		return false, nil
 	}
 	exp := ExportEntry{Key: dst, Type: se.Type.String()}
@@ -337,11 +340,12 @@ func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
 }
 
 // restoreOne is the inner reconstruct used by Restore + Copy. Caller
-// must hold s.mu.
+// must hold the write lock on the shard owning ent.Key.
 func (s *Store) restoreOne(ent ExportEntry) {
-	if old, ok := s.data[ent.Key]; ok {
+	sh := s.shardForKey(ent.Key)
+	if old, ok := sh.data[ent.Key]; ok {
 		s.bytes.Add(-int64(old.Bytes))
-		delete(s.data, ent.Key)
+		delete(sh.data, ent.Key)
 	}
 	e := &Entry{Key: ent.Key, CreatedAt: time.Now(), LastRead: time.Now()}
 	if ent.ExpireAt > 0 {
@@ -395,5 +399,5 @@ func (s *Store) restoreOne(ent ExportEntry) {
 		}
 	}
 	s.recomputeBytes(e)
-	s.data[e.Key] = e
+	sh.data[e.Key] = e
 }

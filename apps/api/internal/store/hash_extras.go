@@ -17,9 +17,10 @@ func (s *Store) HGetDel(key string, fields []string) ([]string, []bool, error) {
 	if len(fields) == 0 {
 		return values, hits, errors.New("HGETDEL requires at least one field")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return values, hits, err
 	}
@@ -36,7 +37,7 @@ func (s *Store) HGetDel(key string, fields []string) ([]string, []bool, error) {
 		}
 	}
 	s.recomputeBytes(e)
-	s.removeIfEmpty(e)
+	s.removeIfEmpty(sh, e)
 	s.fire("hdel", key)
 	return values, hits, nil
 }
@@ -59,9 +60,10 @@ func (s *Store) HGetEx(key string, fields []string, mode string, value int64) ([
 		return values, hits, errors.New("HGETEX requires at least one field")
 	}
 	mode = strings.ToUpper(mode)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return values, hits, err
 	}
@@ -124,9 +126,10 @@ func (s *Store) HSetEx(key string, ttl time.Duration, cond string, pairs []strin
 		return 0, errors.New("HSETEX requires field/value pairs")
 	}
 	cond = strings.ToUpper(cond)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.getOrCreate(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, err := s.getOrCreate(sh, key, TypeHash)
 	if err != nil {
 		return 0, err
 	}
@@ -168,9 +171,10 @@ func (s *Store) HSetEx(key string, ttl time.Duration, cond string, pairs []strin
 // Mirrors Redis 7.4's HEXPIRETIME.
 func (s *Store) HExpireTime(key string, fields []string, ms bool) ([]int64, error) {
 	out := make([]int64, len(fields))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil {
 		return nil, err
 	}

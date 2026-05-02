@@ -8,7 +8,21 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 )
+
+// bytesToStringNoCopy reinterprets a byte slice as a string without
+// copying the backing array. Caller MUST guarantee the slice is never
+// mutated after this call — otherwise the resulting string violates
+// Go's string-immutability contract. We use it on freshly-allocated
+// read buffers in readArray (callers never mutate the returned string,
+// and the buffer escapes into the returned []string).
+func bytesToStringNoCopy(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
 
 // ─── reader ─────────────────────────────────────────────────────────────
 
@@ -67,7 +81,11 @@ func readArray(br *bufio.Reader) ([]string, error) {
 		if _, err := readLine(br); err != nil {
 			return nil, err
 		}
-		out = append(out, string(buf))
+		// `string(buf)` would copy the bytes — for a 100 KiB SET that's
+		// 100 KiB of duplicated allocation per arg. We just allocated
+		// `buf` here, never reuse it, and never mutate it again, so
+		// the cast is safe. unsafe.String reuses the backing array.
+		out = append(out, bytesToStringNoCopy(buf))
 	}
 	return out, nil
 }
@@ -108,22 +126,61 @@ func splitInline(line string) []string {
 
 // ─── writers ────────────────────────────────────────────────────────────
 
-func writeSimple(w *bufio.Writer, s string) { _, _ = w.WriteString("+" + s + "\r\n") }
-func writeError(w *bufio.Writer, s string)  { _, _ = w.WriteString("-ERR " + s + "\r\n") }
-func writeTypedError(w *bufio.Writer, kind, msg string) {
-	_, _ = w.WriteString("-" + kind + " " + msg + "\r\n")
+// All writers stream directly into the bufio.Writer without
+// intermediate string concatenation. The previous form ("$" + N + "\r\n"
+// or s + "\r\n") allocated a fresh string per call — a real GC pressure
+// problem for large values (100 KiB SET allocated 200+ KiB per call:
+// once for the buf in readArray, once for s+"\r\n" here). Direct
+// WriteString calls skip both allocations.
+
+const crlf = "\r\n"
+
+func writeSimple(w *bufio.Writer, s string) {
+	_ = w.WriteByte('+')
+	_, _ = w.WriteString(s)
+	_, _ = w.WriteString(crlf)
 }
-func writeInt(w *bufio.Writer, n int64) { _, _ = w.WriteString(":" + strconv.FormatInt(n, 10) + "\r\n") }
-func writeNil(w *bufio.Writer)          { _, _ = w.WriteString("$-1\r\n") }
-func writeNilArray(w *bufio.Writer)     { _, _ = w.WriteString("*-1\r\n") }
+
+func writeError(w *bufio.Writer, s string) {
+	_, _ = w.WriteString("-ERR ")
+	_, _ = w.WriteString(s)
+	_, _ = w.WriteString(crlf)
+}
+
+func writeTypedError(w *bufio.Writer, kind, msg string) {
+	_ = w.WriteByte('-')
+	_, _ = w.WriteString(kind)
+	_ = w.WriteByte(' ')
+	_, _ = w.WriteString(msg)
+	_, _ = w.WriteString(crlf)
+}
+
+func writeInt(w *bufio.Writer, n int64) {
+	_ = w.WriteByte(':')
+	// AppendInt writes into a stack-allocated buffer instead of
+	// allocating a new string via FormatInt+concat.
+	var buf [20]byte
+	_, _ = w.Write(strconv.AppendInt(buf[:0], n, 10))
+	_, _ = w.WriteString(crlf)
+}
+
+func writeNil(w *bufio.Writer)      { _, _ = w.WriteString("$-1\r\n") }
+func writeNilArray(w *bufio.Writer) { _, _ = w.WriteString("*-1\r\n") }
 
 func writeBulk(w *bufio.Writer, s string) {
-	_, _ = w.WriteString("$" + strconv.Itoa(len(s)) + "\r\n")
-	_, _ = w.WriteString(s + "\r\n")
+	_ = w.WriteByte('$')
+	var buf [20]byte
+	_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(s)), 10))
+	_, _ = w.WriteString(crlf)
+	_, _ = w.WriteString(s) // streamed directly — no s+"\r\n" allocation
+	_, _ = w.WriteString(crlf)
 }
 
 func writeArray(w *bufio.Writer, items []string) {
-	_, _ = w.WriteString("*" + strconv.Itoa(len(items)) + "\r\n")
+	_ = w.WriteByte('*')
+	var buf [20]byte
+	_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(items)), 10))
+	_, _ = w.WriteString(crlf)
 	for _, it := range items {
 		writeBulk(w, it)
 	}

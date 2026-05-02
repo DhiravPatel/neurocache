@@ -63,87 +63,93 @@ type ExportStreamEntry struct {
 // simply not in the snapshot (that's the normal snapshot semantics).
 func (s *Store) Export() []ExportEntry {
 	now := time.Now()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]ExportEntry, 0, len(s.data))
-	for _, e := range s.data {
-		if e.expired(now) {
-			continue
+	unlock := s.lockAllR()
+	defer unlock()
+	total := 0
+	for _, sh := range s.shards {
+		total += len(sh.data)
+	}
+	out := make([]ExportEntry, 0, total)
+	for _, sh := range s.shards {
+		for _, e := range sh.data {
+			if e.expired(now) {
+				continue
+			}
+			ent := ExportEntry{Key: e.Key, Type: e.Type.String()}
+			if !e.ExpireAt.IsZero() {
+				ent.ExpireAt = e.ExpireAt.UnixMilli()
+			}
+			switch e.Type {
+			case TypeString:
+				ent.Str = e.Str
+			case TypeList:
+				if e.List != nil {
+					items := make([]string, 0, e.List.Len())
+					for el := e.List.Front(); el != nil; el = el.Next() {
+						items = append(items, el.Value.(string))
+					}
+					ent.List = items
+				}
+			case TypeHash:
+				cpy := make(map[string]string, len(e.Hash))
+				for k, v := range e.Hash {
+					cpy[k] = v
+				}
+				ent.Hash = cpy
+			case TypeSet:
+				members := make([]string, 0, len(e.Set))
+				for m := range e.Set {
+					members = append(members, m)
+				}
+				ent.Set = members
+			case TypeZSet:
+				if e.ZSet != nil {
+					z := make([]ExportZMember, 0, e.ZSet.Len())
+					for _, m := range e.ZSet.members() {
+						sc, _ := e.ZSet.Score(m)
+						z = append(z, ExportZMember{Member: m, Score: sc})
+					}
+					ent.ZSet = z
+				}
+			case TypeStream:
+				if e.Stream != nil {
+					e.Stream.mu.Lock()
+					xs := make([]ExportStreamEntry, 0, len(e.Stream.entries))
+					for _, se := range e.Stream.entries {
+						fields := make([]string, len(se.Fields))
+						copy(fields, se.Fields)
+						xs = append(xs, ExportStreamEntry{ID: se.ID.String(), Fields: fields})
+					}
+					e.Stream.mu.Unlock()
+					ent.Stream = xs
+				}
+			case TypeVector:
+				if e.Vector != nil && e.Vector.Index != nil {
+					idx := e.Vector.Index
+					ent.VectorOpts = ExportVectorOpts{
+						Algo:   string(idx.Algo()),
+						Dim:    idx.Dim(),
+						Metric: string(idx.Metric()),
+						M:      idx.M(),
+						EFC:    idx.EFC(),
+						EFR:    idx.EFR(),
+					}
+					ids := idx.IDs()
+					members := make([]ExportVectorMember, 0, len(ids))
+					for _, id := range ids {
+						vec, _ := idx.Get(id)
+						attr, _ := idx.GetAttr(id)
+						members = append(members, ExportVectorMember{
+							ID:   id,
+							Vec:  encodeVectorString(vec),
+							Attr: attr,
+						})
+					}
+					ent.VectorMembers = members
+				}
+			}
+			out = append(out, ent)
 		}
-		ent := ExportEntry{Key: e.Key, Type: e.Type.String()}
-		if !e.ExpireAt.IsZero() {
-			ent.ExpireAt = e.ExpireAt.UnixMilli()
-		}
-		switch e.Type {
-		case TypeString:
-			ent.Str = e.Str
-		case TypeList:
-			if e.List != nil {
-				items := make([]string, 0, e.List.Len())
-				for el := e.List.Front(); el != nil; el = el.Next() {
-					items = append(items, el.Value.(string))
-				}
-				ent.List = items
-			}
-		case TypeHash:
-			cpy := make(map[string]string, len(e.Hash))
-			for k, v := range e.Hash {
-				cpy[k] = v
-			}
-			ent.Hash = cpy
-		case TypeSet:
-			members := make([]string, 0, len(e.Set))
-			for m := range e.Set {
-				members = append(members, m)
-			}
-			ent.Set = members
-		case TypeZSet:
-			if e.ZSet != nil {
-				z := make([]ExportZMember, 0, e.ZSet.Len())
-				for _, m := range e.ZSet.members() {
-					sc, _ := e.ZSet.Score(m)
-					z = append(z, ExportZMember{Member: m, Score: sc})
-				}
-				ent.ZSet = z
-			}
-		case TypeStream:
-			if e.Stream != nil {
-				e.Stream.mu.Lock()
-				xs := make([]ExportStreamEntry, 0, len(e.Stream.entries))
-				for _, se := range e.Stream.entries {
-					fields := make([]string, len(se.Fields))
-					copy(fields, se.Fields)
-					xs = append(xs, ExportStreamEntry{ID: se.ID.String(), Fields: fields})
-				}
-				e.Stream.mu.Unlock()
-				ent.Stream = xs
-			}
-		case TypeVector:
-			if e.Vector != nil && e.Vector.Index != nil {
-				idx := e.Vector.Index
-				ent.VectorOpts = ExportVectorOpts{
-					Algo:   string(idx.Algo()),
-					Dim:    idx.Dim(),
-					Metric: string(idx.Metric()),
-					M:      idx.M(),
-					EFC:    idx.EFC(),
-					EFR:    idx.EFR(),
-				}
-				ids := idx.IDs()
-				members := make([]ExportVectorMember, 0, len(ids))
-				for _, id := range ids {
-					vec, _ := idx.Get(id)
-					attr, _ := idx.GetAttr(id)
-					members = append(members, ExportVectorMember{
-						ID:   id,
-						Vec:  encodeVectorString(vec),
-						Attr: attr,
-					})
-				}
-				ent.VectorMembers = members
-			}
-		}
-		out = append(out, ent)
 	}
 	return out
 }
@@ -152,9 +158,11 @@ func (s *Store) Export() []ExportEntry {
 // replaces whatever is currently in the store — used at startup when a
 // snapshot is loaded. Callers should invoke before accepting clients.
 func (s *Store) Restore(entries []ExportEntry) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data = make(map[string]*Entry, len(entries))
+	unlock := s.lockAllW()
+	defer unlock()
+	for _, sh := range s.shards {
+		sh.data = make(map[string]*Entry)
+	}
 	s.bytes.Store(0)
 	now := time.Now()
 	for _, ent := range entries {
@@ -215,7 +223,8 @@ func (s *Store) Restore(entries []ExportEntry) {
 			continue
 		}
 		s.recomputeBytes(e)
-		s.data[e.Key] = e
+		sh := s.shardForKey(e.Key)
+		sh.data[e.Key] = e
 	}
 }
 

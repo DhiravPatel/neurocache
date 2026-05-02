@@ -7,11 +7,17 @@ import "strconv"
 // callers iterate until cursor == "0". count is a hint; match filters by
 // glob. A missing typeFilter ("") returns everything.
 func (s *Store) Scan(cursor string, match, typeFilter string, count int) (string, []string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	keys := make([]string, 0, len(s.data))
-	for k := range s.data {
-		keys = append(keys, k)
+	unlock := s.lockAllR()
+	defer unlock()
+	total := 0
+	for _, sh := range s.shards {
+		total += len(sh.data)
+	}
+	keys := make([]string, 0, total)
+	for _, sh := range s.shards {
+		for k := range sh.data {
+			keys = append(keys, k)
+		}
 	}
 	sortKeys(keys)
 
@@ -29,7 +35,8 @@ func (s *Store) Scan(cursor string, match, typeFilter string, count int) (string
 	}
 	for i := off; i < end; i++ {
 		k := keys[i]
-		e := s.data[k]
+		sh := s.shardForKey(k)
+		e := sh.data[k]
 		if e == nil {
 			continue
 		}
@@ -50,9 +57,10 @@ func (s *Store) Scan(cursor string, match, typeFilter string, count int) (string
 
 // HScan iterates a hash. Returns field+value pairs interleaved.
 func (s *Store) HScan(key, cursor, match string, count int) (string, []string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeHash)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
 		return "0", []string{}, err
 	}
@@ -89,9 +97,10 @@ func (s *Store) HScan(key, cursor, match string, count int) (string, []string, e
 
 // SScan iterates a set.
 func (s *Store) SScan(key, cursor, match string, count int) (string, []string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
 		return "0", []string{}, err
 	}
@@ -128,9 +137,10 @@ func (s *Store) SScan(key, cursor, match string, count int) (string, []string, e
 
 // ZScan iterates a sorted set returning member+score pairs interleaved.
 func (s *Store) ZScan(key, cursor, match string, count int) (string, []string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok, err := s.get(key, TypeZSet)
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeZSet)
 	if err != nil || !ok {
 		return "0", []string{}, err
 	}
