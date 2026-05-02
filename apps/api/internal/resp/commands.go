@@ -383,6 +383,16 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.inferCmd(strings.TrimPrefix(cmd, "INFER."), args)
 	case "MCP.TOOLS", "MCP.RESOURCES", "MCP.CALL", "MCP.READ", "MCP.RPC":
 		c.mcpCmd(strings.TrimPrefix(cmd, "MCP."), args)
+
+	// ─── hybrid retrieval (BM25 + vector + RRF) and GraphRAG ───────
+	case "RETRIEVE.CREATE", "RETRIEVE.DROP", "RETRIEVE.LIST", "RETRIEVE.STATS",
+		"RETRIEVE.ADD", "RETRIEVE.DEL", "RETRIEVE.GET", "RETRIEVE.QUERY":
+		c.retrieveCmd(strings.TrimPrefix(cmd, "RETRIEVE."), args)
+	case "RAG.QUERY":
+		c.ragQueryCmd(args)
+	case "MEMORY.ADD", "MEMORY.QUERY", "MEMORY.LIST", "MEMORY.DEL",
+		"MEMORY.CONSOLIDATE", "MEMORY.DECAY", "MEMORY.STATS":
+		c.memoryFamilyCmd(strings.TrimPrefix(cmd, "MEMORY."), args)
 	case "KV.SUBSCRIBE":
 		c.kvSubscribeCmd(args)
 	case "KV.UNSUBSCRIBE":

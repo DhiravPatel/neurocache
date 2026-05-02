@@ -210,6 +210,43 @@ PROMPT.SET support-reply "Hello {name}! Got your note about {topic}."   # auto-b
 PROMPT.RENDER support-reply VARS name "Alice" topic "billing"
 PROMPT.GET support-reply VERSION 1       # historical (rollback target)
 PROMPT.LIST                              # every template with latest version
+
+# Hybrid retrieval — BM25 lexical + dense vector + RRF fusion in one
+# command. The production retrieval stack: pure-vector misses model
+# numbers and exact strings; pure-BM25 misses paraphrases; the fused
+# rank handles both.
+RETRIEVE.CREATE docs HNSW 1
+RETRIEVE.ADD docs d1 "iPhone 13 review: best small phone of 2024" META entity Apple
+RETRIEVE.ADD docs d2 "Samsung Galaxy S22 deep dive" META entity Samsung
+RETRIEVE.QUERY docs "best small phone" K 3 ALPHA 0.5
+# returns hits ranked by RRF(BM25, vector); each row carries both
+# component ranks so you can debug "why did this match?".
+
+# GraphRAG — hybrid retrieval AND knowledge-graph expansion in one
+# call. Each top hit's `entity` metadata is walked through the graph
+# up to N hops, and the visited triples ride back as `context`.
+GRAPH.LINK Apple founded_by "Steve Jobs"
+GRAPH.LINK Apple headquartered_in Cupertino
+RAG.QUERY docs "best small phone" K 3 HOPS 2
+# → { hits: [...d1, d2...], context: [(Apple, founded_by, Steve Jobs), ...] }
+
+# Layered memory — episodic (events) / semantic (distilled facts) /
+# procedural (rules), with importance hints, dedup-on-write,
+# recency-weighted ranking, soft + hard decay, and bulk consolidation.
+MEMORY.ADD user:dhirav "user prefers terse explanations" \
+  LAYER semantic IMPORTANCE 0.9 DEDUP 0.85
+MEMORY.QUERY user:dhirav "communication style" LAYER semantic K 5 RECENCY 0.3 TOUCH 1
+MEMORY.STATS user:dhirav
+MEMORY.DECAY user:dhirav LAYER episodic MAXAGE 2592000 DRYRUN 1
+MEMORY.CONSOLIDATE user:dhirav THRESHOLD 0.85 MIN 3 DROP 1
+
+# MCP catalog — every primitive above is also a registered MCP tool,
+# so Claude Desktop / Cursor / any MCP client gets a working set out
+# of the box. No registration code, no glue, just point the client.
+MCP.TOOLS                                # 13 tools: kv_get/set, semantic_*,
+                                          # memory_*, graph_*, retrieve_*,
+                                          # rag_query, conv_*
+MCP.CALL neurocache.rag_query '{"index":"docs","query":"best small phone","k":3,"hops":2}'
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
@@ -387,8 +424,14 @@ neurocache/
 │   │   └── internal/
 │   │       ├── store/          # in-memory KV with TTL
 │   │       ├── vector/         # feature-hashed embeddings + cosine index
+│   │       ├── vectorindex/    # HNSW + FLAT vector indexes (V* commands)
+│   │       ├── retrieval/      # BM25 + vector + RRF fusion (RETRIEVE.*, RAG.QUERY)
 │   │       ├── semcache/       # SEMANTIC_* + LLM response cache
-│   │       ├── memory/         # per-user memory with semantic recall
+│   │       ├── memory/         # layered memory (episodic/semantic/procedural)
+│   │       │                   #   + decay + dedup + consolidation
+│   │       ├── aiops/          # graph, MCP server + tool catalog, A/B,
+│   │       │                   #   moderation, lineage, SLOs, scheduler...
+│   │       ├── llmstack/       # embedding cache, conversations, prompts
 │   │       ├── eviction/       # AI-scored / LRU / LFU policies
 │   │       ├── metrics/        # rolling timeline + hot keys + savings
 │   │       ├── http/           # HTTP + JSON handlers, /api/* routes

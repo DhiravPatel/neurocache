@@ -822,6 +822,52 @@ Expose NeuroCache primitives (memory, conversations, vectors, prompts) as MCP to
 | `MCP.READ uri` | Read a resource (`resources/read`). | same |
 | `MCP.RPC json-rpc-frame` | Pass-through for arbitrary JSON-RPC method. | same |
 
+The MCP server ships with a **production tool catalog** (registered at engine startup, see `aiops/mcp_tools.go` + `engine/mcp_backend.go`) so MCP clients see real tools out of the box — no glue code needed:
+
+| Tool | What an LLM client gets |
+|---|---|
+| `neurocache.kv_get` / `kv_set` | Plain string KV access. |
+| `neurocache.semantic_get` / `semantic_set` | Cache-by-meaning across paraphrases. |
+| `neurocache.memory_add` / `memory_query` | Layered per-user memory (episodic/semantic/procedural). |
+| `neurocache.graph_link` / `graph_neighbors` | Knowledge-graph triples + one-hop walks. |
+| `neurocache.retrieve_add` / `retrieve_query` | Hybrid (BM25 + vector + RRF) document search. |
+| `neurocache.rag_query` | GraphRAG: hybrid retrieval + graph expansion in one call. |
+| `neurocache.conv_append` / `conv_window` | Token-aware conversation log + windowing. |
+
+### RETRIEVE.* — hybrid retrieval (BM25 + vector + RRF)
+The production retrieval stack: lexical Okapi BM25 for exact strings (model numbers, names, rare terms), dense HNSW vectors for paraphrases, fused via Reciprocal Rank Fusion (Cormack et al., 2009). Optional cross-encoder rerank hook (caller supplies the model). State lives in `internal/retrieval/`.
+
+| Command | What it does | Where |
+|---|---|---|
+| `RETRIEVE.CREATE name [DIM n] [K1 f] [B f] [HNSW 0\|1]` | Create a named index with tuning knobs. | `resp/commands_retrieval.go` |
+| `RETRIEVE.DROP name` | Drop an index. | same |
+| `RETRIEVE.LIST` | List index names. | same |
+| `RETRIEVE.STATS name` | Documents / terms / total_length / avg_length. | same |
+| `RETRIEVE.ADD name id text [META k v ...]` | Upsert a document (creates index lazily). | same |
+| `RETRIEVE.DEL name id` | Delete a document. | same |
+| `RETRIEVE.GET name id` | Read one document as JSON. | same |
+| `RETRIEVE.QUERY name query [K n] [ALPHA f] [BM25 0\|1] [VECTOR 0\|1]` | Hybrid top-k. ALPHA=0 is BM25-only, 1 is vector-only, 0.5 is balanced. Each hit carries both component ranks for "why did this match?" debugging. | same |
+
+### RAG.QUERY — GraphRAG in one command
+Combines hybrid retrieval with a knowledge-graph BFS expansion of the entities attached to top hits. Documents added with `META entity <subject>` get their `entity` walked through `GRAPH.*` edges up to N hops; visited triples ride back as `context` rows.
+
+| Command | What it does | Where |
+|---|---|---|
+| `RAG.QUERY index query [K n] [HOPS n] [ALPHA f] [PREDICATE p] [ENTITY_KEY key]` | One-shot GraphRAG. Returns `{hits: [...], context: [(s, p, o, depth, source_doc), ...]}`. | `resp/commands_retrieval.go` |
+
+### MEMORY.* — layered memory family
+Episodic (events) / semantic (distilled facts) / procedural (rules) layers, importance hints, dedup-on-write, recency-weighted ranking, soft + hard decay, and bulk consolidation. State lives in `internal/memory/layers.go`.
+
+| Command | What it does | Where |
+|---|---|---|
+| `MEMORY.ADD user text [LAYER l] [IMPORTANCE f] [DEDUP f] [META k v ...]` | Record a memory. DEDUP > 0 enables semantic dedup-on-write — duplicates touch the existing entry instead of creating a new row. | `resp/commands_memory.go` |
+| `MEMORY.QUERY user text [LAYER l] [K n] [THRESHOLD f] [RECENCY f] [TOUCH 0\|1]` | Layer-scoped semantic query with recency-weighted ranking. TOUCH=1 updates LastAccessedAt for adaptive decay. | same |
+| `MEMORY.LIST user [LAYER l]` | List a user's entries, optionally filtered by layer. | same |
+| `MEMORY.DEL user id` | Delete one entry. | same |
+| `MEMORY.STATS [user]` | Per-user (or global) layer breakdown. | same |
+| `MEMORY.DECAY user [LAYER l] [HALFLIFE s] [MAXAGE s] [UNTOUCHED s] [MINSCORE f] [DRYRUN 0\|1]` | Sweep aged-out entries. HALFLIFE+MINSCORE for soft decay; MAXAGE for hard retention. DRYRUN reports counts without deleting. | same |
+| `MEMORY.CONSOLIDATE user [THRESHOLD f] [MIN n] [DROP 0\|1] [IMPORTANCE f]` | Cluster a user's episodic memories by similarity and write one synthetic semantic-layer entry per cluster. DROP=1 removes the originals. | same |
+
 ### KV.SUBSCRIBE — keyspace notification sugar
 Wrap `SUBSCRIBE` so clients can say "watch this key" without knowing the `__keyspace__:<key>` channel convention.
 
@@ -840,7 +886,7 @@ Every Phase 11 family is reachable as JSON on the same router under `/api/...`. 
 
 ## Total command count
 
-**~642 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives.
+**~660 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives + the hybrid-retrieval / GraphRAG / layered-memory family.
 
 ## Known gaps
 

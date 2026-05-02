@@ -35,6 +35,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/primitives"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/retrieval"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/sentinel"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
@@ -114,6 +115,10 @@ type Engine struct {
 	Policies    *aiops.Policies
 	Inference   *aiops.Inference
 	MCP         *aiops.MCP
+
+	// Retrieval is the per-engine registry of hybrid (BM25 + vector +
+	// RRF) indexes. Backs RETRIEVE.* and RAG.QUERY (GraphRAG).
+	Retrieval *retrieval.Manager
 
 	// HotKeys is the runtime top-K access tracker driven by the
 	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
@@ -218,6 +223,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Policies = aiops.NewPolicies(nil)
 	e.Inference = aiops.NewInference()
 	e.MCP = aiops.NewMCP()
+	e.Retrieval = retrieval.NewManager(cfg.EmbeddingDim)
+	e.registerMCPCatalog()
 	e.HotKeys = introspect.NewHotKeys(introspect.HotKeysOptions{
 		K:           cfg.HotKeysK,
 		SampleEvery: cfg.HotKeysSample,
