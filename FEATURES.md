@@ -884,9 +884,75 @@ Every Phase 11 family is reachable as JSON on the same router under `/api/...`. 
 - `c.eng.RecordWrite()` propagates them to replicas via the same fan-out as every other command.
 - ACL: each family is in the `@aiops` category. `+@aiops` grants the whole Phase 11 surface in one rule.
 
+## Phase 13 — Resilience & coordination primitives (genuinely beyond Redis)
+
+Three more families that solve problems Redis doesn't address at the cache layer at all. Distributed circuit breakers replace the per-process Hystrix/resilience4j layer every team rebuilds. Saga-pattern workflow orchestration with compensation steps replaces the Streams-as-orchestrator anti-pattern (and a Temporal/Cadence service for the 90% case). Conflict-free replicated data types (G-Counter, PN-Counter, OR-Set, LWW-Register) bring multi-region eventual-consistency primitives that OSS Redis doesn't ship — only paid Enterprise / CRDB does. State lives in `internal/aiops/`; RESP handlers in `internal/resp/commands_phase13.go`. All writes flow through the same AOF + replication path as every other command.
+
+### CIRCUIT.* — distributed circuit breakers
+
+Sliding-window failure-rate breaker with three canonical states (closed / open / half-open). The breaker trips OPEN when the failure ratio over the recent window exceeds `THRESHOLD` (with at least `MIN` observations to avoid hair-trigger trips). After `COOLDOWN` elapses it transitions to HALFOPEN, which lets up to `HALFOPEN` probe calls through; `HALFOPEN` consecutive successes return it to CLOSED, any failure re-opens it. CHECK is the gate every caller hits before issuing a downstream call; RECORD is what they call afterward with the outcome. Decoupled by design — a caller may CHECK, fast-fail because the breaker is OPEN, and skip RECORD entirely.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CIRCUIT.CONFIG service [THRESHOLD f] [WINDOW n] [MIN n] [COOLDOWN ms] [HALFOPEN n]` | Per-service tunables. | `aiops/circuit.go` + `resp/commands_phase13.go` |
+| `CIRCUIT.RECORD service ok\|fail` | Record an outcome; may trip the breaker. Returns the post-record state. | same |
+| `CIRCUIT.CHECK service` | Gate a downstream call. Returns `{allowed, state}`. Reserves a probe slot in HALFOPEN. | same |
+| `CIRCUIT.STATE service` | Full snapshot — config + counters + cooldown remaining. | same |
+| `CIRCUIT.TRIP service [REASON r]` | Manually open. | same |
+| `CIRCUIT.RESET service` | Clear back to CLOSED with empty history. | same |
+| `CIRCUIT.FORGET service` | Drop the service entirely. | same |
+| `CIRCUIT.LIST` | Every known service with full snapshot. | same |
+| `CIRCUIT.STATS` | Roll-up: services / open / half_open / closed / totals. | same |
+
+### SAGA.* — workflow orchestration with compensation
+
+Each saga is a sequence of steps; each step records an optional compensating action. On failure, the manager returns the recorded compensations in reverse order (LIFO of completed steps) so the caller can run them — keeping the manager free of an opinion about how to talk to your downstream (the same machinery works whether the rollback is a RESP command, an HTTP DELETE, or a queue message). State machine: `running → completed` (happy) or `running → compensating → failed` (rollback path). Once terminal, further STEPs are rejected.
+
+| Command | What it does | Where |
+|---|---|---|
+| `SAGA.START id [META k v ...]` | Open a saga; reusing a known id is rejected. | `aiops/saga.go` + `resp/commands_phase13.go` |
+| `SAGA.STEP id name [PAYLOAD json] [COMPENSATION cmd]` | Record a completed step + its rollback action. | same |
+| `SAGA.COMPLETE id` | Mark the saga successful. Terminal. | same |
+| `SAGA.FAIL id [REASON r]` | Transition to compensating; returns the comp list (LIFO). Terminal. | same |
+| `SAGA.STATUS id` | Full snapshot. | same |
+| `SAGA.LIST [STATE running\|completed\|compensating\|failed]` | All sagas, optionally state-filtered. | same |
+| `SAGA.FORGET id` | Drop. | same |
+| `SAGA.STATS` | Per-state counts. | same |
+
+### CRDT.* — conflict-free replicated data types
+
+Four CRDT shapes with `MERGE` as the central primitive — joining two replicas' state without conflict regardless of message order or duplicates. Each key holds exactly one type; mixing types per key returns `WRONGTYPE`.
+
+- **G-Counter** — grow-only counter. Each actor owns a slot; `MERGE` keeps the per-actor max.
+- **PN-Counter** — two G-Counters (P and N); value = P − N.
+- **OR-Set** (Observed-Remove Set) — each `SADD` mints a unique tag for the (actor, member) pair; `SREM` erases only the tags currently observed. A concurrent `SADD` on another replica produces a tag the remover never saw, so the element survives the merge — observed-remove semantics.
+- **LWW-Register** — last-writer-wins, keyed on (timestamp, actor) with lex tiebreaker so divergent replicas converge.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CRDT.GINCR key actor [delta]` / `CRDT.GVALUE key` | G-Counter increment + sum. | `aiops/crdt.go` + `resp/commands_phase13.go` |
+| `CRDT.PNINCR key actor delta` / `CRDT.PNVALUE key` | PN-Counter ±. | same |
+| `CRDT.SADD key actor member` / `CRDT.SREM key member` / `CRDT.SMEMBERS key` / `CRDT.SISMEMBER key member` | OR-Set ops. | same |
+| `CRDT.LWWSET key actor value [TS unix-ns]` / `CRDT.LWWGET key` | LWW-Register write/read. | same |
+| `CRDT.MERGE dest src` | Join src's state into dest (same kind). | same |
+| `CRDT.STATE key` | Full debug snapshot — per-actor slots, members, lww tuple. | same |
+| `CRDT.TYPE key` | Kind label. | same |
+| `CRDT.LIST [TYPE g_counter\|pn_counter\|or_set\|lww_register]` | Enumerate keys. | same |
+| `CRDT.FORGET key` / `CRDT.STATS` | Drop / roll-up. | same |
+
+### Persistence + replication
+
+- Every mutating command is in `internal/resp/writeset.go` so AOF replays them faithfully on restart. `CIRCUIT.CHECK` and `SAGA.FAIL` are included because they transition state machines (probe reservation; compensating→failed) — a faithful AOF replay must reconstruct the in-flight state, not just the records.
+- `c.eng.RecordWrite()` propagates them to replicas like any other command — multi-region replicas converge their CRDT state through the same fan-out.
+- ACL: every command is in the `@ai` category. One `+@ai` rule grants the whole Phase 13 surface.
+
+### Tests
+
+`internal/aiops/phase13_test.go` covers the canonical flows: closed→open→half-open→closed (full breaker lifecycle), half-open probe failure re-opens, saga happy path + LIFO comp ordering on FAIL, terminal-state guards, G-Counter merge commutativity, PN ± semantics, OR-Set observed-remove (concurrent add survives a remove on another replica), and LWW timestamp/actor tiebreaking.
+
 ## Total command count
 
-**~660 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives + the hybrid-retrieval / GraphRAG / layered-memory family.
+**~693 commands** across 12 data types + 5 modules + AI-native extensions + AI-ops primitives + NeuroCache-only primitives + cross-engine compat fillers + AI-stack primitives + hybrid-retrieval / GraphRAG / layered-memory + Phase 13 resilience & coordination primitives.
 
 ## Known gaps
 

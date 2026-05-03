@@ -396,6 +396,46 @@ var registry = map[string]commandInfo{
 
 	"KV.SUBSCRIBE":   {[]string{CatPubSub, CatRead, CatFast}},
 	"KV.UNSUBSCRIBE": {[]string{CatPubSub, CatRead, CatFast}},
+
+	// Phase 13 — resilience & coordination primitives. CIRCUIT and
+	// SAGA are control-plane writes (state-machine transitions);
+	// CRDT is data-plane state. All gate under @ai so a single
+	// `+@ai` rule grants the whole Phase 13 surface.
+	"CIRCUIT.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.CHECK":  {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.STATE":  {[]string{CatAI, CatRead, CatFast}},
+	"CIRCUIT.TRIP":   {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"CIRCUIT.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"CIRCUIT.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"SAGA.START":    {[]string{CatAI, CatWrite, CatFast}},
+	"SAGA.STEP":     {[]string{CatAI, CatWrite, CatFast}},
+	"SAGA.COMPLETE": {[]string{CatAI, CatWrite, CatFast}},
+	"SAGA.FAIL":     {[]string{CatAI, CatWrite, CatFast}},
+	"SAGA.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"SAGA.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"SAGA.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"SAGA.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	"CRDT.GINCR":     {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.GVALUE":    {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.PNINCR":    {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.PNVALUE":   {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.SADD":      {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.SREM":      {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.SMEMBERS":  {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.SISMEMBER": {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.LWWSET":    {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.LWWGET":    {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.MERGE":     {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.STATE":     {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.TYPE":      {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.LIST":      {[]string{CatAI, CatRead, CatFast}},
+	"CRDT.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
+	"CRDT.STATS":     {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
