@@ -383,6 +383,24 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.inferCmd(strings.TrimPrefix(cmd, "INFER."), args)
 	case "MCP.TOOLS", "MCP.RESOURCES", "MCP.CALL", "MCP.READ", "MCP.RPC":
 		c.mcpCmd(strings.TrimPrefix(cmd, "MCP."), args)
+
+	// ─── Phase 12 — uniqueness primitives (CHURN/WORKER/FLAG/AUDIT/
+	// TRACE/DOC/OBSERVE) ───────────────────────────────────────────
+	case "CHURN.TAG", "CHURN.UNTAG", "CHURN.INVALIDATE", "CHURN.KEYS", "CHURN.TAGS_OF", "CHURN.TAGS", "CHURN.STATS":
+		c.churnCmd(strings.TrimPrefix(cmd, "CHURN."), args)
+	case "WORKER.ENQUEUE", "WORKER.DEQUEUE", "WORKER.ACK", "WORKER.NACK", "WORKER.STATS", "WORKER.DLQ", "WORKER.REQUEUE", "WORKER.CONFIG", "WORKER.QUEUES":
+		c.workerCmd(strings.TrimPrefix(cmd, "WORKER."), args)
+	case "FLAG.SET", "FLAG.IS", "FLAG.ALLOW", "FLAG.DENY", "FLAG.GET", "FLAG.LIST", "FLAG.DELETE":
+		c.flagCmd(strings.TrimPrefix(cmd, "FLAG."), args)
+	case "AUDIT.LOG", "AUDIT.QUERY", "AUDIT.COUNT", "AUDIT.STATS", "AUDIT.RETENTION":
+		c.auditCmd(strings.TrimPrefix(cmd, "AUDIT."), args)
+	case "TRACE.START", "TRACE.END", "TRACE.ANNOTATE", "TRACE.GET", "TRACE.LIST", "TRACE.FORGET", "TRACE.STATS":
+		c.traceCmd(strings.TrimPrefix(cmd, "TRACE."), args)
+	case "DOC.INIT", "DOC.APPLY", "DOC.GET", "DOC.SINCE", "DOC.LIST", "DOC.FORGET":
+		c.docCmd(strings.TrimPrefix(cmd, "DOC."), args)
+	case "OBSERVE.REGISTER", "OBSERVE.INC", "OBSERVE.SET", "OBSERVE.RENDER":
+		c.observeCmd(strings.TrimPrefix(cmd, "OBSERVE."), args)
+
 	case "KV.SUBSCRIBE":
 		c.kvSubscribeCmd(args)
 	case "KV.UNSUBSCRIBE":

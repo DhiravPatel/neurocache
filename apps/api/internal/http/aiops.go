@@ -1179,3 +1179,748 @@ func (h *handlers) mcpRPC(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	_, _ = w.Write(out)
 }
+
+// ── Phase 12 — uniqueness primitives ────────────────────────────────
+//
+// CHURN (tagged invalidation), WORKER (job queue), FLAG (feature flags),
+// AUDIT (compliance log), TRACE (in-memory tracing), DOC (JSON-Patch
+// document sync), OBSERVE (Prometheus exporter). Routes registered in
+// router.go.
+
+// ── CHURN.* ─────────────────────────────────────────────────────────
+
+type churnTagsReq struct {
+	Tags []string `json:"tags"`
+}
+
+func (h *handlers) churnTag(w http.ResponseWriter, r *http.Request) {
+	defer h.record("CHURN.TAG", time.Now())
+	key := r.PathValue("key")
+	var req churnTagsReq
+	if err := readJSON(r, &req); err != nil || len(req.Tags) == 0 {
+		writeErr(w, 400, "tags array required")
+		return
+	}
+	n := h.eng.Churn.Tag(key, req.Tags...)
+	args := append([]string{key}, req.Tags...)
+	h.eng.RecordWrite("CHURN.TAG", args)
+	writeJSON(w, 200, map[string]int{"added": n})
+}
+
+func (h *handlers) churnUntag(w http.ResponseWriter, r *http.Request) {
+	defer h.record("CHURN.UNTAG", time.Now())
+	key := r.PathValue("key")
+	tags := r.URL.Query()["tag"]
+	n := h.eng.Churn.Untag(key, tags...)
+	args := append([]string{key}, tags...)
+	h.eng.RecordWrite("CHURN.UNTAG", args)
+	writeJSON(w, 200, map[string]int{"removed": n})
+}
+
+func (h *handlers) churnInvalidate(w http.ResponseWriter, r *http.Request) {
+	defer h.record("CHURN.INVALIDATE", time.Now())
+	var req churnTagsReq
+	if err := readJSON(r, &req); err != nil || len(req.Tags) == 0 {
+		writeErr(w, 400, "tags array required")
+		return
+	}
+	dropped := h.eng.Churn.Invalidate(req.Tags...)
+	h.eng.RecordWrite("CHURN.INVALIDATE", req.Tags)
+	if dropped == nil {
+		dropped = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"dropped": dropped})
+}
+
+func (h *handlers) churnKeys(w http.ResponseWriter, r *http.Request) {
+	defer h.record("CHURN.KEYS", time.Now())
+	tag := r.URL.Query().Get("tag")
+	if tag == "" {
+		writeErr(w, 400, "?tag= required")
+		return
+	}
+	keys := h.eng.Churn.KeysFor(tag)
+	if keys == nil {
+		keys = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"keys": keys})
+}
+
+func (h *handlers) churnTagsOf(w http.ResponseWriter, r *http.Request) {
+	defer h.record("CHURN.TAGS_OF", time.Now())
+	key := r.PathValue("key")
+	tags := h.eng.Churn.TagsOf(key)
+	if tags == nil {
+		tags = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"tags": tags})
+}
+
+func (h *handlers) churnTags(w http.ResponseWriter, _ *http.Request) {
+	tags := h.eng.Churn.Tags()
+	if tags == nil {
+		tags = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"tags": tags})
+}
+
+func (h *handlers) churnStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, h.eng.Churn.Stats())
+}
+
+// ── WORKER.* ────────────────────────────────────────────────────────
+
+type workerEnqueueReq struct {
+	Payload        string `json:"payload"`
+	Priority       int    `json:"priority,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}
+
+func (h *handlers) workerEnqueue(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.ENQUEUE", time.Now())
+	queue := r.PathValue("queue")
+	var req workerEnqueueReq
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, "invalid json")
+		return
+	}
+	id := h.eng.Workers.Enqueue(queue, req.Payload, req.Priority, req.IdempotencyKey)
+	args := []string{queue, req.Payload}
+	if req.Priority != 0 {
+		args = append(args, "PRIORITY", strconv.Itoa(req.Priority))
+	}
+	if req.IdempotencyKey != "" {
+		args = append(args, "IDEMPKEY", req.IdempotencyKey)
+	}
+	h.eng.RecordWrite("WORKER.ENQUEUE", args)
+	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+func (h *handlers) workerDequeue(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.DEQUEUE", time.Now())
+	queue := r.PathValue("queue")
+	vis := time.Duration(0)
+	if v := r.URL.Query().Get("visibility_ms"); v != "" {
+		ms, err := strconv.Atoi(v)
+		if err != nil || ms < 0 {
+			writeErr(w, 400, "visibility_ms must be a non-negative integer")
+			return
+		}
+		vis = time.Duration(ms) * time.Millisecond
+	}
+	job := h.eng.Workers.Dequeue(queue, vis)
+	if job == nil {
+		writeJSON(w, 200, map[string]any{"job": nil})
+		return
+	}
+	args := []string{queue}
+	if vis > 0 {
+		args = append(args, "VISIBILITY", strconv.FormatInt(vis.Milliseconds(), 10))
+	}
+	h.eng.RecordWrite("WORKER.DEQUEUE", args)
+	writeJSON(w, 200, map[string]any{"job": job})
+}
+
+func (h *handlers) workerAck(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.ACK", time.Now())
+	queue := r.PathValue("queue")
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeErr(w, 400, "id must be an integer")
+		return
+	}
+	ok := h.eng.Workers.Ack(queue, id)
+	if ok {
+		h.eng.RecordWrite("WORKER.ACK", []string{queue, idStr})
+	}
+	writeJSON(w, 200, map[string]bool{"acked": ok})
+}
+
+type workerNackReq struct {
+	Error   string `json:"error"`
+	DelayMs int    `json:"delay_ms,omitempty"`
+}
+
+func (h *handlers) workerNack(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.NACK", time.Now())
+	queue := r.PathValue("queue")
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeErr(w, 400, "id must be an integer")
+		return
+	}
+	var req workerNackReq
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, "invalid json")
+		return
+	}
+	delay := time.Duration(req.DelayMs) * time.Millisecond
+	requeued, dlq := h.eng.Workers.Nack(queue, id, req.Error, delay)
+	args := []string{queue, idStr, req.Error}
+	if req.DelayMs > 0 {
+		args = append(args, "DELAY", strconv.Itoa(req.DelayMs))
+	}
+	h.eng.RecordWrite("WORKER.NACK", args)
+	writeJSON(w, 200, map[string]bool{"requeued": requeued, "dlq": dlq})
+}
+
+func (h *handlers) workerStats(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.STATS", time.Now())
+	queue := r.PathValue("queue")
+	st, ok := h.eng.Workers.Stats(queue)
+	if !ok {
+		writeErr(w, 404, "no such queue")
+		return
+	}
+	writeJSON(w, 200, st)
+}
+
+func (h *handlers) workerDLQ(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.DLQ", time.Now())
+	queue := r.PathValue("queue")
+	jobs := h.eng.Workers.DLQ(queue)
+	if jobs == nil {
+		jobs = []*aiops.Job{}
+	}
+	writeJSON(w, 200, map[string]any{"jobs": jobs})
+}
+
+func (h *handlers) workerRequeue(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.REQUEUE", time.Now())
+	queue := r.PathValue("queue")
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeErr(w, 400, "id must be an integer")
+		return
+	}
+	if err := h.eng.Workers.Requeue(queue, id); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	h.eng.RecordWrite("WORKER.REQUEUE", []string{queue, idStr})
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+type workerConfigReq struct {
+	MaxAttempts int `json:"max_attempts,omitempty"`
+	DLQCap      int `json:"dlq_cap,omitempty"`
+}
+
+func (h *handlers) workerConfig(w http.ResponseWriter, r *http.Request) {
+	defer h.record("WORKER.CONFIG", time.Now())
+	queue := r.PathValue("queue")
+	var req workerConfigReq
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, "invalid json")
+		return
+	}
+	h.eng.Workers.Configure(queue, req.MaxAttempts, req.DLQCap)
+	args := []string{queue}
+	if req.MaxAttempts > 0 {
+		args = append(args, "MAXATTEMPTS", strconv.Itoa(req.MaxAttempts))
+	}
+	if req.DLQCap > 0 {
+		args = append(args, "DLQCAP", strconv.Itoa(req.DLQCap))
+	}
+	h.eng.RecordWrite("WORKER.CONFIG", args)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (h *handlers) workerQueues(w http.ResponseWriter, _ *http.Request) {
+	queues := h.eng.Workers.Queues()
+	if queues == nil {
+		queues = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"queues": queues})
+}
+
+// ── FLAG.* ──────────────────────────────────────────────────────────
+
+type flagSetReq struct {
+	On         bool     `json:"on"`
+	Percentage int      `json:"percentage"`
+	Allow      []string `json:"allow,omitempty"`
+	Deny       []string `json:"deny,omitempty"`
+}
+
+func (h *handlers) flagSet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.SET", time.Now())
+	name := r.PathValue("name")
+	var req flagSetReq
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, "invalid json")
+		return
+	}
+	h.eng.Flags.Set(name, req.On, req.Percentage, req.Allow, req.Deny)
+	state := "off"
+	if req.On {
+		state = "on"
+	}
+	args := []string{name, state, "PERCENTAGE", strconv.Itoa(req.Percentage)}
+	if len(req.Allow) > 0 {
+		args = append(args, "ALLOW")
+		args = append(args, req.Allow...)
+	}
+	if len(req.Deny) > 0 {
+		args = append(args, "DENY")
+		args = append(args, req.Deny...)
+	}
+	h.eng.RecordWrite("FLAG.SET", args)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (h *handlers) flagIs(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.IS", time.Now())
+	name := r.PathValue("name")
+	user := r.URL.Query().Get("user")
+	if user == "" {
+		writeErr(w, 400, "?user= required")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"enabled": h.eng.Flags.Is(name, user)})
+}
+
+type flagUserReq struct {
+	User string `json:"user"`
+}
+
+func (h *handlers) flagAllow(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.ALLOW", time.Now())
+	name := r.PathValue("name")
+	var req flagUserReq
+	if err := readJSON(r, &req); err != nil || req.User == "" {
+		writeErr(w, 400, "user required")
+		return
+	}
+	ok := h.eng.Flags.Allow(name, req.User)
+	if ok {
+		h.eng.RecordWrite("FLAG.ALLOW", []string{name, req.User})
+	}
+	writeJSON(w, 200, map[string]bool{"added": ok})
+}
+
+func (h *handlers) flagDeny(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.DENY", time.Now())
+	name := r.PathValue("name")
+	var req flagUserReq
+	if err := readJSON(r, &req); err != nil || req.User == "" {
+		writeErr(w, 400, "user required")
+		return
+	}
+	ok := h.eng.Flags.Deny(name, req.User)
+	if ok {
+		h.eng.RecordWrite("FLAG.DENY", []string{name, req.User})
+	}
+	writeJSON(w, 200, map[string]bool{"added": ok})
+}
+
+func (h *handlers) flagGet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.GET", time.Now())
+	name := r.PathValue("name")
+	st, ok := h.eng.Flags.Get(name)
+	if !ok {
+		writeErr(w, 404, "no such flag")
+		return
+	}
+	writeJSON(w, 200, st)
+}
+
+func (h *handlers) flagList(w http.ResponseWriter, _ *http.Request) {
+	flags := h.eng.Flags.List()
+	if flags == nil {
+		flags = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"flags": flags})
+}
+
+func (h *handlers) flagDelete(w http.ResponseWriter, r *http.Request) {
+	defer h.record("FLAG.DELETE", time.Now())
+	name := r.PathValue("name")
+	ok := h.eng.Flags.Delete(name)
+	if ok {
+		h.eng.RecordWrite("FLAG.DELETE", []string{name})
+	}
+	writeJSON(w, 200, map[string]bool{"removed": ok})
+}
+
+// ── AUDIT.* ─────────────────────────────────────────────────────────
+
+type auditLogReq struct {
+	Actor    string            `json:"actor"`
+	Action   string            `json:"action"`
+	Resource string            `json:"resource"`
+	Outcome  string            `json:"outcome,omitempty"`
+	Attrs    map[string]string `json:"attrs,omitempty"`
+}
+
+func (h *handlers) auditLog(w http.ResponseWriter, r *http.Request) {
+	defer h.record("AUDIT.LOG", time.Now())
+	var req auditLogReq
+	if err := readJSON(r, &req); err != nil || req.Actor == "" || req.Action == "" || req.Resource == "" {
+		writeErr(w, 400, "actor + action + resource required")
+		return
+	}
+	id := h.eng.Audit.Log(req.Actor, req.Action, req.Resource, req.Outcome, req.Attrs)
+	args := []string{req.Actor, req.Action, req.Resource}
+	if req.Outcome != "" {
+		args = append(args, "OUTCOME", req.Outcome)
+	}
+	if len(req.Attrs) > 0 {
+		args = append(args, "ATTRS")
+		for k, v := range req.Attrs {
+			args = append(args, k, v)
+		}
+	}
+	h.eng.RecordWrite("AUDIT.LOG", args)
+	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+func (h *handlers) auditQuery(w http.ResponseWriter, r *http.Request) {
+	defer h.record("AUDIT.QUERY", time.Now())
+	q := aiops.AuditQuery{
+		Actor:    r.URL.Query().Get("actor"),
+		Action:   r.URL.Query().Get("action"),
+		Resource: r.URL.Query().Get("resource"),
+	}
+	if v := r.URL.Query().Get("since"); v != "" {
+		ms, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			writeErr(w, 400, "since must be unix-ms")
+			return
+		}
+		q.Since = time.UnixMilli(ms)
+	}
+	if v := r.URL.Query().Get("until"); v != "" {
+		ms, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			writeErr(w, 400, "until must be unix-ms")
+			return
+		}
+		q.Until = time.UnixMilli(ms)
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeErr(w, 400, "limit must be a non-negative integer")
+			return
+		}
+		q.Limit = n
+	}
+	evs := h.eng.Audit.Query(q)
+	if evs == nil {
+		evs = []*aiops.AuditEvent{}
+	}
+	writeJSON(w, 200, map[string]any{"events": evs})
+}
+
+func (h *handlers) auditStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, h.eng.Audit.Stats())
+}
+
+type auditRetentionReq struct {
+	MaxEntries int `json:"max_entries"`
+}
+
+func (h *handlers) auditRetention(w http.ResponseWriter, r *http.Request) {
+	defer h.record("AUDIT.RETENTION", time.Now())
+	var req auditRetentionReq
+	if err := readJSON(r, &req); err != nil || req.MaxEntries <= 0 {
+		writeErr(w, 400, "max_entries must be a positive integer")
+		return
+	}
+	h.eng.Audit.SetMaxEntries(req.MaxEntries)
+	h.eng.RecordWrite("AUDIT.RETENTION", []string{strconv.Itoa(req.MaxEntries)})
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// ── TRACE.* ─────────────────────────────────────────────────────────
+
+type traceStartReq struct {
+	ParentID string            `json:"parent_id,omitempty"`
+	Name     string            `json:"name"`
+	Attrs    map[string]string `json:"attrs,omitempty"`
+}
+
+func (h *handlers) traceStart(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.START", time.Now())
+	traceID := r.PathValue("trace_id")
+	spanID := r.PathValue("span_id")
+	var req traceStartReq
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		writeErr(w, 400, "name required")
+		return
+	}
+	h.eng.Tracer.Start(traceID, spanID, req.ParentID, req.Name, req.Attrs)
+	args := []string{traceID, spanID}
+	if req.ParentID != "" {
+		args = append(args, "PARENT", req.ParentID)
+	}
+	args = append(args, req.Name)
+	if len(req.Attrs) > 0 {
+		args = append(args, "ATTRS")
+		for k, v := range req.Attrs {
+			args = append(args, k, v)
+		}
+	}
+	h.eng.RecordWrite("TRACE.START", args)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+type traceEndReq struct {
+	Status string `json:"status,omitempty"`
+}
+
+func (h *handlers) traceEnd(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.END", time.Now())
+	traceID := r.PathValue("trace_id")
+	spanID := r.PathValue("span_id")
+	var req traceEndReq
+	_ = readJSON(r, &req)
+	ok := h.eng.Tracer.End(traceID, spanID, req.Status)
+	args := []string{traceID, spanID}
+	if req.Status != "" {
+		args = append(args, "STATUS", req.Status)
+	}
+	if ok {
+		h.eng.RecordWrite("TRACE.END", args)
+	}
+	writeJSON(w, 200, map[string]bool{"ended": ok})
+}
+
+type traceAnnotateReq struct {
+	Attrs map[string]string `json:"attrs"`
+}
+
+func (h *handlers) traceAnnotate(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.ANNOTATE", time.Now())
+	traceID := r.PathValue("trace_id")
+	spanID := r.PathValue("span_id")
+	var req traceAnnotateReq
+	if err := readJSON(r, &req); err != nil || len(req.Attrs) == 0 {
+		writeErr(w, 400, "attrs required")
+		return
+	}
+	ok := h.eng.Tracer.Annotate(traceID, spanID, req.Attrs)
+	args := []string{traceID, spanID}
+	for k, v := range req.Attrs {
+		args = append(args, k, v)
+	}
+	if ok {
+		h.eng.RecordWrite("TRACE.ANNOTATE", args)
+	}
+	writeJSON(w, 200, map[string]bool{"annotated": ok})
+}
+
+func (h *handlers) traceGet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.GET", time.Now())
+	traceID := r.PathValue("trace_id")
+	spans := h.eng.Tracer.Get(traceID)
+	if spans == nil {
+		spans = []aiops.Span{}
+	}
+	writeJSON(w, 200, map[string]any{"spans": spans})
+}
+
+func (h *handlers) traceList(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.LIST", time.Now())
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeErr(w, 400, "limit must be a non-negative integer")
+			return
+		}
+		limit = n
+	}
+	ids := h.eng.Tracer.List(limit)
+	if ids == nil {
+		ids = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"traces": ids})
+}
+
+func (h *handlers) traceForget(w http.ResponseWriter, r *http.Request) {
+	defer h.record("TRACE.FORGET", time.Now())
+	traceID := r.PathValue("trace_id")
+	ok := h.eng.Tracer.Forget(traceID)
+	if ok {
+		h.eng.RecordWrite("TRACE.FORGET", []string{traceID})
+	}
+	writeJSON(w, 200, map[string]bool{"removed": ok})
+}
+
+func (h *handlers) traceStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, h.eng.Tracer.Stats())
+}
+
+// ── DOC.* ───────────────────────────────────────────────────────────
+
+func (h *handlers) docInit(w http.ResponseWriter, r *http.Request) {
+	defer h.record("DOC.INIT", time.Now())
+	key := r.PathValue("key")
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, 400, "read body: "+err.Error())
+		return
+	}
+	v, err := h.eng.Docs.Init(key, body)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	h.eng.RecordWrite("DOC.INIT", []string{key, string(body)})
+	writeJSON(w, 200, map[string]int64{"version": v})
+}
+
+func (h *handlers) docApply(w http.ResponseWriter, r *http.Request) {
+	defer h.record("DOC.APPLY", time.Now())
+	key := r.PathValue("key")
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, 400, "read body: "+err.Error())
+		return
+	}
+	v, err := h.eng.Docs.Apply(key, body)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	h.eng.RecordWrite("DOC.APPLY", []string{key, string(body)})
+	writeJSON(w, 200, map[string]int64{"version": v})
+}
+
+func (h *handlers) docGet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("DOC.GET", time.Now())
+	key := r.PathValue("key")
+	snap, ok := h.eng.Docs.Get(key)
+	if !ok {
+		writeErr(w, 404, "no such document")
+		return
+	}
+	writeJSON(w, 200, snap)
+}
+
+func (h *handlers) docSince(w http.ResponseWriter, r *http.Request) {
+	defer h.record("DOC.SINCE", time.Now())
+	key := r.PathValue("key")
+	v := r.URL.Query().Get("version")
+	ver, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || ver < 0 {
+		writeErr(w, 400, "?version= must be a non-negative integer")
+		return
+	}
+	patches, snap, ok := h.eng.Docs.Since(key, ver)
+	if !ok {
+		writeErr(w, 404, "no such document")
+		return
+	}
+	if snap != nil {
+		writeJSON(w, 200, map[string]any{"snapshot": *snap})
+		return
+	}
+	if patches == nil {
+		patches = []aiops.DocPatch{}
+	}
+	writeJSON(w, 200, map[string]any{"patches": patches})
+}
+
+func (h *handlers) docList(w http.ResponseWriter, _ *http.Request) {
+	keys := h.eng.Docs.List()
+	if keys == nil {
+		keys = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"keys": keys})
+}
+
+func (h *handlers) docForget(w http.ResponseWriter, r *http.Request) {
+	defer h.record("DOC.FORGET", time.Now())
+	key := r.PathValue("key")
+	ok := h.eng.Docs.Forget(key)
+	if ok {
+		h.eng.RecordWrite("DOC.FORGET", []string{key})
+	}
+	writeJSON(w, 200, map[string]bool{"removed": ok})
+}
+
+// ── OBSERVE.* ───────────────────────────────────────────────────────
+
+func (h *handlers) observeRender(w http.ResponseWriter, _ *http.Request) {
+	defer h.record("OBSERVE.RENDER", time.Now())
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(h.eng.Observe.Render()))
+}
+
+type observeRegisterReq struct {
+	Kind   string            `json:"kind"`
+	Name   string            `json:"name"`
+	Help   string            `json:"help,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+func (h *handlers) observeRegister(w http.ResponseWriter, r *http.Request) {
+	defer h.record("OBSERVE.REGISTER", time.Now())
+	var req observeRegisterReq
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		writeErr(w, 400, "kind + name required")
+		return
+	}
+	args := []string{strings.ToUpper(req.Kind), req.Name, req.Help}
+	for k, v := range req.Labels {
+		args = append(args, "LABEL", k, v)
+	}
+	switch strings.ToUpper(req.Kind) {
+	case "COUNTER":
+		h.eng.Observe.RegisterCounter(req.Name, req.Help, req.Labels)
+	case "GAUGE":
+		h.eng.Observe.RegisterGauge(req.Name, req.Help, req.Labels)
+	default:
+		writeErr(w, 400, "kind must be COUNTER or GAUGE")
+		return
+	}
+	h.eng.RecordWrite("OBSERVE.REGISTER", args)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+type observeIncReq struct {
+	Name  string `json:"name"`
+	Delta int64  `json:"delta,omitempty"`
+}
+
+func (h *handlers) observeInc(w http.ResponseWriter, r *http.Request) {
+	defer h.record("OBSERVE.INC", time.Now())
+	var req observeIncReq
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		writeErr(w, 400, "name required")
+		return
+	}
+	delta := req.Delta
+	if delta == 0 {
+		delta = 1
+	}
+	h.eng.Observe.Inc(req.Name, delta)
+	h.eng.RecordWrite("OBSERVE.INC", []string{req.Name, strconv.FormatInt(delta, 10)})
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+type observeSetReq struct {
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+}
+
+func (h *handlers) observeSet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("OBSERVE.SET", time.Now())
+	var req observeSetReq
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		writeErr(w, 400, "name required")
+		return
+	}
+	h.eng.Observe.SetGauge(req.Name, req.Value)
+	h.eng.RecordWrite("OBSERVE.SET", []string{req.Name, strconv.FormatFloat(req.Value, 'f', -1, 64)})
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}

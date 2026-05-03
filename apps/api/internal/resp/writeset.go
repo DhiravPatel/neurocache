@@ -112,6 +112,22 @@ var writeCommands = map[string]bool{
 	"EVENT.APPEND": true, "EVENT.PROJECT": true,
 	"POLICY.SET": true, "POLICY.PURGE": true,
 	"INFER.FORGET": true, "INFER.PURGE": true, "INFER.DEFAULT": true,
+
+	// Phase 12 — uniqueness primitives. Every command that mutates
+	// in-memory state. WORKER.DEQUEUE is included because it moves a
+	// job from the heap into the reserved set; replaying it on restart
+	// reconstructs the in-flight pool. Pure reads (CHURN.KEYS,
+	// FLAG.IS, AUDIT.QUERY, TRACE.GET, DOC.GET, OBSERVE.RENDER, etc.)
+	// are not in the writeset.
+	"CHURN.TAG": true, "CHURN.UNTAG": true, "CHURN.INVALIDATE": true,
+	"WORKER.ENQUEUE": true, "WORKER.DEQUEUE": true,
+	"WORKER.ACK": true, "WORKER.NACK": true,
+	"WORKER.CONFIG": true, "WORKER.REQUEUE": true,
+	"FLAG.SET": true, "FLAG.ALLOW": true, "FLAG.DENY": true, "FLAG.DELETE": true,
+	"AUDIT.LOG": true, "AUDIT.RETENTION": true,
+	"TRACE.START": true, "TRACE.END": true, "TRACE.ANNOTATE": true, "TRACE.FORGET": true,
+	"DOC.INIT": true, "DOC.APPLY": true, "DOC.FORGET": true,
+	"OBSERVE.REGISTER": true, "OBSERVE.INC": true, "OBSERVE.SET": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.
