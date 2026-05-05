@@ -148,6 +148,9 @@ type Engine struct {
 	StartedAt time.Time
 	CmdCount  atomic.Uint64
 	stopCh    chan struct{}
+	// Clock is a process-wide cached monotonic clock used by the RESP
+	// dispatch hot path. See engine/clock.go for the rationale.
+	Clock *FastClock
 
 	// lastSave is the unix timestamp of the most recent successful RDB
 	// write (manual or scheduled). Seeded from the on-disk file's mtime
@@ -196,6 +199,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Functions: scripting.NewFunctionRegistry(),
 		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
+		Clock:     NewFastClock(),
 
 		Replication: replication.NewState(),
 		Backlog:     replication.NewBacklog(cfg.ReplBacklogSize),
@@ -557,6 +561,7 @@ func (e *Engine) KeysInSlot(slot, count int) []string {
 func (e *Engine) Stop() {
 	close(e.stopCh)
 	e.Metrics.Stop()
+	e.Clock.Stop()
 	if e.Scheduler != nil {
 		e.Scheduler.Stop()
 	}

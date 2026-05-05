@@ -8,13 +8,36 @@ import (
 
 // Set overwrites key with the given value. ttl == 0 clears any expiry,
 // ttl > 0 sets a new one. Any existing non-string value is replaced.
+//
+// Hot-path optimization: when the key already holds a string, we reuse
+// the existing *Entry instead of allocating a new one. redis-benchmark
+// SET cycles over a fixed key set and overwrites each many times — the
+// reuse path saves the heap allocation, the GC pressure, and the
+// 80-byte Entry copy per call. New keys still allocate (one-time cost).
 func (s *Store) Set(key, value string, ttl time.Duration) {
 	sh := s.shardForKey(key)
+	now := time.Now()
 	sh.mu.Lock()
+	if old, ok := sh.data[key]; ok && old.Type == TypeString {
+		// In-place update — same key, same type, just rewrite the
+		// payload + accounting fields.
+		s.bytes.Add(-int64(old.Bytes))
+		old.Str = value
+		old.Bytes = len(key) + len(value)
+		old.LastRead = now
+		if ttl > 0 {
+			old.ExpireAt = now.Add(ttl)
+		} else {
+			old.ExpireAt = time.Time{}
+		}
+		s.bytes.Add(int64(old.Bytes))
+		sh.mu.Unlock()
+		s.fire("set", key)
+		return
+	}
 	if old, ok := sh.data[key]; ok {
 		s.bytes.Add(-int64(old.Bytes))
 	}
-	now := time.Now()
 	e := &Entry{
 		Key:       key,
 		Type:      TypeString,

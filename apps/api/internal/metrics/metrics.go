@@ -128,10 +128,23 @@ func (m *Metrics) RecordCommand(name string, latency time.Duration) {
 	atomic.StoreInt64(&m.latRing[pos%latRingSize], latency.Nanoseconds())
 }
 
+// hotKeySampleShift controls how often RecordKVHit pushes a sample
+// into the hot-key tracker. 5 → 1-in-32. The tracker is for the
+// dashboard's "top keys" view, which only needs to catch genuinely
+// hot keys; under any sustained workload the sampled population is
+// statistically indistinguishable from the full population. The cost
+// avoided is the global hotMu acquire on every cache hit (real
+// contention with 50+ concurrent GET clients).
+const hotKeySampleShift = 5
+
 func (m *Metrics) RecordKVHit(key string, hit bool) {
 	if hit {
 		m.c.kvHits.Add(1)
-		m.bumpHotKey(key)
+		// Sampled hot-key bump. The unsampled hits still increment
+		// kvHits — only the per-key hotMu visit is rate-limited.
+		if m.c.kvHits.Load()&((1<<hotKeySampleShift)-1) == 0 {
+			m.bumpHotKey(key)
+		}
 	} else {
 		m.c.kvMisses.Add(1)
 	}

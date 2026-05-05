@@ -191,15 +191,59 @@ type conn struct {
 	done chan struct{}
 }
 
+// hasFanout reports whether anything other than the conn's own
+// dispatch goroutine might write to bw — pub/sub deliveries, sharded
+// pub/sub, or client-tracking invalidation pushes. When this returns
+// false (the typical case for a redis-benchmark or app traffic),
+// writeMu acquisition is skipped on the hot path.
+//
+// Safe to call from the conn's own goroutine without locks: the
+// fan-out maps are mutated only by the dispatch path; readers that
+// run on other goroutines (pub/sub Broker) acquire writeMu before
+// writing, which serves as a memory barrier.
+func (c *conn) hasFanout() bool {
+	return len(c.subs) > 0 || len(c.psub) > 0 ||
+		len(c.shardSubs) > 0 || c.invalidateCh != nil
+}
+
+// lockWrite / unlockWrite are the writeMu fast-path helpers. They
+// skip the mutex acquisition entirely when no other goroutine could
+// be writing to bw — which is the steady state for almost every
+// connection.
+func (c *conn) lockWrite() {
+	if c.hasFanout() {
+		c.writeMu.Lock()
+	}
+}
+
+func (c *conn) unlockWrite() {
+	if c.hasFanout() {
+		c.writeMu.Unlock()
+	}
+}
+
 func (s *Server) handle(nc net.Conn) {
+	// Tune socket options on the accepted connection. Go enables
+	// TCP_NODELAY by default, but we set it explicitly + bump kernel
+	// buffers so a burst of pipelined commands doesn't roundtrip
+	// through epoll between reads. SetNoDelay/SetReadBuffer/
+	// SetWriteBuffer no-op on non-TCP conns (e.g. tls.Conn) and
+	// harmlessly fail on Unix sockets.
+	if tc, ok := nc.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetReadBuffer(256 * 1024)
+		_ = tc.SetWriteBuffer(256 * 1024)
+	}
 	c := &conn{
 		nc:   nc,
-		// 64 KiB buffers. Default bufio sizes (4 KiB) caused a syscall
-		// per ~4 KiB of payload for large GETs/SETs — measured at 30%
-		// of Redis throughput on 100 KiB values. With 64 KiB we get
-		// one syscall for typical replies and ~2 for 100 KiB ones.
-		br: bufio.NewReaderSize(nc, 64*1024),
-		bw: bufio.NewWriterSize(nc, 64*1024),
+		// 128 KiB buffers (was 64 KiB). Bigger buffers let pipelined
+		// command bursts amortize one read syscall across many commands
+		// — redis-benchmark with -P pipelining sends 100s of bytes per
+		// command, so 128 KiB carries ~1k pipelined SETs in one syscall.
+		// Diminishing returns past this; go too high and idle conns
+		// pin RAM unnecessarily.
+		br: bufio.NewReaderSize(nc, 128*1024),
+		bw: bufio.NewWriterSize(nc, 128*1024),
 		eng:  s.eng,
 		log:  s.log,
 		tx:   transaction.New(),
@@ -238,7 +282,10 @@ func (s *Server) handle(nc net.Conn) {
 		if rem := s.eng.Clients.PauseRemaining(); rem > 0 {
 			time.Sleep(rem)
 		}
-		start := time.Now()
+		// Read the cached monotonic clock instead of time.Now(). At
+		// 200k cmds/sec, the per-call savings (~30 ns vDSO vs ~1 ns
+		// atomic load, ×2 reads) is ~12 ms/sec/CPU.
+		startNs := s.eng.Clock.NowNanos()
 		s.eng.CmdCount.Add(1)
 		// Hoist the upper-cased command name once — previously we
 		// upper-cased it 4 times per command (Touch, RecordCommand,
@@ -247,9 +294,9 @@ func (s *Server) handle(nc net.Conn) {
 		// upper, which redis-benchmark and most production drivers
 		// emit, so the typical case hits no allocation at all.
 		cmdU := asciiUpper(parts[0])
-		s.eng.Clients.Touch(c.info, cmdU)
+		s.eng.Clients.TouchSampled(c.info, cmdU)
 		c.executeUpper(parts, cmdU)
-		dur := time.Since(start)
+		dur := time.Duration(s.eng.Clock.NowNanos() - startNs)
 		s.eng.Metrics.RecordCommand(cmdU, dur)
 		s.eng.SlowLog.Maybe(dur, parts, c.info.Addr)
 		s.eng.Latency.Record("command", dur)
@@ -261,7 +308,7 @@ func (s *Server) handle(nc net.Conn) {
 		}
 		// MONITOR fan-out: cheap when no subscribers are attached.
 		s.eng.Monitor.Broadcast(c.info.Addr, 0, cmdU, parts[1:])
-		c.writeMu.Lock()
+		c.lockWrite()
 		// Honour CLIENT REPLY skip/off: silence the next reply or all replies.
 		switch c.info.ReplyMode {
 		case "skip":
@@ -287,7 +334,7 @@ func (s *Server) handle(nc net.Conn) {
 				_ = c.bw.Flush()
 			}
 		}
-		c.writeMu.Unlock()
+		c.unlockWrite()
 	}
 }
 
@@ -351,9 +398,9 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 		// fall through
 	default:
 		if c.user == nil && c.eng.Cfg.ProtectedMode {
-			c.writeMu.Lock()
+			c.lockWrite()
 			writeTypedError(c.bw, "NOAUTH", "Authentication required.")
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			return
 		}
 		if c.user != nil {
@@ -366,9 +413,9 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 				keys := keysForCommand(cmd, args)
 				channels := channelsForCommand(cmd, args)
 				if err := c.eng.ACL.Allowed(c.user, cmd, keys, channels); err != nil {
-					c.writeMu.Lock()
+					c.lockWrite()
 					writeTypedError(c.bw, "NOPERM", strings.TrimPrefix(err.Error(), "NOPERM "))
-					c.writeMu.Unlock()
+					c.unlockWrite()
 					return
 				}
 			}
@@ -378,9 +425,9 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 	// In subscribed mode almost nothing is allowed.
 	if len(c.subs) > 0 || len(c.psub) > 0 {
 		if !allowedDuringSubscribe[cmd] {
-			c.writeMu.Lock()
+			c.lockWrite()
 			writeError(c.bw, "Can't execute '"+strings.ToLower(cmd)+"': only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT are allowed in this context")
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			return
 		}
 	}
@@ -393,14 +440,14 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 		c.asking = false
 		switch v.Redirect {
 		case 1, 2: // RedirectMoved (1) or RedirectAsk (2)
-			c.writeMu.Lock()
+			c.lockWrite()
 			writeError(c.bw, v.Error())
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			return
 		case 3, 4, 5: // CrossSlot, TryAgain, ClusterDown
-			c.writeMu.Lock()
+			c.lockWrite()
 			writeError(c.bw, v.Error())
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			return
 		}
 	}
@@ -413,19 +460,19 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 			// fall through to the handler
 		default:
 			if err := c.tx.Queue(cmd, args); err != nil {
-				c.writeMu.Lock()
+				c.lockWrite()
 				writeError(c.bw, err.Error())
-				c.writeMu.Unlock()
+				c.unlockWrite()
 				return
 			}
-			c.writeMu.Lock()
+			c.lockWrite()
 			writeSimple(c.bw, "QUEUED")
-			c.writeMu.Unlock()
+			c.unlockWrite()
 			return
 		}
 	}
 
-	c.writeMu.Lock()
+	c.lockWrite()
 	// CLIENT NO-TOUCH (Redis 7.2): if this conn opted in, snapshot
 	// the LastRead / Hits of every key the command touches so we can
 	// restore them after dispatch. Only meaningful for read-class
@@ -439,7 +486,7 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 	if touchSnap != nil {
 		c.restoreTouchedKeys(touchSnap)
 	}
-	c.writeMu.Unlock()
+	c.unlockWrite()
 	// Record after dispatch so failed commands don't pollute the AOF.
 	// This check is a best-effort — a write that errored out at parse
 	// time still gets appended, and replay will just log-and-skip it.
