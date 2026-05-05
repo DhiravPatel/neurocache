@@ -55,7 +55,7 @@ func resolveEncoding(e *Entry) string {
 			maxLen := 0
 			if e.List != nil {
 				for el := e.List.Front(); el != nil; el = el.Next() {
-					if l := len(el.Value.(string)); l > maxLen {
+					if l := len(el.Value); l > maxLen {
 						maxLen = l
 					}
 					if maxLen > 64 {
@@ -188,7 +188,7 @@ func (s *Store) Dump(key string) (string, bool, error) {
 	case TypeList:
 		items := []string{}
 		for el := e.List.Front(); el != nil; el = el.Next() {
-			items = append(items, el.Value.(string))
+			items = append(items, el.Value)
 		}
 		exp.List = items
 	case TypeHash:
@@ -293,7 +293,7 @@ func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
 	case TypeList:
 		items := []string{}
 		for el := se.List.Front(); el != nil; el = el.Next() {
-			items = append(items, el.Value.(string))
+			items = append(items, el.Value)
 		}
 		exp.List = items
 	case TypeHash:

@@ -13,12 +13,13 @@
 package store
 
 import (
-	"container/list"
 	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/clist"
 )
 
 // ValueType enumerates every kind of value a key can hold.
@@ -65,7 +66,7 @@ type Entry struct {
 	Type ValueType
 
 	Str     string
-	List    *list.List // elements are strings
+	List    *clist.List // elements are strings
 	Hash    map[string]string
 	HashTTL map[string]time.Time // optional per-field expiries (Redis 7.4)
 	Set     map[string]struct{}
@@ -73,6 +74,17 @@ type Entry struct {
 	Stream  *Stream
 	Module  *ModuleValue // populated when Type == TypeModule
 	Vector  *VectorSet   // populated when Type == TypeVector
+
+	// IntVal + IsInt are the integer fast-path for the SET/INCR/INCRBY
+	// hot path. Redis treats numeric strings specially: an INCR on a
+	// numeric value avoids the parse-add-format cycle by keeping the
+	// integer in a native field. We do the same — when IsInt is true,
+	// IntVal is authoritative and Str holds its decimal representation
+	// (kept in sync on every write so GET stays a single string read).
+	// Set on first parse-friendly INCR/SET; cleared by APPEND, GETSET,
+	// or any write that produces a non-numeric string.
+	IntVal int64
+	IsInt  bool
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -436,11 +448,17 @@ func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) 
 	e = &Entry{Key: key, Type: t, CreatedAt: time.Now(), LastRead: time.Now()}
 	switch t {
 	case TypeList:
-		e.List = list.New()
+		e.List = clist.New()
 	case TypeHash:
-		e.Hash = make(map[string]string)
+		// Pre-size the bucket array. Go's map starts at 0 buckets and
+		// grows in 2× steps, paying a rehash on every threshold. Most
+		// hashes settle around 8–32 fields; sizing for 8 avoids the
+		// first 3 grow operations (which together copy 0+1+2+4 = 7
+		// bucket loads worth of work). For workloads with larger
+		// hashes the steady-state growth is unchanged.
+		e.Hash = make(map[string]string, 8)
 	case TypeSet:
-		e.Set = make(map[string]struct{})
+		e.Set = make(map[string]struct{}, 8)
 	case TypeZSet:
 		e.ZSet = newZSet()
 	case TypeStream:
@@ -503,7 +521,7 @@ func (s *Store) recomputeBytes(e *Entry) {
 		n = len(e.Key)
 		if e.List != nil {
 			for el := e.List.Front(); el != nil; el = el.Next() {
-				n += len(el.Value.(string))
+				n += len(el.Value)
 			}
 		}
 	case TypeHash:

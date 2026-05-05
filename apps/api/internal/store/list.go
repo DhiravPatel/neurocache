@@ -1,8 +1,9 @@
 package store
 
 import (
-	"container/list"
 	"errors"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/clist"
 )
 
 // LPush prepends one or more values to a list. Creates the list if absent.
@@ -95,7 +96,7 @@ func (s *Store) LPop(key string) (string, bool, error) {
 	if front == nil {
 		return "", false, nil
 	}
-	v := front.Value.(string)
+	v := front.Value
 	e.List.Remove(front)
 	s.addBytes(e, -len(v))
 	s.removeIfEmpty(sh, e)
@@ -115,7 +116,7 @@ func (s *Store) RPop(key string) (string, bool, error) {
 	if back == nil {
 		return "", false, nil
 	}
-	v := back.Value.(string)
+	v := back.Value
 	e.List.Remove(back)
 	s.addBytes(e, -len(v))
 	s.removeIfEmpty(sh, e)
@@ -154,7 +155,7 @@ func (s *Store) LIndex(key string, index int) (string, bool, error) {
 	for i := 0; i < index; i++ {
 		el = el.Next()
 	}
-	return el.Value.(string), true, nil
+	return el.Value, true, nil
 }
 
 // LRange returns elements in [start,stop] with negative indices supported.
@@ -177,7 +178,7 @@ func (s *Store) LRange(key string, start, stop int) ([]string, error) {
 		el = el.Next()
 	}
 	for i := a; i <= b && el != nil; i++ {
-		out = append(out, el.Value.(string))
+		out = append(out, el.Value)
 		el = el.Next()
 	}
 	return out, nil
@@ -206,7 +207,7 @@ func (s *Store) LSet(key string, index int, value string) error {
 	for i := 0; i < index; i++ {
 		el = el.Next()
 	}
-	old := el.Value.(string)
+	old := el.Value
 	el.Value = value
 	s.addBytes(e, len(value)-len(old))
 	return nil
@@ -229,18 +230,18 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 	}
 	bytesRemoved := 0
 	walk := func(fwd bool) {
-		var next func(*list.Element) *list.Element
-		var start *list.Element
+		var next func(*clist.Element) *clist.Element
+		var start *clist.Element
 		if fwd {
 			start = e.List.Front()
-			next = (*list.Element).Next
+			next = (*clist.Element).Next
 		} else {
 			start = e.List.Back()
-			next = (*list.Element).Prev
+			next = (*clist.Element).Prev
 		}
 		for el := start; el != nil; {
 			n := next(el)
-			if el.Value.(string) == value {
+			if el.Value == value {
 				bytesRemoved += len(value)
 				e.List.Remove(el)
 				removed++
@@ -278,7 +279,7 @@ func (s *Store) LTrim(key string, start, stop int) error {
 		s.removeIfEmpty(sh, e)
 		return nil
 	}
-	keep := list.New()
+	keep := clist.New()
 	el := e.List.Front()
 	for i := 0; i < a; i++ {
 		el = el.Next()
@@ -307,7 +308,7 @@ func (s *Store) LInsert(key string, before bool, pivot, value string) (int, erro
 		return 0, nil
 	}
 	for el := e.List.Front(); el != nil; el = el.Next() {
-		if el.Value.(string) == pivot {
+		if el.Value == pivot {
 			if before {
 				e.List.InsertBefore(value, el)
 			} else {
@@ -332,7 +333,7 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 	if back == nil {
 		return "", false, nil
 	}
-	v := back.Value.(string)
+	v := back.Value
 	se.List.Remove(back)
 
 	de, err := s.getOrCreate(shD, dst, TypeList)

@@ -142,7 +142,7 @@ func (s *Store) LPos(key, value string, rank, count, maxlen int) ([]int, bool, e
 				break
 			}
 			scanned++
-			if el.Value.(string) == value {
+			if el.Value == value {
 				hits++
 				if hits >= rank {
 					out = append(out, idx)
@@ -166,7 +166,7 @@ func (s *Store) LPos(key, value string, rank, count, maxlen int) ([]int, bool, e
 				break
 			}
 			scanned++
-			if el.Value.(string) == value {
+			if el.Value == value {
 				hits++
 				if hits >= want {
 					out = append(out, idx)

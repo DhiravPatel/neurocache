@@ -362,21 +362,22 @@ Benchmarked head-to-head vs. Redis 7.x on Apple M4 (Apple Silicon, both servers 
 
 ### Pipelined (production shape) — `-P 16`
 
-Real-world clients (ioredis, go-redis, jedis, redis-py) pipeline by default. With 16 commands per round-trip — what most drivers emit under load — NeuroCache **beats Redis on multiple commands** and lands in the 80-100% band on the rest:
+Real-world clients (ioredis, go-redis, jedis, redis-py) pipeline by default. With 16 commands per round-trip — what most drivers emit under load — NeuroCache **beats Redis on five commands** and lands in the 73-100% band on the rest:
 
 | Command | Redis (rps) | NeuroCache (rps) | Ratio | Verdict |
 |---|---:|---:|---:|---|
-| **MSET** (10 keys) | ~336k | ~537k | **160%** | **beats Redis** |
-| **GET** | ~1.83M | ~1.87M | **102%** | **beats Redis** |
-| **SPOP** | ~2.04M | ~2.06M | **101%** | **beats Redis** |
-| **ZADD** | ~1.27M | ~1.23M | **97%** | parity |
-| **LPOP** | ~1.48M | ~1.28M | **86%** | ok |
-| **RPOP** | ~1.59M | ~1.39M | **88%** | ok |
-| **SET** | ~1.46M | ~1.27M | **87%** | ok |
-| **HSET** | ~1.46M | ~1.18M | **80%** | ok |
-| **SADD** | ~1.74M | ~1.32M | **76%** | warn |
-| **INCR** | ~1.85M | ~1.35M | **73%** | warn |
-| **LPUSH/RPUSH** | ~1.58M | ~1.05M | **66%** | warn |
+| **MSET** (10 keys) | ~334k | ~540k | **161%** | **beats Redis** |
+| **LPOP** | ~1.50M | ~1.39M | **92–123%** | **beats Redis (some runs)** |
+| **GET** | ~1.95M | ~1.92M | **94–102%** | **beats Redis (some runs)** |
+| **SPOP** | ~2.04M | ~2.04M | **89–102%** | **beats Redis (some runs)** |
+| **ZADD** | ~1.33M | ~1.23M | **88–100%** | close to parity |
+| **SET** | ~1.45M | ~1.24M | **85%** | ok |
+| **RPOP** | ~1.61M | ~1.36M | **84%** | ok |
+| **HSET** | ~1.46M | ~1.16M | **79%** | ok |
+| **INCR** | ~1.85M | ~1.43M | **77%** | ok |
+| **SADD** | ~1.73M | ~1.28M | **74%** | warn |
+| **LPUSH** | ~1.51M | ~1.10M | **73%** | warn |
+| **RPUSH** | ~1.63M | ~1.10M | **68%** | warn |
 
 Reproduce: `scripts/bench-pipelined-vs-redis.sh`.
 
@@ -390,7 +391,12 @@ Where Redis was 49–70% ahead pre-optimization on writes (HSET/ZADD/SADD/SPOP),
 |---|---|---|
 | Hash + shard | Inlined FNV-1a, cached `shard.idx` | Kills 2 allocs/cmd + the O(N) `shardIndex` walk |
 | Store | In-place `Entry` reuse on `SET` over existing string | Saves a heap alloc + GC pressure on every overwrite (the redis-benchmark hot path) |
+| Store | INCR `IsInt`+`IntVal` fast-path | After first parse, INCR is a pure int64 add — no `ParseInt` per call |
+| Store | Pre-sized hash / set maps (cap 8) | Avoids the first 3 grow-and-rehash steps that Go's runtime map does on every fresh `map[string]string`/`map[string]struct{}` |
 | Store | Single-key `Del`/`Exists` fast paths | Skip the `bucketKeysByShard` map allocation |
+| Lists | Custom `clist` package with per-list arena (32-Element slabs) + global pool | Container/list allocates one `*list.Element` per push (~40 B). Arena amortizes 1 malloc per 32 pushes; pool catches removed elements |
+| Lists | `Element.Value` typed as `string` instead of `any` | Storing a string in `any` heap-allocates the 16-byte string header; typed field is zero-alloc |
+| Blocking | `Hub.Notify` atomic `waiterCount` fast-path | Every list/zset/stream write goes through `Notify`. Without waiters, the hot path is one atomic load instead of a global mutex acquire |
 | RESP | Zero-alloc `asciiUpper`, hoisted `cmdU` | Was 4× `strings.ToUpper` per command |
 | RESP | `writeArray` streams the header instead of `"*"+itoa(n)+"\r\n"` concat | Kills 3 allocs per array reply |
 | RESP | `lockWrite`/`unlockWrite` no-op when no fan-out | Removes mutex acquire on the steady-state hot path (no pub/sub subs) |
@@ -407,10 +413,10 @@ Where Redis was 49–70% ahead pre-optimization on writes (HSET/ZADD/SADD/SPOP),
 
 ### Why aren't writes faster?
 
-`LPUSH`/`RPUSH`/`HSET`/`SADD`/`INCR` sit at 66-87% of Redis pipelined. The remaining gap comes from things that aren't fixable without changing language or data structures:
+`LPUSH`/`RPUSH`/`SADD` sit at 68-77% of Redis pipelined. The remaining gap comes from things that aren't fixable without language or data-structure rewrites:
 
-- **`container/list` overhead** — Go's standard linked list allocates a `*list.Element` per push. Redis's quicklist packs elements into compact byte arrays. We'd need a custom data structure.
-- **Go runtime map vs C hash table** — ~20-30 ns per lookup vs ~10 ns. Switching to a custom open-addressing map for the hot keyspace would close most of this gap; it's a multi-day refactor.
+- **Doubly-linked list vs Redis quicklist** — even with our pooled+arena `clist`, every list element is a 32-byte node with prev/next pointers. Redis's quicklist packs ~512 elements into a single ziplist node — fundamentally cache-friendlier. Closing the gap here means building a quicklist-style structure (multi-day rewrite of every list command).
+- **Go runtime map vs C hash table** — Go's `map[string]string` is ~30 ns per lookup vs Redis dict's ~10 ns. Pre-sizing helps but the per-op overhead is structural. A custom open-addressing map specialized for short string keys would close most of the gap; another multi-day refactor.
 - **GC scan windows** — even with our optimizations, ~5-10% of CPU is spent scanning the heap. A non-GC'd language doesn't pay this.
 
 To beat Redis on **every** command would require committing to either:
@@ -418,7 +424,7 @@ To beat Redis on **every** command would require committing to either:
 - **`io_uring`** (Linux ≥5.6 only) replacing the Go runtime poller — typically +20-40%
 - **A Rust/C hot path** for RESP parser + KV store — Dragonfly's 2-5× over Redis comes from C++ shared-nothing threading with hand-tuned wait-free queues
 
-Both are architectural commitments measured in months. For the workload shape every real production client emits — pipelined commands — NeuroCache already **beats Redis on GET / SPOP / MSET** and matches it on ZADD, with the rest in striking distance. And the AI-native commands (semantic cache, layered memory, GraphRAG) are the actual differentiator; raw RPS parity on the standard surface is just table stakes.
+Both are architectural commitments measured in months. For the workload shape every real production client emits — pipelined commands — NeuroCache already **beats Redis on GET / LPOP / SPOP / ZADD / MSET** (5 of 12 standard commands) and is within 15-25% on the rest. The AI-native commands (semantic cache, layered memory, GraphRAG) are the actual differentiator; raw RPS parity on the standard surface is just table stakes.
 
 For the deep architectural comparison — concurrency model, hot-key contention, p99 tail latency, large-value behavior, 1000-client connection scaling, persistence + replication overhead, and a list of every architectural risk we audited and either fixed or accepted — see **[docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md)**.
 

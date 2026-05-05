@@ -27,11 +27,11 @@ func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, e
 	var v string
 	if srcRight {
 		back := se.List.Back()
-		v = back.Value.(string)
+		v = back.Value
 		se.List.Remove(back)
 	} else {
 		front := se.List.Front()
-		v = front.Value.(string)
+		v = front.Value
 		se.List.Remove(front)
 	}
 	// push to destination — must succeed before we settle src bookkeeping;

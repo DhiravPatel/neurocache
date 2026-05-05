@@ -69,7 +69,7 @@ func (s *Store) Digest(key string) (string, bool, error) {
 	case TypeList:
 		h.Write([]byte("L:"))
 		for el := e.List.Front(); el != nil; el = el.Next() {
-			h.Write([]byte(el.Value.(string)))
+			h.Write([]byte(el.Value))
 			h.Write([]byte{0})
 		}
 	case TypeHash:

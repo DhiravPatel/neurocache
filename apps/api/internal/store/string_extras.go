@@ -431,7 +431,7 @@ func (s *Store) collectSortSource(key string) ([]string, error) {
 	case TypeList:
 		out := make([]string, 0, e.List.Len())
 		for el := e.List.Front(); el != nil; el = el.Next() {
-			out = append(out, el.Value.(string))
+			out = append(out, el.Value)
 		}
 		return out, nil
 	case TypeSet:
