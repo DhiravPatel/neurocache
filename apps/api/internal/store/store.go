@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dhiravpatel/neurocache/apps/api/internal/store/clist"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/qlist"
 )
 
 // ValueType enumerates every kind of value a key can hold.
@@ -66,7 +66,7 @@ type Entry struct {
 	Type ValueType
 
 	Str     string
-	List    *clist.List // elements are strings
+	List    *qlist.QList // elements are strings
 	Hash    map[string]string
 	HashTTL map[string]time.Time // optional per-field expiries (Redis 7.4)
 	Set     map[string]struct{}
@@ -448,7 +448,7 @@ func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) 
 	e = &Entry{Key: key, Type: t, CreatedAt: time.Now(), LastRead: time.Now()}
 	switch t {
 	case TypeList:
-		e.List = clist.New()
+		e.List = qlist.New()
 	case TypeHash:
 		// Pre-size the bucket array. Go's map starts at 0 buckets and
 		// grows in 2× steps, paying a rehash on every threshold. Most
@@ -520,9 +520,10 @@ func (s *Store) recomputeBytes(e *Entry) {
 	case TypeList:
 		n = len(e.Key)
 		if e.List != nil {
-			for el := e.List.Front(); el != nil; el = el.Next() {
-				n += len(el.Value)
-			}
+			e.List.ForEach(func(v string) bool {
+				n += len(v)
+				return true
+			})
 		}
 	case TypeHash:
 		n = len(e.Key)

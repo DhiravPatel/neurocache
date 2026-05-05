@@ -54,14 +54,12 @@ func resolveEncoding(e *Entry) string {
 		if e.List == nil || e.List.Len() <= 128 {
 			maxLen := 0
 			if e.List != nil {
-				for el := e.List.Front(); el != nil; el = el.Next() {
-					if l := len(el.Value); l > maxLen {
+				e.List.ForEach(func(v string) bool {
+					if l := len(v); l > maxLen {
 						maxLen = l
 					}
-					if maxLen > 64 {
-						break
-					}
-				}
+					return maxLen <= 64 // continue while still under the threshold
+				})
 			}
 			if maxLen <= 64 {
 				return "listpack"
@@ -186,10 +184,11 @@ func (s *Store) Dump(key string) (string, bool, error) {
 	case TypeString:
 		exp.Str = e.Str
 	case TypeList:
-		items := []string{}
-		for el := e.List.Front(); el != nil; el = el.Next() {
-			items = append(items, el.Value)
-		}
+		items := make([]string, 0, e.List.Len())
+		e.List.ForEach(func(v string) bool {
+			items = append(items, v)
+			return true
+		})
 		exp.List = items
 	case TypeHash:
 		cpy := make(map[string]string, len(e.Hash))
@@ -291,10 +290,11 @@ func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
 	case TypeString:
 		exp.Str = se.Str
 	case TypeList:
-		items := []string{}
-		for el := se.List.Front(); el != nil; el = el.Next() {
-			items = append(items, el.Value)
-		}
+		items := make([]string, 0, se.List.Len())
+		se.List.ForEach(func(v string) bool {
+			items = append(items, v)
+			return true
+		})
 		exp.List = items
 	case TypeHash:
 		cpy := make(map[string]string, len(se.Hash))

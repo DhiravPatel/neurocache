@@ -68,10 +68,11 @@ func (s *Store) Digest(key string) (string, bool, error) {
 		h.Write([]byte(e.Str))
 	case TypeList:
 		h.Write([]byte("L:"))
-		for el := e.List.Front(); el != nil; el = el.Next() {
-			h.Write([]byte(el.Value))
+		e.List.ForEach(func(v string) bool {
+			h.Write([]byte(v))
 			h.Write([]byte{0})
-		}
+			return true
+		})
 	case TypeHash:
 		h.Write([]byte("H:"))
 		fields := make([]string, 0, len(e.Hash))

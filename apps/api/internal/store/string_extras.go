@@ -430,9 +430,10 @@ func (s *Store) collectSortSource(key string) ([]string, error) {
 	switch e.Type {
 	case TypeList:
 		out := make([]string, 0, e.List.Len())
-		for el := e.List.Front(); el != nil; el = el.Next() {
-			out = append(out, el.Value)
-		}
+		e.List.ForEach(func(v string) bool {
+			out = append(out, v)
+			return true
+		})
 		return out, nil
 	case TypeSet:
 		out := make([]string, 0, len(e.Set))
