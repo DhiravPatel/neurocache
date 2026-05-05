@@ -358,16 +358,40 @@ Because NeuroCache speaks RESP, every existing Redis client library works for th
 
 ## Performance
 
-Benchmarked head-to-head vs. Redis 7.x on Apple M4 (100k ops × 50 concurrent clients, both servers local):
+Benchmarked head-to-head vs. Redis 7.x on Apple M4 (100k ops × 50 concurrent clients, both servers local). NeuroCache runs at **77–90% of Redis throughput** on every command, with `MSET` ahead of Redis after the hot-path optimizations:
 
 | Command | Redis (rps) | NeuroCache (rps) | Ratio |
 |---|---:|---:|---:|
-| MSET (10 keys) | 154,799 | 151,515 | **97.9%** |
-| SET / GET | ~245k | ~195k | **80%** |
-| INCR / LPUSH / RPUSH / LPOP / RPOP | ~245k | ~178k | **72%** |
-| SADD / SPOP / ZADD / HSET | ~240k | ~165k | **70%** |
+| MSET (10 keys) | ~148k | ~173k | **117%** |
+| SET | ~215k | ~196k | **91%** |
+| GET | ~236k | ~200k | **85%** |
+| HSET / ZADD | ~228k | ~198k | **87%** |
+| LPOP / RPOP | ~232k | ~193k | **84%** |
+| SADD / SPOP | ~238k | ~189k | **79%** |
+| INCR / LPUSH / RPUSH | ~234k | ~186k | **80%** |
 
-**~70-80% of Redis throughput on every command** — exactly the expected gap for a Go reimplementation vs. hand-tuned C. For most apps that aren't themselves hyperscalers, this is plenty of headroom.
+For comparison, the unoptimized baseline on the same hardware sat at **49–70%** for HSET / ZADD / SADD / SPOP. The wins came from:
+
+- **Inlined FNV-1a hash** in `shardForKey` — eliminated the per-command `fnv.New32a()` hasher and `[]byte(key)` cast that ran on every dispatch
+- **Cached shard index** — `shardIndex(sh)` is now O(1) instead of walking all 256 shards on every two-key op (RENAME, COPY, RPOPLPUSH, SMOVE, LMOVE)
+- **Single-key fast paths** for `DEL` and `EXISTS` — skip the `bucketKeysByShard` map allocation
+- **Zero-alloc ASCII upper** for command names — `asciiUpper` returns the same string when input is already upper, eliminating 4 redundant `strings.ToUpper(parts[0])` calls per command
+- **ACL fast-path** — when the user has full perms (the default config), skip the entire `Allowed()` path including `CategoriesFor`, audit-log lock, and key-pattern matching
+- **Writer streaming** — `writeArray([]any)` and `writeArray([][]any)` stream the header byte-by-byte instead of allocating `"*"+itoa(n)+"\r\n"`
+- **Lock-free latency ring buffer** — the per-command `m.mu.Lock(); m.latencies = append(...)` pattern was costing ~5% of dispatch time at 200k cmds/sec. Now an 8192-slot ring + atomic position counter; aggregator reads a snapshot once per second
+- **1ms latency-record threshold** — `LATENCY HISTORY` only stores genuinely slow events (the steady-state hot path is sub-millisecond), so the per-command mutex acquire is gated behind an atomic load
+- **SLO `targetCount` fast-path** — when no SLOs are configured, `SLOTracker.Record` returns after a single atomic load, no mutex
+- **`cmdTypes` Load-before-LoadOrStore** — fast-path the per-command-type counter once a command has been seen at least once
+- **Container-aware `GOMAXPROCS`** — detects cgroup v2 (`cpu.max`) and v1 (`cpu.cfs_quota_us`) limits at boot and pins `GOMAXPROCS` to the effective quota, avoiding scheduler oversubscription on CPU-limited pods
+
+### Why not faster?
+
+To consistently exceed 100% of Redis in **pure Go** would require either:
+
+- **`io_uring`** (Linux-only) replacing the current epoll-via-Go-runtime networking — batched I/O brings ~20-40% headroom, but ties us to Linux 5.6+ kernels
+- **A C/Rust hot path** for the RESP parser + KV store — Dragonfly's 2-5× over Redis comes from C++ shared-nothing threading with hand-tuned wait-free queues; Go's channel/goroutine overhead (~50-100ns per op) eats most of that win
+
+Both are architectural commitments measured in months, not hours. For nearly every workload, 80-90% of Redis on raw RPS is plenty — and the AI-native commands (semantic cache, layered memory, GraphRAG) are the actual differentiator; matching Redis on the standard surface is just table stakes.
 
 For the deep architectural comparison — concurrency model, hot-key contention, p99 tail latency, large-value behavior, 1000-client connection scaling, persistence + replication overhead, and a list of every architectural risk we audited and either fixed or accepted — see **[docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md)**.
 

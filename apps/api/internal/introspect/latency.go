@@ -2,6 +2,7 @@ package introspect
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -9,10 +10,21 @@ import (
 // We bucket events by name (e.g. "command", "fork", "rdb-fsync") and
 // keep a per-name ring buffer so high-volume events don't crowd out
 // rare-but-important ones.
+//
+// Hot-path note: Record is called from the dispatch loop on every
+// command. Redis only logs above a `slowlog-log-slower-than` threshold;
+// we mirror that with `thresholdNanos` — events below it short-circuit
+// before touching the mutex. Set via SetThreshold; defaults to 0 ns
+// which means "record everything" for compatibility, but the resp
+// server bumps it to 1ms after start so the steady-state hot path
+// doesn't pay the lock cost on every fast command.
 type LatencyMonitor struct {
 	maxLen int
 	mu     sync.Mutex
 	events map[string]*latencyRing // name -> ring
+
+	// thresholdNanos is read in Record without the mutex.
+	thresholdNanos atomic.Int64
 }
 
 // LatencyEvent is a single latency observation.
@@ -36,8 +48,25 @@ func NewLatencyMonitor(maxLen int) *LatencyMonitor {
 	return &LatencyMonitor{maxLen: maxLen, events: map[string]*latencyRing{}}
 }
 
-// Record adds an observation. Cheap (one map lookup + slice append).
+// SetThreshold sets the minimum latency that Record will store. Events
+// shorter than this are dropped at the front gate (no map lookup, no
+// mutex). Pass 0 to disable and record every event.
+func (l *LatencyMonitor) SetThreshold(d time.Duration) {
+	l.thresholdNanos.Store(int64(d))
+}
+
+// Threshold returns the configured cutoff in nanoseconds (0 = none).
+func (l *LatencyMonitor) Threshold() time.Duration {
+	return time.Duration(l.thresholdNanos.Load())
+}
+
+// Record adds an observation. Cheap (one map lookup + slice append),
+// and free for sub-threshold events — the atomic load is one
+// instruction on amd64/arm64.
 func (l *LatencyMonitor) Record(name string, d time.Duration) {
+	if t := l.thresholdNanos.Load(); t > 0 && int64(d) < t {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r, ok := l.events[name]

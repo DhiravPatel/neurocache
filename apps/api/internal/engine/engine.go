@@ -188,7 +188,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		PubSub:    pubsub.New(64),
 		ACL:       aclMgr,
 		SlowLog:   introspect.NewSlowLog(cfg.SlowLogMaxLen, time.Duration(cfg.SlowLogThreshold)*time.Microsecond),
-		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
+		Latency:   newLatencyMonitorWithDefault(cfg.LatencyMaxLen),
 		Clients:   introspect.NewClientRegistry(),
 		Monitor:   introspect.NewMonitorBroker(),
 		Tracking:  introspect.NewTrackingTable(),
@@ -1073,4 +1073,17 @@ func (e *Engine) Info() Info {
 	i.Runtime.GoVersion = runtime.Version()
 	i.Runtime.HeapMB = m.HeapAlloc / (1024 * 1024)
 	return i
+}
+
+// newLatencyMonitorWithDefault constructs a LatencyMonitor with a 1ms
+// default cutoff. Sub-millisecond commands (the vast majority — even
+// SET/GET take ~5µs on M-series Apple silicon) skip the per-command
+// mutex lock, while genuine outliers still feed LATENCY HISTORY.
+// Operators can clear via `LATENCY RESET` + their own threshold; the
+// CONFIG SET surface for `slowlog-log-slower-than` is wired separately
+// and uses SetThreshold directly.
+func newLatencyMonitorWithDefault(maxLen int) *introspect.LatencyMonitor {
+	lm := introspect.NewLatencyMonitor(maxLen)
+	lm.SetThreshold(time.Millisecond)
+	return lm
 }

@@ -51,6 +51,24 @@ type User struct {
 	CreatedAt time.Time
 }
 
+// AllowsEverything reports whether this user has unconstrained access:
+// every command, every key, every channel, no deny entries. The default
+// user (un-customized Redis ACL) hits this — and it's the common case
+// for development + simple production setups. The dispatcher uses this
+// to skip the entire Allowed() path on the hot road, eliminating
+// CategoriesFor + map lookups + slice scans + audit-log mu.RLock.
+//
+// Recomputed callers should hold the manager lock for read; we expose
+// a snapshot rather than a cached bool because users mutate from
+// ACL SETUSER and we'd have to invalidate the cache on every edit.
+func (u *User) AllowsEverything() bool {
+	if u == nil || !u.Enabled {
+		return false
+	}
+	return u.AllCommands && u.AllKeys && u.AllChannels &&
+		len(u.DeniedCmds) == 0 && len(u.DeniedCats) == 0
+}
+
 // AuditEntry is one rejected-auth or rejected-permission event for ACL LOG.
 type AuditEntry struct {
 	Count       int

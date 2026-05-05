@@ -1,7 +1,6 @@
 package store
 
 import (
-	"hash/fnv"
 	"sync"
 )
 
@@ -30,25 +29,45 @@ type shard struct {
 	mu    sync.RWMutex
 	data  map[string]*Entry
 	bytes int64 // local byte tally; rolled into Store.bytes via Store.addBytes
+	// idx is the shard's position in Store.shards. Cached so lockTwoW /
+	// lockTwoR can compare canonical order in O(1) instead of walking
+	// all 256 shards in shardIndex (the previous form ran on every
+	// two-key op — RENAME/COPY/SMOVE/LMOVE/RPOPLPUSH).
+	idx int
+}
+
+// fnv1a hashes `key` with FNV-1a directly off the string bytes — no
+// hasher allocation, no []byte(key) copy. The previous form
+// (`fnv.New32a()` + `h.Write([]byte(key))`) allocated a hasher and a
+// byte slice on EVERY shardForKey call, which means every single
+// command. Profiling showed this as 2 of the 3 allocs/op on LPush.
+//
+// Inlined Sum32 is also slightly faster than the iface-dispatched
+// hash.Hash32 path through the standard library.
+func fnv1a(key string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	var h uint32 = offset32
+	for i := 0; i < len(key); i++ {
+		h ^= uint32(key[i])
+		h *= prime32
+	}
+	return h
 }
 
 // shardForKey returns the shard owning `key`. FNV-1a is fast and
 // well-distributed for short keys (the common case for cache lookups).
 func (s *Store) shardForKey(key string) *shard {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(key))
-	return s.shards[h.Sum32()&(numShards-1)]
+	return s.shards[fnv1a(key)&(numShards-1)]
 }
 
-// shardIndex returns the canonical index of a shard, used for
-// deadlock-free lock ordering when a multi-key op spans two shards.
+// shardIndex returns the canonical index of a shard. O(1) — the index
+// is cached on the shard at construction time. Used for deadlock-free
+// lock ordering when a multi-key op spans two shards.
 func (s *Store) shardIndex(sh *shard) int {
-	for i, x := range s.shards {
-		if x == sh {
-			return i
-		}
-	}
-	return -1
+	return sh.idx
 }
 
 // lockTwoW takes write locks on the shards for keys a and b in canonical

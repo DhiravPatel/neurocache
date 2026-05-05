@@ -99,7 +99,7 @@ type Store struct {
 func New() *Store {
 	s := &Store{}
 	for i := 0; i < numShards; i++ {
-		s.shards[i] = &shard{data: make(map[string]*Entry)}
+		s.shards[i] = &shard{data: make(map[string]*Entry), idx: i}
 	}
 	go s.ttlLoop()
 	return s
@@ -161,8 +161,22 @@ func (s *Store) Type(key string) ValueType {
 
 // Exists counts how many of the given keys exist (duplicates count).
 // Buckets keys by shard so we take one lock per shard, not one per key.
+//
+// Single-key fast path skips the map allocation in bucketKeysByShard —
+// EXISTS is one of the highest-frequency commands (ioredis emits it
+// before every DEL/EXPIRE on a missing-key check), so eliminating the
+// map[*shard][]string allocation matters.
 func (s *Store) Exists(keys ...string) int {
 	now := time.Now()
+	if len(keys) == 1 {
+		sh := s.shardForKey(keys[0])
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		if e, ok := sh.data[keys[0]]; ok && !e.expired(now) {
+			return 1
+		}
+		return 0
+	}
 	n := 0
 	buckets := s.bucketKeysByShard(keys)
 	for sh, ks := range buckets {
@@ -178,7 +192,26 @@ func (s *Store) Exists(keys ...string) int {
 }
 
 // Del removes keys; returns how many were actually deleted.
+//
+// Single-key fast path avoids the bucketKeysByShard map alloc and the
+// `removed []string` slice growth — DEL key is the second-most-common
+// write next to SET, so the inlined path is worth it.
 func (s *Store) Del(keys ...string) int {
+	if len(keys) == 1 {
+		k := keys[0]
+		sh := s.shardForKey(k)
+		sh.mu.Lock()
+		e, ok := sh.data[k]
+		if !ok {
+			sh.mu.Unlock()
+			return 0
+		}
+		s.bytes.Add(-int64(e.Bytes))
+		delete(sh.data, k)
+		sh.mu.Unlock()
+		s.fire("del", k)
+		return 1
+	}
 	var removed []string
 	buckets := s.bucketKeysByShard(keys)
 	for sh, ks := range buckets {
