@@ -132,6 +132,17 @@ type Engine struct {
 	Docs    *aiops.Docs
 	Observe *aiops.Observe
 
+	// Phase 13 — resilience & coordination primitives. Three families
+	// genuinely beyond Redis: distributed circuit breakers (sliding-
+	// window failure-rate trip + half-open probing), long-running
+	// workflow orchestration with compensation (saga pattern), and
+	// conflict-free replicated data types (G/PN-counters, OR-Set,
+	// LWW-Register). All persist via AOF + replication and are gated
+	// under the @ai ACL category.
+	Circuits *aiops.Circuits
+	Sagas    *aiops.Sagas
+	CRDTs    *aiops.CRDTRegistry
+
 	// HotKeys is the runtime top-K access tracker driven by the
 	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
 	// scan + LFU-only OBJECT FREQ approach with a HeavyKeeper-backed
@@ -238,6 +249,11 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Retrieval = retrieval.NewManager(cfg.EmbeddingDim)
 	e.registerMCPCatalog()
 
+	// Phase 13 — instantiate the resilience & coordination primitives.
+	// These are pure in-memory state managers; no goroutines to start.
+	e.Circuits = aiops.NewCircuits()
+	e.Sagas = aiops.NewSagas()
+	e.CRDTs = aiops.NewCRDTRegistry()
 	// Phase 12 — instantiate the uniqueness primitives. Wire CHURN to
 	// the engine's keyspace deleter so CHURN.INVALIDATE actually
 	// drops keys; default the Audit retention to 1M events.

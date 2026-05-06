@@ -123,6 +123,21 @@ var writeCommands = map[string]bool{
 	// removes expired entries; ADD/DEL are obvious writes.
 	"MEMORY.ADD": true, "MEMORY.DEL": true,
 	"MEMORY.CONSOLIDATE": true, "MEMORY.DECAY": true,
+
+	// Phase 13 — resilience & coordination primitives. CIRCUIT.CHECK
+	// is a write because it can transition the breaker into HALFOPEN
+	// and reserve a probe slot. SAGA.FAIL is a write because it
+	// transitions the saga state machine even though it returns the
+	// compensations — the caller still has to dispatch them. Pure
+	// reads (CIRCUIT.STATE, SAGA.STATUS, CRDT.GVALUE/PNVALUE/etc.)
+	// are not in the writeset.
+	"CIRCUIT.CONFIG": true, "CIRCUIT.RECORD": true, "CIRCUIT.CHECK": true,
+	"CIRCUIT.TRIP": true, "CIRCUIT.RESET": true, "CIRCUIT.FORGET": true,
+	"SAGA.START": true, "SAGA.STEP": true, "SAGA.COMPLETE": true,
+	"SAGA.FAIL": true, "SAGA.FORGET": true,
+	"CRDT.GINCR": true, "CRDT.PNINCR": true,
+	"CRDT.SADD": true, "CRDT.SREM": true,
+	"CRDT.LWWSET": true, "CRDT.MERGE": true, "CRDT.FORGET": true,
 	// Phase 12 — uniqueness primitives. Every command that mutates
 	// in-memory state. WORKER.DEQUEUE is included because it moves a
 	// job from the heap into the reserved set; replaying it on restart

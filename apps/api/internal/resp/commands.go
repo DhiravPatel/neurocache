@@ -393,6 +393,20 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "MEMORY.ADD", "MEMORY.QUERY", "MEMORY.LIST", "MEMORY.DEL",
 		"MEMORY.CONSOLIDATE", "MEMORY.DECAY", "MEMORY.STATS":
 		c.memoryFamilyCmd(strings.TrimPrefix(cmd, "MEMORY."), args)
+
+	// ─── Phase 13 — resilience & coordination primitives (CIRCUIT /
+	// SAGA / CRDT) ─────────────────────────────────────────────────
+	case "CIRCUIT.CONFIG", "CIRCUIT.RECORD", "CIRCUIT.CHECK", "CIRCUIT.STATE",
+		"CIRCUIT.TRIP", "CIRCUIT.RESET", "CIRCUIT.FORGET", "CIRCUIT.LIST", "CIRCUIT.STATS":
+		c.circuitCmd(strings.TrimPrefix(cmd, "CIRCUIT."), args)
+	case "SAGA.START", "SAGA.STEP", "SAGA.COMPLETE", "SAGA.FAIL", "SAGA.STATUS",
+		"SAGA.LIST", "SAGA.FORGET", "SAGA.STATS":
+		c.sagaCmd(strings.TrimPrefix(cmd, "SAGA."), args)
+	case "CRDT.GINCR", "CRDT.GVALUE", "CRDT.PNINCR", "CRDT.PNVALUE",
+		"CRDT.SADD", "CRDT.SREM", "CRDT.SMEMBERS", "CRDT.SISMEMBER",
+		"CRDT.LWWSET", "CRDT.LWWGET", "CRDT.MERGE", "CRDT.STATE",
+		"CRDT.TYPE", "CRDT.LIST", "CRDT.FORGET", "CRDT.STATS":
+		c.crdtCmd(strings.TrimPrefix(cmd, "CRDT."), args)
 	// ─── Phase 12 — uniqueness primitives (CHURN/WORKER/FLAG/AUDIT/
 	// TRACE/DOC/OBSERVE) ───────────────────────────────────────────
 	case "CHURN.TAG", "CHURN.UNTAG", "CHURN.INVALIDATE", "CHURN.KEYS", "CHURN.TAGS_OF", "CHURN.TAGS", "CHURN.STATS":
