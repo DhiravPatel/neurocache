@@ -39,7 +39,11 @@ export default function DocsLayout() {
   return (
     <div className="min-h-full">
       <SiteHeader />
-      <div className="mx-auto grid max-w-6xl grid-cols-[200px_1fr] gap-8 px-6 py-8">
+      {/* Responsive container: standard reading width up to 1280px,
+          then progressively expands so wide-screen users get the full
+          horizontal real estate the Commands reference (with its
+          right-rail TOC + dense card grid) actually wants. */}
+      <div className="mx-auto grid max-w-6xl grid-cols-[200px_1fr] gap-8 px-6 py-8 xl:max-w-7xl 2xl:max-w-[1600px] 2xl:gap-12">
         <aside className="sticky top-16 h-[calc(100vh-5rem)] self-start overflow-y-auto">
           {docsNav.map((section) => (
             <div key={section.title} className="mb-5">
