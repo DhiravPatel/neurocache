@@ -384,6 +384,15 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "MCP.TOOLS", "MCP.RESOURCES", "MCP.CALL", "MCP.READ", "MCP.RPC":
 		c.mcpCmd(strings.TrimPrefix(cmd, "MCP."), args)
 
+	// ─── hybrid retrieval (BM25 + vector + RRF) and GraphRAG ───────
+	case "RETRIEVE.CREATE", "RETRIEVE.DROP", "RETRIEVE.LIST", "RETRIEVE.STATS",
+		"RETRIEVE.ADD", "RETRIEVE.DEL", "RETRIEVE.GET", "RETRIEVE.QUERY":
+		c.retrieveCmd(strings.TrimPrefix(cmd, "RETRIEVE."), args)
+	case "RAG.QUERY":
+		c.ragQueryCmd(args)
+	case "MEMORY.ADD", "MEMORY.QUERY", "MEMORY.LIST", "MEMORY.DEL",
+		"MEMORY.CONSOLIDATE", "MEMORY.DECAY", "MEMORY.STATS":
+		c.memoryFamilyCmd(strings.TrimPrefix(cmd, "MEMORY."), args)
 	// ─── Phase 12 — uniqueness primitives (CHURN/WORKER/FLAG/AUDIT/
 	// TRACE/DOC/OBSERVE) ───────────────────────────────────────────
 	case "CHURN.TAG", "CHURN.UNTAG", "CHURN.INVALIDATE", "CHURN.KEYS", "CHURN.TAGS_OF", "CHURN.TAGS", "CHURN.STATS":

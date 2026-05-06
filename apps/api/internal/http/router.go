@@ -168,6 +168,23 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/infer/stats", h.inferStats)
 	mux.HandleFunc("POST /api/infer/default", h.inferDefault)
 
+	// Hybrid retrieval (BM25 + vector + RRF) and GraphRAG
+	mux.HandleFunc("POST /api/retrieve", h.retrieveCreate)
+	mux.HandleFunc("GET /api/retrieve", h.retrieveList)
+	mux.HandleFunc("DELETE /api/retrieve/{name}", h.retrieveDrop)
+	mux.HandleFunc("GET /api/retrieve/{name}/stats", h.retrieveStats)
+	mux.HandleFunc("POST /api/retrieve/{name}/docs", h.retrieveAdd)
+	mux.HandleFunc("DELETE /api/retrieve/{name}/docs/{id}", h.retrieveDel)
+	mux.HandleFunc("GET /api/retrieve/{name}/query", h.retrieveQuery)
+	mux.HandleFunc("GET /api/retrieve/{name}/rag", h.ragQuery)
+
+	// Layered memory (episodic / semantic / procedural)
+	mux.HandleFunc("POST /api/memory/{user}/layer", h.memoryLayerAdd)
+	mux.HandleFunc("GET /api/memory/{user}/query", h.memoryLayerQuery)
+	mux.HandleFunc("GET /api/memory/{user}/stats", h.memoryLayerStats)
+	mux.HandleFunc("POST /api/memory/{user}/decay", h.memoryDecay)
+	mux.HandleFunc("POST /api/memory/{user}/consolidate", h.memoryConsolidate)
+
 	// AI-ops: MCP server
 	mux.HandleFunc("GET /api/mcp/tools", h.mcpTools)
 	mux.HandleFunc("GET /api/mcp/resources", h.mcpResources)

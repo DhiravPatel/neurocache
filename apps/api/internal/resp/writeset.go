@@ -113,6 +113,16 @@ var writeCommands = map[string]bool{
 	"POLICY.SET": true, "POLICY.PURGE": true,
 	"INFER.FORGET": true, "INFER.PURGE": true, "INFER.DEFAULT": true,
 
+	// Hybrid retrieval (BM25 + vector + RRF). Index lifecycle and
+	// document mutations need to survive restart; RETRIEVE.QUERY and
+	// RAG.QUERY are pure reads. RETRIEVE.STATS is observability.
+	"RETRIEVE.CREATE": true, "RETRIEVE.DROP": true,
+	"RETRIEVE.ADD": true, "RETRIEVE.DEL": true,
+
+	// Memory layer family — CONSOLIDATE writes new layer rows; DECAY
+	// removes expired entries; ADD/DEL are obvious writes.
+	"MEMORY.ADD": true, "MEMORY.DEL": true,
+	"MEMORY.CONSOLIDATE": true, "MEMORY.DECAY": true,
 	// Phase 12 — uniqueness primitives. Every command that mutates
 	// in-memory state. WORKER.DEQUEUE is included because it moves a
 	// job from the heap into the reserved set; replaying it on restart

@@ -35,6 +35,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/primitives"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/retrieval"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/sentinel"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/semcache"
@@ -115,6 +116,9 @@ type Engine struct {
 	Inference   *aiops.Inference
 	MCP         *aiops.MCP
 
+	// Retrieval is the per-engine registry of hybrid (BM25 + vector +
+	// RRF) indexes. Backs RETRIEVE.* and RAG.QUERY (GraphRAG).
+	Retrieval *retrieval.Manager
 	// Phase 12 — uniqueness primitives. Things Redis genuinely doesn't
 	// have at the cache layer: tagged invalidation, production job
 	// queues, feature flags, structured audit trails, in-memory
@@ -231,6 +235,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Policies = aiops.NewPolicies(nil)
 	e.Inference = aiops.NewInference()
 	e.MCP = aiops.NewMCP()
+	e.Retrieval = retrieval.NewManager(cfg.EmbeddingDim)
+	e.registerMCPCatalog()
 
 	// Phase 12 — instantiate the uniqueness primitives. Wire CHURN to
 	// the engine's keyspace deleter so CHURN.INVALIDATE actually

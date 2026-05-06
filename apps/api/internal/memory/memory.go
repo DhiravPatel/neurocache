@@ -11,12 +11,61 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/vector"
 )
 
+// Layer enumerates the memory tier this entry belongs to. Inspired by
+// the cognitive-science split that LLM-agent designs have converged
+// on:
+//
+//	episodic  : raw "what happened" events. Cheap to write, decays.
+//	semantic  : distilled facts ("user prefers dark mode"). Long-lived,
+//	            usually written by MEMORY.CONSOLIDATE.
+//	procedural: how-to / habits / preferences-as-rules. Rarely changes.
+//
+// Layer affects retention, ranking, and which queries see the entry
+// (e.g. consolidation only reads episodic, never semantic).
+type Layer string
+
+const (
+	LayerEpisodic   Layer = "episodic"
+	LayerSemantic   Layer = "semantic"
+	LayerProcedural Layer = "procedural"
+)
+
+// IsValid reports whether l is one of the recognized layers. Unknown
+// strings are rejected at write time so MEMORY.QUERY by layer always
+// returns the expected partition.
+func (l Layer) IsValid() bool {
+	switch l {
+	case LayerEpisodic, LayerSemantic, LayerProcedural:
+		return true
+	}
+	return false
+}
+
 type Entry struct {
 	ID        string            `json:"id"`
 	UserID    string            `json:"user_id"`
 	Text      string            `json:"text"`
 	CreatedAt time.Time         `json:"created_at"`
 	Meta      map[string]string `json:"meta,omitempty"`
+
+	// Layer defaults to "episodic" when callers use the legacy Add
+	// path; the layered API sets it explicitly.
+	Layer Layer `json:"layer,omitempty"`
+
+	// Importance is a 0..1 hint from the writer ("this matters", "this
+	// is incidental"). MEMORY.DECAY weights age by (1-Importance) so
+	// important memories stick around longer at the same age.
+	Importance float64 `json:"importance,omitempty"`
+
+	// LastAccessedAt + AccessCount drive recency-weighted ranking and
+	// adaptive decay (frequently-recalled memories age slower). Updated
+	// on every successful Query hit.
+	LastAccessedAt time.Time `json:"last_accessed_at,omitempty"`
+	AccessCount    int       `json:"access_count,omitempty"`
+
+	// SourceIDs lists episodic entries this row consolidates, set by
+	// MEMORY.CONSOLIDATE. Empty for primary-write entries.
+	SourceIDs []string `json:"source_ids,omitempty"`
 }
 
 type Store struct {
