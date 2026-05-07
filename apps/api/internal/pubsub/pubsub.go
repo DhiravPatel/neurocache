@@ -6,6 +6,7 @@ package pubsub
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Message is what PUBLISH delivers to each subscriber. Pattern is empty for
@@ -38,6 +39,15 @@ type Broker struct {
 	subscribers   map[string]map[uint64]*Subscription // channel -> subs
 	psubscribers  map[string]map[uint64]*Subscription // pattern -> subs
 	buffer        int
+
+	// subCount is an atomic mirror of total subscriptions (exact +
+	// pattern). The keyspace-notification path on every store write
+	// reads this WITHOUT taking b.mu — when nobody's subscribed (the
+	// steady state for any cache without a CONFIG SET notify-keyspace-
+	// events 'AKE'), the entire publish path short-circuits before
+	// any string concat or map lookup. Maintained under b.mu when
+	// adding/removing subs; read lock-free everywhere else.
+	subCount atomic.Int64
 }
 
 // New creates a broker with the given per-subscriber buffer size. A
@@ -66,12 +76,17 @@ func (b *Broker) Subscribe(channels ...string) *Subscription {
 		ch: make(chan Message, b.buffer),
 	}
 	sub.closeFn = func() { b.unsubscribe(sub, channels, false) }
+	added := 0
 	for _, ch := range channels {
 		if _, ok := b.subscribers[ch]; !ok {
 			b.subscribers[ch] = map[uint64]*Subscription{}
 		}
+		if _, dup := b.subscribers[ch][sub.ID]; !dup {
+			added++
+		}
 		b.subscribers[ch][sub.ID] = sub
 	}
+	b.subCount.Add(int64(added))
 	return sub
 }
 
@@ -85,12 +100,17 @@ func (b *Broker) PSubscribe(patterns ...string) *Subscription {
 		ch: make(chan Message, b.buffer),
 	}
 	sub.closeFn = func() { b.unsubscribe(sub, patterns, true) }
+	added := 0
 	for _, p := range patterns {
 		if _, ok := b.psubscribers[p]; !ok {
 			b.psubscribers[p] = map[uint64]*Subscription{}
 		}
+		if _, dup := b.psubscribers[p][sub.ID]; !dup {
+			added++
+		}
 		b.psubscribers[p][sub.ID] = sub
 	}
+	b.subCount.Add(int64(added))
 	return sub
 }
 
@@ -101,13 +121,20 @@ func (b *Broker) unsubscribe(sub *Subscription, names []string, pattern bool) {
 	if pattern {
 		m = b.psubscribers
 	}
+	removed := 0
 	for _, n := range names {
 		if set, ok := m[n]; ok {
+			if _, was := set[sub.ID]; was {
+				removed++
+			}
 			delete(set, sub.ID)
 			if len(set) == 0 {
 				delete(m, n)
 			}
 		}
+	}
+	if removed > 0 {
+		b.subCount.Add(int64(-removed))
 	}
 	// closing the channel is idempotent-safe behind this mutex
 	select {
@@ -116,6 +143,14 @@ func (b *Broker) unsubscribe(sub *Subscription, names []string, pattern bool) {
 	}
 	close(sub.ch)
 }
+
+// HasSubscribers returns true if at least one (P)SUBSCRIBE is active.
+// Hot-path safe — single atomic load, no mutex. Used by the keyspace-
+// notification path on every store write to skip the entire publish
+// pipeline (string concat + map lookup + RLock) when nobody's listening,
+// which is the steady state for any cache without notify-keyspace-events
+// configured.
+func (b *Broker) HasSubscribers() bool { return b.subCount.Load() > 0 }
 
 // Publish delivers a message to all matching subscribers and returns the
 // number of receivers reached (both exact and pattern).
