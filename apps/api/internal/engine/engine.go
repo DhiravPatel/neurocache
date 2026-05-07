@@ -119,6 +119,18 @@ type Engine struct {
 	// Retrieval is the per-engine registry of hybrid (BM25 + vector +
 	// RRF) indexes. Backs RETRIEVE.* and RAG.QUERY (GraphRAG).
 	Retrieval *retrieval.Manager
+	// Phase 12 — uniqueness primitives. Things Redis genuinely doesn't
+	// have at the cache layer: tagged invalidation, production job
+	// queues, feature flags, structured audit trails, in-memory
+	// distributed tracing, JSON-Patch document sync, and a native
+	// Prometheus exporter.
+	Churn   *aiops.ChurnTags
+	Workers *aiops.Workers
+	Flags   *aiops.Flags
+	Audit   *aiops.Audit
+	Tracer  *aiops.Tracer
+	Docs    *aiops.Docs
+	Observe *aiops.Observe
 
 	// Phase 13 — resilience & coordination primitives. Three families
 	// genuinely beyond Redis: distributed circuit breakers (sliding-
@@ -246,6 +258,25 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Circuits = aiops.NewCircuits()
 	e.Sagas = aiops.NewSagas()
 	e.CRDTs = aiops.NewCRDTRegistry()
+	// Phase 12 — instantiate the uniqueness primitives. Wire CHURN to
+	// the engine's keyspace deleter so CHURN.INVALIDATE actually
+	// drops keys; default the Audit retention to 1M events.
+	e.Churn = aiops.NewChurnTags()
+	e.Churn.SetInvalidator(func(keys []string) int {
+		return e.KV.Del(keys...)
+	})
+	e.Workers = aiops.NewWorkers()
+	e.Flags = aiops.NewFlags()
+	e.Audit = aiops.NewAudit()
+	e.Tracer = aiops.NewTracer()
+	e.Docs = aiops.NewDocs()
+	e.Observe = aiops.NewObserve()
+	// Register baseline OBSERVE counters/gauges that map to engine
+	// state. Values are pulled at scrape time so we don't pay for
+	// instrumentation when nobody's scraping.
+	e.Observe.RegisterCounter("neurocache_commands_total", "Total RESP commands dispatched.", nil)
+	e.Observe.RegisterGauge("neurocache_keyspace_size", "Number of live keys.", nil)
+	e.Observe.RegisterGauge("neurocache_bytes_used", "Approximate bytes used by the keyspace.", nil)
 	e.HotKeys = introspect.NewHotKeys(introspect.HotKeysOptions{
 		K:           cfg.HotKeysK,
 		SampleEvery: cfg.HotKeysSample,
@@ -366,6 +397,11 @@ func (e *Engine) Start() {
 			return e.replayRunner(cmd, args)
 		})
 		e.Scheduler.Start()
+	}
+	// Phase 12 — start the workers sweeper (visibility-timeout +
+	// delayed-retry tick).
+	if e.Workers != nil {
+		e.Workers.Start()
 	}
 	// SLO breach notifier — fan out to a well-known pub/sub channel
 	// so dashboards / alerting can pick it up. Cheap when no
@@ -564,6 +600,9 @@ func (e *Engine) Stop() {
 	e.Clock.Stop()
 	if e.Scheduler != nil {
 		e.Scheduler.Stop()
+	}
+	if e.Workers != nil {
+		e.Workers.Stop()
 	}
 	if e.AOF != nil {
 		_ = e.AOF.Close()
