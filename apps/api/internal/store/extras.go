@@ -137,48 +137,62 @@ func (s *Store) LPos(key, value string, rank, count, maxlen int) ([]int, bool, e
 	if rank > 0 {
 		idx := 0
 		hits := 0
-		for el := e.List.Front(); el != nil; el = el.Next() {
+		stop := false
+		e.List.ForEach(func(v string) bool {
 			if maxlen > 0 && scanned >= maxlen {
-				break
+				return false
 			}
 			scanned++
-			if el.Value.(string) == value {
+			if v == value {
 				hits++
 				if hits >= rank {
 					out = append(out, idx)
 					if count == 0 {
-						return out, true, nil
+						stop = true
+						return false
 					}
 					if count > 0 && len(out) >= count {
-						return out, true, nil
+						stop = true
+						return false
 					}
 				}
 			}
 			idx++
+			return true
+		})
+		if stop {
+			return out, true, nil
 		}
 	} else {
 		// scan from tail; rank is negative = nth match from the end
 		want := -rank
 		hits := 0
 		idx := e.List.Len() - 1
-		for el := e.List.Back(); el != nil; el = el.Prev() {
+		stop := false
+		e.List.ForEachReverse(func(v string) bool {
 			if maxlen > 0 && scanned >= maxlen {
-				break
+				return false
 			}
 			scanned++
-			if el.Value.(string) == value {
+			if v == value {
 				hits++
 				if hits >= want {
 					out = append(out, idx)
 					if count == 0 {
-						return out, true, nil
+						stop = true
+						return false
 					}
 					if count > 0 && len(out) >= count {
-						return out, true, nil
+						stop = true
+						return false
 					}
 				}
 			}
 			idx--
+			return true
+		})
+		if stop {
+			return out, true, nil
 		}
 	}
 	return out, len(out) > 0, nil

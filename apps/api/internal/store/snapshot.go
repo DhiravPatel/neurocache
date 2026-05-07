@@ -1,8 +1,9 @@
 package store
 
 import (
-	"container/list"
 	"time"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/qlist"
 )
 
 // ExportEntry is a type-agnostic wire record used by snapshot/restore
@@ -85,9 +86,10 @@ func (s *Store) Export() []ExportEntry {
 			case TypeList:
 				if e.List != nil {
 					items := make([]string, 0, e.List.Len())
-					for el := e.List.Front(); el != nil; el = el.Next() {
-						items = append(items, el.Value.(string))
-					}
+					e.List.ForEach(func(v string) bool {
+						items = append(items, v)
+						return true
+					})
 					ent.List = items
 				}
 			case TypeHash:
@@ -236,7 +238,7 @@ func (s *Store) Restore(entries []ExportEntry) {
 func (s *Store) getOrCreateInline(e *Entry) (*Entry, error) {
 	switch e.Type {
 	case TypeList:
-		e.List = list.New()
+		e.List = qlist.New()
 	case TypeHash:
 		e.Hash = map[string]string{}
 	case TypeSet:

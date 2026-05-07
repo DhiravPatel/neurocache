@@ -24,6 +24,45 @@ func bytesToStringNoCopy(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
+// asciiUpper is a zero-alloc ASCII-only fast path for command names.
+// Real-world traffic sends commands in lowercase ("set", "get") or
+// uppercase ("SET", "GET"); we walk the string once, and only allocate
+// when at least one lowercase byte is present. The previous form
+// (`strings.ToUpper(parts[0])`) always allocated a fresh string —
+// expensive on a metric called per command per dispatch + record path.
+//
+// Falls through to strings.ToUpper for non-ASCII inputs (rare in
+// command names but possible in unit tests).
+func asciiUpper(s string) string {
+	hasLower := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' {
+			hasLower = true
+			break
+		}
+		if c >= 0x80 {
+			return strings.ToUpper(s)
+		}
+	}
+	if !hasLower {
+		// Already upper (or has no letters) — return as-is, no alloc.
+		return s
+	}
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			return strings.ToUpper(s)
+		}
+		if c >= 'a' && c <= 'z' {
+			c -= 32
+		}
+		b[i] = c
+	}
+	return bytesToStringNoCopy(b)
+}
+
 // ─── reader ─────────────────────────────────────────────────────────────
 
 // readArray reads a single RESP array of bulk strings. It also tolerates
@@ -237,12 +276,20 @@ func writeValue(w *bufio.Writer, v any) {
 	case []string:
 		writeArray(w, x)
 	case []any:
-		_, _ = w.WriteString("*" + strconv.Itoa(len(x)) + "\r\n")
+		// Stream the array header byte-by-byte instead of allocating
+		// "*"+itoa+"\r\n" (3 allocs per call). Same shape as writeBulk.
+		_ = w.WriteByte('*')
+		var buf [20]byte
+		_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(x)), 10))
+		_, _ = w.WriteString(crlf)
 		for _, it := range x {
 			writeValue(w, it)
 		}
 	case [][]any:
-		_, _ = w.WriteString("*" + strconv.Itoa(len(x)) + "\r\n")
+		_ = w.WriteByte('*')
+		var buf [20]byte
+		_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(x)), 10))
+		_, _ = w.WriteString(crlf)
 		for _, it := range x {
 			writeValue(w, it)
 		}

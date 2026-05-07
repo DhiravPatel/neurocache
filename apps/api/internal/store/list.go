@@ -1,8 +1,9 @@
 package store
 
 import (
-	"container/list"
 	"errors"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/qlist"
 )
 
 // LPush prepends one or more values to a list. Creates the list if absent.
@@ -91,12 +92,10 @@ func (s *Store) LPop(key string) (string, bool, error) {
 	if err != nil || !ok {
 		return "", false, err
 	}
-	front := e.List.Front()
-	if front == nil {
+	v, popped := e.List.PopFront()
+	if !popped {
 		return "", false, nil
 	}
-	v := front.Value.(string)
-	e.List.Remove(front)
 	s.addBytes(e, -len(v))
 	s.removeIfEmpty(sh, e)
 	return v, true, nil
@@ -111,12 +110,10 @@ func (s *Store) RPop(key string) (string, bool, error) {
 	if err != nil || !ok {
 		return "", false, err
 	}
-	back := e.List.Back()
-	if back == nil {
+	v, popped := e.List.PopBack()
+	if !popped {
 		return "", false, nil
 	}
-	v := back.Value.(string)
-	e.List.Remove(back)
 	s.addBytes(e, -len(v))
 	s.removeIfEmpty(sh, e)
 	return v, true, nil
@@ -150,11 +147,11 @@ func (s *Store) LIndex(key string, index int) (string, bool, error) {
 	if index < 0 || index >= n {
 		return "", false, nil
 	}
-	el := e.List.Front()
-	for i := 0; i < index; i++ {
-		el = el.Next()
+	v, ok := e.List.Index(index)
+	if !ok {
+		return "", false, nil
 	}
-	return el.Value.(string), true, nil
+	return v, true, nil
 }
 
 // LRange returns elements in [start,stop] with negative indices supported.
@@ -171,16 +168,7 @@ func (s *Store) LRange(key string, start, stop int) ([]string, error) {
 	if empty {
 		return []string{}, nil
 	}
-	out := make([]string, 0, b-a+1)
-	el := e.List.Front()
-	for i := 0; i < a; i++ {
-		el = el.Next()
-	}
-	for i := a; i <= b && el != nil; i++ {
-		out = append(out, el.Value.(string))
-		el = el.Next()
-	}
-	return out, nil
+	return e.List.Range(a, b), nil
 }
 
 // LSet overwrites the element at index. Errors when out of range.
@@ -202,12 +190,10 @@ func (s *Store) LSet(key string, index int, value string) error {
 	if index < 0 || index >= n {
 		return errors.New("ERR index out of range")
 	}
-	el := e.List.Front()
-	for i := 0; i < index; i++ {
-		el = el.Next()
+	old, ok := e.List.Set(index, value)
+	if !ok {
+		return errors.New("ERR index out of range")
 	}
-	old := el.Value.(string)
-	el.Value = value
 	s.addBytes(e, len(value)-len(old))
 	return nil
 }
@@ -222,41 +208,8 @@ func (s *Store) LRem(key string, count int, value string) (int, error) {
 	if err != nil || !ok {
 		return 0, err
 	}
-	removed := 0
-	limit := count
-	if count < 0 {
-		limit = -count
-	}
-	bytesRemoved := 0
-	walk := func(fwd bool) {
-		var next func(*list.Element) *list.Element
-		var start *list.Element
-		if fwd {
-			start = e.List.Front()
-			next = (*list.Element).Next
-		} else {
-			start = e.List.Back()
-			next = (*list.Element).Prev
-		}
-		for el := start; el != nil; {
-			n := next(el)
-			if el.Value.(string) == value {
-				bytesRemoved += len(value)
-				e.List.Remove(el)
-				removed++
-				if count != 0 && removed >= limit {
-					return
-				}
-			}
-			el = n
-		}
-	}
-	if count >= 0 {
-		walk(true)
-	} else {
-		walk(false)
-	}
-	s.addBytes(e, -bytesRemoved)
+	removed := e.List.RemoveByValue(value, count)
+	s.addBytes(e, -removed*len(value))
 	s.removeIfEmpty(sh, e)
 	return removed, nil
 }
@@ -278,16 +231,7 @@ func (s *Store) LTrim(key string, start, stop int) error {
 		s.removeIfEmpty(sh, e)
 		return nil
 	}
-	keep := list.New()
-	el := e.List.Front()
-	for i := 0; i < a; i++ {
-		el = el.Next()
-	}
-	for i := a; i <= b && el != nil; i++ {
-		keep.PushBack(el.Value)
-		el = el.Next()
-	}
-	e.List = keep
+	e.List.Trim(a, b)
 	s.recomputeBytes(e)
 	s.removeIfEmpty(sh, e)
 	return nil
@@ -306,18 +250,12 @@ func (s *Store) LInsert(key string, before bool, pivot, value string) (int, erro
 	if !ok {
 		return 0, nil
 	}
-	for el := e.List.Front(); el != nil; el = el.Next() {
-		if el.Value.(string) == pivot {
-			if before {
-				e.List.InsertBefore(value, el)
-			} else {
-				e.List.InsertAfter(value, el)
-			}
-			s.addBytes(e, len(value))
-			return e.List.Len(), nil
-		}
+	n := e.List.FindAndInsert(pivot, before, value)
+	if n < 0 {
+		return -1, nil
 	}
-	return -1, nil
+	s.addBytes(e, len(value))
+	return n, nil
 }
 
 // RPopLPush atomically pops from src's tail and pushes onto dst's head.
@@ -328,12 +266,10 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 	if err != nil || !ok {
 		return "", false, err
 	}
-	back := se.List.Back()
-	if back == nil {
+	v, popped := se.List.PopBack()
+	if !popped {
 		return "", false, nil
 	}
-	v := back.Value.(string)
-	se.List.Remove(back)
 
 	de, err := s.getOrCreate(shD, dst, TypeList)
 	if err != nil {
@@ -347,3 +283,6 @@ func (s *Store) RPopLPush(src, dst string) (string, bool, error) {
 	s.removeIfEmpty(shS, se)
 	return v, true, nil
 }
+
+// _ keeps the qlist import live even if the file is otherwise unchanged.
+var _ = qlist.New

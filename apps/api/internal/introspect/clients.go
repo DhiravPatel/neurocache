@@ -19,6 +19,12 @@ type ClientRegistry struct {
 	// reject new commands (CLIENT PAUSE). Zero = no pause.
 	pauseUntil time.Time
 	pauseMu    sync.RWMutex
+
+	// pauseActive is an atomic mirror of "pauseUntil != zero". The
+	// hot path (every dispatched command) reads this without
+	// touching pauseMu — pauses are rare enough that the steady
+	// state shouldn't pay the RWMutex cost.
+	pauseActive atomic.Bool
 }
 
 // ClientInfo is one connected session's metadata.
@@ -30,6 +36,13 @@ type ClientInfo struct {
 	ConnectedAt time.Time
 	LastCmdAt  time.Time
 	LastCmd    string
+
+	// touchSeq is incremented on every dispatched command. We only
+	// re-read the wall clock every (1<<touchSampleShift) calls,
+	// trading idle-time precision (off by up to ~32 commands) for a
+	// significant cost reduction in the hot path. The CLIENT LIST
+	// output rounds idle to whole seconds anyway.
+	touchSeq atomic.Uint64
 
 	// Reply mode: "on" (default), "off" (silent), "skip" (skip next).
 	ReplyMode  string
@@ -71,6 +84,12 @@ func (r *ClientRegistry) Forget(id uint64) {
 	r.mu.Unlock()
 }
 
+// touchSampleShift controls how often TouchSampled re-reads the wall
+// clock. 5 → 1 in 32. CLIENT LIST's `idle=` output rounds to whole
+// seconds, so even at 200k cmds/sec the LastCmdAt is at most 160 µs
+// stale — irrelevant to operators.
+const touchSampleShift = 5
+
 // Touch records that the client just executed cmd. Cheap; called from
 // the dispatch hot path so we keep it lock-free per client.
 func (r *ClientRegistry) Touch(c *ClientInfo, cmd string) {
@@ -79,6 +98,20 @@ func (r *ClientRegistry) Touch(c *ClientInfo, cmd string) {
 	}
 	c.LastCmdAt = time.Now()
 	c.LastCmd = cmd
+}
+
+// TouchSampled is the hot-path variant: it always updates LastCmd
+// (cheap — string assignment) but only re-reads the wall clock every
+// (1<<touchSampleShift) calls. Eliminates one of the two time.Now()
+// calls per dispatched command on the steady-state path.
+func (r *ClientRegistry) TouchSampled(c *ClientInfo, cmd string) {
+	if c == nil {
+		return
+	}
+	c.LastCmd = cmd
+	if c.touchSeq.Add(1)&((1<<touchSampleShift)-1) == 0 {
+		c.LastCmdAt = time.Now()
+	}
 }
 
 // List returns a snapshot of all clients (sorted by ID for stable output).
@@ -123,13 +156,24 @@ func (r *ClientRegistry) Pause(d time.Duration) {
 	defer r.pauseMu.Unlock()
 	if d <= 0 {
 		r.pauseUntil = time.Time{}
+		r.pauseActive.Store(false)
 		return
 	}
 	r.pauseUntil = time.Now().Add(d)
+	r.pauseActive.Store(true)
 }
 
 // PauseRemaining returns 0 (no pause) or the time-until-resume.
+//
+// Hot path: the atomic.Bool fast-path returns 0 without touching
+// pauseMu when no pause is configured (the steady state). When a
+// pause IS active the slow path reads the wall-clock time and may
+// also clear the atomic mirror once the deadline has passed, so
+// later callers also skip the lock.
 func (r *ClientRegistry) PauseRemaining() time.Duration {
+	if !r.pauseActive.Load() {
+		return 0
+	}
 	r.pauseMu.RLock()
 	defer r.pauseMu.RUnlock()
 	if r.pauseUntil.IsZero() {
@@ -137,6 +181,9 @@ func (r *ClientRegistry) PauseRemaining() time.Duration {
 	}
 	rem := time.Until(r.pauseUntil)
 	if rem <= 0 {
+		// Deadline passed — clear the mirror so future callers
+		// short-circuit. Safe under RLock because Store is atomic.
+		r.pauseActive.Store(false)
 		return 0
 	}
 	return rem

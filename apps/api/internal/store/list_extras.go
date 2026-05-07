@@ -26,13 +26,9 @@ func (s *Store) LMove(src, dst string, srcRight, dstRight bool) (string, bool, e
 	// pop the source side
 	var v string
 	if srcRight {
-		back := se.List.Back()
-		v = back.Value.(string)
-		se.List.Remove(back)
+		v, _ = se.List.PopBack()
 	} else {
-		front := se.List.Front()
-		v = front.Value.(string)
-		se.List.Remove(front)
+		v, _ = se.List.PopFront()
 	}
 	// push to destination — must succeed before we settle src bookkeeping;
 	// otherwise a wrong-type dst would silently swallow the popped value.

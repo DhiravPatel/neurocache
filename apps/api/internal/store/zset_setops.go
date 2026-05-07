@@ -536,17 +536,17 @@ func (s *Store) LMPop(keys []string, fromTail bool, count int) (string, []string
 		}
 		out := []string{}
 		for i := 0; i < count && e.List.Len() > 0; i++ {
-			var el any
+			var v string
+			var ok bool
 			if fromTail {
-				back := e.List.Back()
-				el = back.Value
-				e.List.Remove(back)
+				v, ok = e.List.PopBack()
 			} else {
-				front := e.List.Front()
-				el = front.Value
-				e.List.Remove(front)
+				v, ok = e.List.PopFront()
 			}
-			out = append(out, el.(string))
+			if !ok {
+				break
+			}
+			out = append(out, v)
 		}
 		s.recomputeBytes(e)
 		s.removeIfEmpty(sh, e)

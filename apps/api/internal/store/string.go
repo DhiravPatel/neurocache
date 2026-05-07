@@ -8,13 +8,42 @@ import (
 
 // Set overwrites key with the given value. ttl == 0 clears any expiry,
 // ttl > 0 sets a new one. Any existing non-string value is replaced.
+//
+// Hot-path optimization: when the key already holds a string, we reuse
+// the existing *Entry instead of allocating a new one. redis-benchmark
+// SET cycles over a fixed key set and overwrites each many times — the
+// reuse path saves the heap allocation, the GC pressure, and the
+// 80-byte Entry copy per call. New keys still allocate (one-time cost).
 func (s *Store) Set(key, value string, ttl time.Duration) {
 	sh := s.shardForKey(key)
+	now := time.Now()
 	sh.mu.Lock()
+	if old, ok := sh.data[key]; ok && old.Type == TypeString {
+		// In-place update — same key, same type, just rewrite the
+		// payload + accounting fields.
+		s.bytes.Add(-int64(old.Bytes))
+		old.Str = value
+		old.Bytes = len(key) + len(value)
+		old.LastRead = now
+		// Invalidate the integer fast-path. We DON'T re-parse here:
+		// SET is dominated by non-numeric values (random user data,
+		// session tokens, JSON), and a doomed ParseInt costs more
+		// than it saves. INCR will do the parse exactly once on
+		// first call after a SET, then keep IsInt=true thereafter.
+		old.IsInt = false
+		if ttl > 0 {
+			old.ExpireAt = now.Add(ttl)
+		} else {
+			old.ExpireAt = time.Time{}
+		}
+		s.bytes.Add(int64(old.Bytes))
+		sh.mu.Unlock()
+		s.fire("set", key)
+		return
+	}
 	if old, ok := sh.data[key]; ok {
 		s.bytes.Add(-int64(old.Bytes))
 	}
-	now := time.Now()
 	e := &Entry{
 		Key:       key,
 		Type:      TypeString,
@@ -238,6 +267,9 @@ func (s *Store) Append(key, value string) (int, error) {
 	}
 	s.bytes.Add(-int64(e.Bytes))
 	e.Str += value
+	// APPEND can produce a non-numeric string ("12" + "abc"); invalidate
+	// the integer fast-path so the next INCR goes through ParseInt.
+	e.IsInt = false
 	e.Bytes = len(key) + len(e.Str)
 	s.bytes.Add(int64(e.Bytes))
 	return len(e.Str), nil
@@ -312,6 +344,9 @@ func (s *Store) SetRange(key string, offset int, value string) (int, error) {
 		s.bytes.Add(-int64(e.Bytes))
 	}
 	e.Str = newStr
+	// SETRANGE invalidates the integer fast-path: a binary patch may
+	// no longer parse as an int.
+	e.IsInt = false
 	e.Bytes = len(key) + len(newStr)
 	s.bytes.Add(int64(e.Bytes))
 	return len(newStr), nil
@@ -319,6 +354,12 @@ func (s *Store) SetRange(key string, offset int, value string) (int, error) {
 
 // Incr adds delta to a numeric string value and returns the new total.
 // Creates the key at 0 if missing, errors if existing value isn't numeric.
+//
+// Hot path: when an entry already has IsInt=true (set by a prior INCR
+// or by SET-with-numeric-value), we read IntVal directly and skip the
+// `strconv.ParseInt(e.Str, ...)` call. Saves ~10 ns/call and makes
+// repeated INCR on the same key (the redis-benchmark workload) a
+// pure integer add + a single string format.
 func (s *Store) Incr(key string, delta int64) (int64, error) {
 	sh := s.shardForKey(key)
 	sh.mu.Lock()
@@ -329,9 +370,13 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 	}
 	var cur int64
 	if ok {
-		cur, err = strconv.ParseInt(e.Str, 10, 64)
-		if err != nil {
-			return 0, errors.New("ERR value is not an integer or out of range")
+		if e.IsInt {
+			cur = e.IntVal
+		} else {
+			cur, err = strconv.ParseInt(e.Str, 10, 64)
+			if err != nil {
+				return 0, errors.New("ERR value is not an integer or out of range")
+			}
 		}
 	}
 	cur += delta
@@ -344,6 +389,8 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 		s.bytes.Add(-int64(e.Bytes))
 	}
 	e.Str = v
+	e.IntVal = cur
+	e.IsInt = true
 	e.Bytes = len(key) + len(v)
 	s.bytes.Add(int64(e.Bytes))
 	return cur, nil

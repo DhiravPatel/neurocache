@@ -160,6 +160,9 @@ type Engine struct {
 	StartedAt time.Time
 	CmdCount  atomic.Uint64
 	stopCh    chan struct{}
+	// Clock is a process-wide cached monotonic clock used by the RESP
+	// dispatch hot path. See engine/clock.go for the rationale.
+	Clock *FastClock
 
 	// lastSave is the unix timestamp of the most recent successful RDB
 	// write (manual or scheduled). Seeded from the on-disk file's mtime
@@ -200,7 +203,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		PubSub:    pubsub.New(64),
 		ACL:       aclMgr,
 		SlowLog:   introspect.NewSlowLog(cfg.SlowLogMaxLen, time.Duration(cfg.SlowLogThreshold)*time.Microsecond),
-		Latency:   introspect.NewLatencyMonitor(cfg.LatencyMaxLen),
+		Latency:   newLatencyMonitorWithDefault(cfg.LatencyMaxLen),
 		Clients:   introspect.NewClientRegistry(),
 		Monitor:   introspect.NewMonitorBroker(),
 		Tracking:  introspect.NewTrackingTable(),
@@ -208,6 +211,7 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		Functions: scripting.NewFunctionRegistry(),
 		Blocker:   blocking.NewHub(),
 		StartedAt: time.Now(),
+		Clock:     NewFastClock(),
 
 		Replication: replication.NewState(),
 		Backlog:     replication.NewBacklog(cfg.ReplBacklogSize),
@@ -593,6 +597,7 @@ func (e *Engine) KeysInSlot(slot, count int) []string {
 func (e *Engine) Stop() {
 	close(e.stopCh)
 	e.Metrics.Stop()
+	e.Clock.Stop()
 	if e.Scheduler != nil {
 		e.Scheduler.Stop()
 	}
@@ -1112,4 +1117,17 @@ func (e *Engine) Info() Info {
 	i.Runtime.GoVersion = runtime.Version()
 	i.Runtime.HeapMB = m.HeapAlloc / (1024 * 1024)
 	return i
+}
+
+// newLatencyMonitorWithDefault constructs a LatencyMonitor with a 1ms
+// default cutoff. Sub-millisecond commands (the vast majority — even
+// SET/GET take ~5µs on M-series Apple silicon) skip the per-command
+// mutex lock, while genuine outliers still feed LATENCY HISTORY.
+// Operators can clear via `LATENCY RESET` + their own threshold; the
+// CONFIG SET surface for `slowlog-log-slower-than` is wired separately
+// and uses SetThreshold directly.
+func newLatencyMonitorWithDefault(maxLen int) *introspect.LatencyMonitor {
+	lm := introspect.NewLatencyMonitor(maxLen)
+	lm.SetThreshold(time.Millisecond)
+	return lm
 }

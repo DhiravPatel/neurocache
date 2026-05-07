@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,9 +69,70 @@ func tuneGC(maxMemoryMB int) (int, int64) {
 	return gogc, memLimit
 }
 
+// tuneGOMAXPROCS detects the container's effective CPU quota (cgroup v2
+// or v1) and pins GOMAXPROCS to it. The Go runtime's default reads
+// runtime.NumCPU() — i.e. the host machine's CPU count — which on a
+// 4-vCPU pod inside a 64-core box launches 64 P's, oversubscribes the
+// scheduler, and inflates p99 latency under load. On bare metal this
+// is a no-op (NumCPU == quota). Honours user override via GOMAXPROCS env.
+func tuneGOMAXPROCS() int {
+	if os.Getenv("GOMAXPROCS") != "" {
+		// Runtime already parsed the env var; just return current.
+		return runtime.GOMAXPROCS(0)
+	}
+	if quota := readCgroupCPUQuota(); quota > 0 && quota < runtime.NumCPU() {
+		runtime.GOMAXPROCS(quota)
+	}
+	return runtime.GOMAXPROCS(0)
+}
+
+// readCgroupCPUQuota returns the integer CPU quota the current cgroup
+// allows. Reads cgroup v2 (`cpu.max`) first, falling back to v1
+// (`cpu.cfs_quota_us` / `cpu.cfs_period_us`). Returns 0 when no quota
+// is set or the cgroup files aren't readable.
+func readCgroupCPUQuota() int {
+	// cgroup v2: /sys/fs/cgroup/cpu.max → "<quota> <period>" or "max <period>".
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		parts := strings.Fields(string(b))
+		if len(parts) == 2 && parts[0] != "max" {
+			q, qErr := strconv.Atoi(parts[0])
+			p, pErr := strconv.Atoi(parts[1])
+			if qErr == nil && pErr == nil && p > 0 {
+				n := q / p
+				if q%p > 0 {
+					n++
+				}
+				if n >= 1 {
+					return n
+				}
+			}
+		}
+	}
+	// cgroup v1.
+	q, err := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+	if err != nil {
+		return 0
+	}
+	p, err := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+	if err != nil {
+		return 0
+	}
+	qi, qErr := strconv.Atoi(strings.TrimSpace(string(q)))
+	pi, pErr := strconv.Atoi(strings.TrimSpace(string(p)))
+	if qErr != nil || pErr != nil || qi <= 0 || pi <= 0 {
+		return 0
+	}
+	n := qi / pi
+	if qi%pi > 0 {
+		n++
+	}
+	return n
+}
+
 func main() {
 	cfg := config.Load()
 	gogc, memLimit := tuneGC(cfg.MaxMemoryMB)
+	maxprocs := tuneGOMAXPROCS()
 	log := logger.New(cfg.LogLevel, cfg.LogFormat)
 	log.Info("neurocache starting",
 		"version", "0.3.0",
@@ -76,6 +140,7 @@ func main() {
 		"resp_port", cfg.RESPPort,
 		"gogc", gogc,
 		"gomemlimit_bytes", memLimit,
+		"gomaxprocs", maxprocs,
 	)
 
 	eng := engine.New(cfg, log)

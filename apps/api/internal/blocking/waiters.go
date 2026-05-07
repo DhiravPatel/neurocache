@@ -13,6 +13,7 @@ package blocking
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +22,15 @@ type Hub struct {
 	mu      sync.Mutex
 	keys    map[string]map[*Waiter]struct{}
 	clients map[uint64]map[*Waiter]struct{} // reverse index for CLIENT UNBLOCK
+
+	// waiterCount is an atomic mirror of the total number of waiters
+	// across all keys. The hot path — Notify() called from every
+	// LPUSH / RPUSH / ZADD / XADD / SET — reads this without taking
+	// the hub mutex. When it's zero (the steady state for any cache
+	// or queue with no blocked consumers attached), Notify returns
+	// immediately. The win compounds: 50 concurrent push clients all
+	// avoid funneling through one mutex.
+	waiterCount atomic.Int64
 }
 
 // NewHub returns an empty hub.
@@ -95,6 +105,11 @@ func (h *Hub) RegisterFor(clientID uint64, keys ...string) *Waiter {
 		set[w] = struct{}{}
 	}
 	h.mu.Unlock()
+	// Mirror the count for the Notify fast-path. A single waiter can
+	// be registered against multiple keys (BLPOP k1 k2 k3) — we count
+	// the waiter once, not once per key, so the counter mirrors the
+	// "is anyone blocked at all" question that Notify actually asks.
+	h.waiterCount.Add(1)
 	return w
 }
 
@@ -125,6 +140,9 @@ func (w *Waiter) Cancel() {
 		}
 	}
 	w.hub.mu.Unlock()
+	// Mirror the count for Notify's fast-path. We register +1 per
+	// waiter (not per key), so we decrement +1 per Cancel.
+	w.hub.waiterCount.Add(-1)
 }
 
 // UnblockedByError reports whether the waiter was woken by
@@ -177,6 +195,12 @@ func (w *Waiter) Wait(timeout time.Duration) (string, bool) {
 // notified. Drops the wake when the recipient's channel is full —
 // that's fine because a blocked consumer always reads exactly once.
 func (h *Hub) Notify(key string) bool {
+	// Fast path: when nobody is waiting on anything, return without
+	// touching the hub mutex. Every list/zset/stream write goes through
+	// here; the steady-state cost should be one atomic load.
+	if h.waiterCount.Load() == 0 {
+		return false
+	}
 	h.mu.Lock()
 	set, ok := h.keys[key]
 	if !ok || len(set) == 0 {

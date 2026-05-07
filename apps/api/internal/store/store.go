@@ -13,12 +13,13 @@
 package store
 
 import (
-	"container/list"
 	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store/qlist"
 )
 
 // ValueType enumerates every kind of value a key can hold.
@@ -65,7 +66,7 @@ type Entry struct {
 	Type ValueType
 
 	Str     string
-	List    *list.List // elements are strings
+	List    *qlist.QList // elements are strings
 	Hash    map[string]string
 	HashTTL map[string]time.Time // optional per-field expiries (Redis 7.4)
 	Set     map[string]struct{}
@@ -73,6 +74,17 @@ type Entry struct {
 	Stream  *Stream
 	Module  *ModuleValue // populated when Type == TypeModule
 	Vector  *VectorSet   // populated when Type == TypeVector
+
+	// IntVal + IsInt are the integer fast-path for the SET/INCR/INCRBY
+	// hot path. Redis treats numeric strings specially: an INCR on a
+	// numeric value avoids the parse-add-format cycle by keeping the
+	// integer in a native field. We do the same — when IsInt is true,
+	// IntVal is authoritative and Str holds its decimal representation
+	// (kept in sync on every write so GET stays a single string read).
+	// Set on first parse-friendly INCR/SET; cleared by APPEND, GETSET,
+	// or any write that produces a non-numeric string.
+	IntVal int64
+	IsInt  bool
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry
@@ -99,7 +111,7 @@ type Store struct {
 func New() *Store {
 	s := &Store{}
 	for i := 0; i < numShards; i++ {
-		s.shards[i] = &shard{data: make(map[string]*Entry)}
+		s.shards[i] = &shard{data: make(map[string]*Entry), idx: i}
 	}
 	go s.ttlLoop()
 	return s
@@ -161,8 +173,22 @@ func (s *Store) Type(key string) ValueType {
 
 // Exists counts how many of the given keys exist (duplicates count).
 // Buckets keys by shard so we take one lock per shard, not one per key.
+//
+// Single-key fast path skips the map allocation in bucketKeysByShard —
+// EXISTS is one of the highest-frequency commands (ioredis emits it
+// before every DEL/EXPIRE on a missing-key check), so eliminating the
+// map[*shard][]string allocation matters.
 func (s *Store) Exists(keys ...string) int {
 	now := time.Now()
+	if len(keys) == 1 {
+		sh := s.shardForKey(keys[0])
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		if e, ok := sh.data[keys[0]]; ok && !e.expired(now) {
+			return 1
+		}
+		return 0
+	}
 	n := 0
 	buckets := s.bucketKeysByShard(keys)
 	for sh, ks := range buckets {
@@ -178,7 +204,26 @@ func (s *Store) Exists(keys ...string) int {
 }
 
 // Del removes keys; returns how many were actually deleted.
+//
+// Single-key fast path avoids the bucketKeysByShard map alloc and the
+// `removed []string` slice growth — DEL key is the second-most-common
+// write next to SET, so the inlined path is worth it.
 func (s *Store) Del(keys ...string) int {
+	if len(keys) == 1 {
+		k := keys[0]
+		sh := s.shardForKey(k)
+		sh.mu.Lock()
+		e, ok := sh.data[k]
+		if !ok {
+			sh.mu.Unlock()
+			return 0
+		}
+		s.bytes.Add(-int64(e.Bytes))
+		delete(sh.data, k)
+		sh.mu.Unlock()
+		s.fire("del", k)
+		return 1
+	}
 	var removed []string
 	buckets := s.bucketKeysByShard(keys)
 	for sh, ks := range buckets {
@@ -403,11 +448,17 @@ func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) 
 	e = &Entry{Key: key, Type: t, CreatedAt: time.Now(), LastRead: time.Now()}
 	switch t {
 	case TypeList:
-		e.List = list.New()
+		e.List = qlist.New()
 	case TypeHash:
-		e.Hash = make(map[string]string)
+		// Pre-size the bucket array. Go's map starts at 0 buckets and
+		// grows in 2× steps, paying a rehash on every threshold. Most
+		// hashes settle around 8–32 fields; sizing for 8 avoids the
+		// first 3 grow operations (which together copy 0+1+2+4 = 7
+		// bucket loads worth of work). For workloads with larger
+		// hashes the steady-state growth is unchanged.
+		e.Hash = make(map[string]string, 8)
 	case TypeSet:
-		e.Set = make(map[string]struct{})
+		e.Set = make(map[string]struct{}, 8)
 	case TypeZSet:
 		e.ZSet = newZSet()
 	case TypeStream:
@@ -469,9 +520,10 @@ func (s *Store) recomputeBytes(e *Entry) {
 	case TypeList:
 		n = len(e.Key)
 		if e.List != nil {
-			for el := e.List.Front(); el != nil; el = el.Next() {
-				n += len(el.Value.(string))
-			}
+			e.List.ForEach(func(v string) bool {
+				n += len(v)
+				return true
+			})
 		}
 	case TypeHash:
 		n = len(e.Key)
