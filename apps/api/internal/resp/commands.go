@@ -408,6 +408,14 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "PROMPT.FINGERPRINT", "PROMPT.RECORD", "PROMPT.GROUPS",
 		"PROMPT.SAMPLE", "PROMPT.STATS", "PROMPT.RESET_ANALYTICS":
 		c.promptAnalyticsCmd(strings.TrimPrefix(cmd, "PROMPT."), args)
+	case "LLM.ROUTE.SET", "LLM.ROUTE.NEXT", "LLM.ROUTE.MARKDOWN",
+		"LLM.ROUTE.MARKUP", "LLM.ROUTE.HEALTHY", "LLM.ROUTE.LIST",
+		"LLM.ROUTE.STATS", "LLM.ROUTE.FORGET":
+		c.llmRouteCmd(strings.TrimPrefix(cmd, "LLM.ROUTE."), args)
+	case "INJECT.SCAN", "INJECT.SCANALL", "INJECT.PATTERN.ADD",
+		"INJECT.PATTERN.REMOVE", "INJECT.PATTERN.LIST",
+		"INJECT.STATS", "INJECT.RESET":
+		c.injectCmd(strings.TrimPrefix(cmd, "INJECT."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

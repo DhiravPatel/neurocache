@@ -103,6 +103,13 @@ var writeCommands = map[string]bool{
 	"SEMNEG.MARK": true, "SEMNEG.FORGET": true, "SEMNEG.CLEAR": true,
 	"PROMPT.RECORD": true, "PROMPT.RESET_ANALYTICS": true,
 
+	// LLM provider failover ladder + injection scanner config —
+	// route definitions and custom patterns must survive restart;
+	// in-flight Mark Up/Down should NOT (let circuit breakers
+	// re-probe upstreams on startup), so they're absent here.
+	"LLM.ROUTE.SET": true, "LLM.ROUTE.FORGET": true,
+	"INJECT.PATTERN.ADD": true, "INJECT.PATTERN.REMOVE": true, "INJECT.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

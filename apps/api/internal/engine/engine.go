@@ -116,6 +116,19 @@ type Engine struct {
 	// short-circuit before the O(N) cosine scan.
 	NegSemCache *semcache.NegCache
 
+	// LLM provider failover ladder — atomic health bits per
+	// provider, lock-free Next() picks the first healthy one in
+	// the configured route. When OpenAI 429s, calls automatically
+	// fall through to the next provider in the ladder.
+	LLMRouter *llmstack.LLMRouter
+
+	// Prompt-injection scanner — built-in pattern library covering
+	// instruction overrides, role-flips, system-prompt extraction,
+	// jailbreak preambles, encoded payloads, and delimiter
+	// confusion. Apps call INJECT.SCAN before forwarding any
+	// prompt to the model.
+	InjectScanner *llmstack.InjectScanner
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -258,6 +271,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.CostGuard = llmstack.NewCostGuard()
 	e.PromptAnalytics = llmstack.NewPromptAnalytics()
 	e.NegSemCache = semcache.NewNegCache()
+	e.LLMRouter = llmstack.NewLLMRouter()
+	e.InjectScanner = llmstack.NewInjectScanner()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
