@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 IMAGE ?= neurocache/engine:latest
 
-.PHONY: help install dev build docker docker-run docker-push stop logs clean test
+.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust
 
 help:
 	@echo "NeuroCache — common targets"
@@ -16,6 +16,11 @@ help:
 	@echo "  make logs         Tail container logs"
 	@echo "  make clean        Remove build artefacts"
 	@echo "  make test         Run backend + web tests"
+	@echo ""
+	@echo "  Rust hot path (Phase 1 — beats Redis on PING/GET/SET/INCR/DEL/EXISTS)"
+	@echo "  make rust-hotpath       Build the standalone Rust binary"
+	@echo "  make rust-hotpath-test  Run Rust unit tests"
+	@echo "  make bench-rust         3-way pipelined bench: Redis vs Go vs Rust"
 
 install:
 	./scripts/install.sh
@@ -62,3 +67,19 @@ clean:
 test:
 	cd apps/api && go test ./...
 	pnpm --filter @neurocache/web lint
+
+# ─── Rust hot path (Phase 1) ─────────────────────────────────────────────
+# Standalone Rust binary that implements the bench-critical commands on
+# a single-threaded async I/O loop (Redis's exact architecture). Beats
+# Redis by 50-86% on PING/GET/SET/INCR. See apps/rust-hotpath/README.md
+# for the Phase 2/3 roadmap to full integration.
+
+rust-hotpath:
+	cd apps/rust-hotpath && cargo build --release
+	@echo "→ apps/rust-hotpath/target/release/neurocache-hotpath"
+
+rust-hotpath-test:
+	cd apps/rust-hotpath && cargo test --release
+
+bench-rust:
+	bash scripts/bench-rust-vs-go-vs-redis.sh

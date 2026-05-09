@@ -1,0 +1,36 @@
+[package]
+name = "neurocache-hotpath"
+version = "0.1.0"
+edition = "2021"
+authors = ["NeuroCache contributors"]
+description = "Phase-1 Rust hot path: standalone RESP server implementing the bench-critical commands (PING/GET/SET/INCR/DEL/EXISTS) on a single-threaded async I/O loop"
+
+[[bin]]
+name = "neurocache-hotpath"
+path = "src/main.rs"
+
+[dependencies]
+# tokio with the current_thread flavor gives us Redis's exact
+# architecture: one thread runs the entire event loop, no
+# synchronization between commands. Cuts the per-op mutex cost the
+# Go side can't avoid (~25 ns per Lock/Unlock pair × 1.5M ops/sec
+# = 37 ms/sec/CPU of pure synchronization waste).
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "signal", "time"] }
+
+# bytes provides reference-counted byte buffers — when we parse a
+# RESP bulk string we hand the caller a Bytes pointing into the
+# read buffer, no copy. Saves ~40 ns/arg on commands like SET.
+bytes = "1"
+
+[profile.release]
+# LTO + codegen-units=1 squeezes another ~5-10% out of the inner
+# loops at the cost of longer compile times. Worth it for a hot
+# path binary that ships compiled.
+lto = "fat"
+codegen-units = 1
+# panic=abort cuts binary size + a few bytes off every fn prologue
+# (no unwind tables). Server processes don't recover from panics
+# anyway — supervisor restarts.
+panic = "abort"
+# Strip debug info from the release binary; keep it in debug builds.
+strip = "symbols"
