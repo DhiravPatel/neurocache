@@ -373,11 +373,11 @@ Real-world clients (ioredis, go-redis, jedis, redis-py) pipeline by default. Wit
 | **ZADD** | ~1.30M | ~1.32M | **101–106%** | **beats Redis** |
 | **MSET** (10 keys) | ~328k | ~520k | **107–161%** | **beats Redis** |
 | **LPOP** | ~1.49M | ~1.46M | **98–100%** | **beats Redis (parity)** |
-| **SADD** | ~1.74M | ~1.30M | **75–87%** | ok |
-| **RPOP** | ~1.60M | ~1.40M | **77–88%** | ok |
-| **LPUSH** | ~1.50M | ~1.10M | **77–80%** | ok |
-| **RPUSH** | ~1.63M | ~1.10M | **70–73%** | warn |
-| **INCR** | ~1.87M | ~1.10M | **64–75%** | warn |
+| **INCR** | ~1.79M | ~1.67M | **85–99%** | parity (lock-free path) |
+| **SADD** | ~1.66M | ~1.36M | **77–91%** | ok |
+| **RPOP** | ~1.50M | ~1.12M | **70–78%** | ok |
+| **LPUSH** | ~1.47M | ~1.04M | **67–75%** | ok |
+| **RPUSH** | ~1.58M | ~1.06M | **66–69%** | warn |
 
 Reproduce: `scripts/bench-pipelined-vs-redis.sh`.
 
@@ -391,7 +391,7 @@ Where Redis was 49–70% ahead pre-optimization on writes (HSET/ZADD/SADD/SPOP),
 |---|---|---|
 | Hash + shard | Inlined FNV-1a, cached `shard.idx` | Kills 2 allocs/cmd + the O(N) `shardIndex` walk |
 | Store | In-place `Entry` reuse on `SET` over existing string | Saves a heap alloc + GC pressure on every overwrite (the redis-benchmark hot path) |
-| Store | INCR `IsInt`+`IntVal` fast-path | After first parse, INCR is a pure int64 add — no `ParseInt` per call |
+| Store | **Lock-free INCR/DECR/INCRBY/DECRBY** via `Entry.IntAtomic atomic.Int64` | First INCR after a SET takes the write lock to promote the entry (parses + populates `IntAtomic`). Every subsequent INCR takes only the shard's `RLock` long enough to look up the entry, then does `atomic.Int64.Add(delta)` — no write lock, no map write, no string format. GET reads `IntAtomic` (with fmt-on-demand) so the lock-free path stays correct. Pushes INCR from ~70% to ~95% of Redis on the redis-benchmark workload (200k INCRs against the same key) |
 | Store | Pre-sized hash / set maps (cap 8) | Avoids the first 3 grow-and-rehash steps that Go's runtime map does on every fresh `map[string]string`/`map[string]struct{}` |
 | Store | Single-key `Del`/`Exists` fast paths | Skip the `bucketKeysByShard` map allocation |
 | Lists | **Custom `qlist` quicklist** — doubly-linked list of 128-element ring-buffer nodes | Modeled on Redis's quicklist. Per-element overhead ~16 B (slot in a contiguous array) vs container/list's ~40 B-per-element pointer-soup. 1 malloc per 128 pushes (vs 1 per push). Cache-friendly: 128 contiguous strings vs 128 scattered nodes. PushBack microbench: 6.8 ns/op (was ~30 ns with container/list) |
