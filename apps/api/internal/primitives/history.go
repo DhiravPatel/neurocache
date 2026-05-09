@@ -3,6 +3,7 @@ package primitives
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,11 @@ type HistoryStore struct {
 	versions map[string][]Version
 	maxVers  int
 	maxAge   time.Duration
+
+	// trackedCount mirrors len(tracked) so the engine notifier can
+	// short-circuit IsTracked() on every write without taking mu.
+	// Zero in the steady-state (nobody opted any key into KEY.TRACK).
+	trackedCount atomic.Int64
 }
 
 // Version is one snapshot.
@@ -51,17 +57,28 @@ func NewHistoryStore(maxVers int, maxAge time.Duration) *HistoryStore {
 // Track opts a key into versioning. Idempotent.
 func (h *HistoryStore) Track(key string) {
 	h.mu.Lock()
-	h.tracked[key] = true
+	if !h.tracked[key] {
+		h.tracked[key] = true
+		h.trackedCount.Add(1)
+	}
 	h.mu.Unlock()
 }
 
 // Untrack removes a key from versioning + drops its history.
 func (h *HistoryStore) Untrack(key string) {
 	h.mu.Lock()
+	if h.tracked[key] {
+		h.trackedCount.Add(-1)
+	}
 	delete(h.tracked, key)
 	delete(h.versions, key)
 	h.mu.Unlock()
 }
+
+// HasAny reports whether any key has been opted into versioning. Lock-
+// free; called from the engine notifier on every write to skip the
+// per-write IsTracked RWLock when nobody's tracking anything.
+func (h *HistoryStore) HasAny() bool { return h.trackedCount.Load() > 0 }
 
 // IsTracked reports whether the engine should snapshot writes to key.
 func (h *HistoryStore) IsTracked(key string) bool {

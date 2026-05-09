@@ -75,16 +75,29 @@ type Entry struct {
 	Module  *ModuleValue // populated when Type == TypeModule
 	Vector  *VectorSet   // populated when Type == TypeVector
 
-	// IntVal + IsInt are the integer fast-path for the SET/INCR/INCRBY
-	// hot path. Redis treats numeric strings specially: an INCR on a
-	// numeric value avoids the parse-add-format cycle by keeping the
-	// integer in a native field. We do the same — when IsInt is true,
-	// IntVal is authoritative and Str holds its decimal representation
-	// (kept in sync on every write so GET stays a single string read).
-	// Set on first parse-friendly INCR/SET; cleared by APPEND, GETSET,
-	// or any write that produces a non-numeric string.
-	IntVal int64
-	IsInt  bool
+	// IntVal + IsInt + IntAtomic are the integer fast-path for the
+	// SET/INCR/INCRBY hot path. Redis treats numeric strings specially:
+	// an INCR on a numeric value avoids the parse-add-format cycle by
+	// keeping the integer in a native field. We go further — IntAtomic
+	// is an atomic.Int64 that lets INCR/DECR/INCRBY/DECRBY skip the
+	// shard write-lock entirely on the steady state.
+	//
+	// State machine:
+	//   1. Fresh SET of a string that doesn't parse as int → IsInt=false,
+	//      Str holds the raw value.
+	//   2. SET of a string that parses as int → IsInt=true, IntAtomic
+	//      stores the int, Str is the formatted form (kept for GET).
+	//   3. INCR on an entry with IsInt=true → atomic.Add on IntAtomic.
+	//      Str is left STALE; GET checks IsInt and formats from
+	//      IntAtomic on read. This is the lock-free hot path.
+	//   4. APPEND / SETRANGE / any write that mutates Str → IsInt=false.
+	//
+	// IntVal is kept as a non-atomic snapshot of IntAtomic at the last
+	// mutex-protected write — used by code paths that already hold the
+	// shard lock to avoid the atomic load.
+	IntVal    int64
+	IsInt     bool
+	IntAtomic atomic.Int64
 
 	CreatedAt time.Time
 	ExpireAt  time.Time // zero = no expiry

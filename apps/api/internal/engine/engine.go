@@ -292,20 +292,35 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 		if e.HotKeys != nil {
 			e.HotKeys.Record(key)
 		}
-		e.PubSub.Publish("__keyspace__:"+key, event)
-		e.PubSub.Publish("__keyevent__:"+event, key)
+		// Keyspace-notification fast-path. Without this, every write
+		// command paid two string concats ("__keyspace__:"+key,
+		// "__keyevent__:"+event) plus two PubSub.Publish calls (each
+		// taking an RLock + iterating the psubscriber map) on the
+		// chance that a CONFIG SET notify-keyspace-events client is
+		// listening. The atomic load below short-circuits when nobody
+		// has subscribed — the steady state for any cache without
+		// keyspace events configured.
+		if e.PubSub.HasSubscribers() {
+			e.PubSub.Publish("__keyspace__:"+key, event)
+			e.PubSub.Publish("__keyevent__:"+event, key)
+		}
 		// Server-assisted client caching: fan out invalidations to
 		// every client that read this key (default mode) or whose
 		// PREFIX subscriptions match (BCAST mode). The pump goroutine
 		// on each receiving conn turns this into a RESP3 Push frame.
-		if e.Tracking != nil {
+		// HasActive is an atomic load — when no client has CLIENT
+		// TRACKING ON (the steady state), we skip the RWLock-protected
+		// scan inside Invalidations entirely.
+		if e.Tracking != nil && e.Tracking.HasActive() {
 			for _, t := range e.Tracking.Invalidations(key, 0) {
 				e.invalidateClient(t.ClientID, []string{key})
 			}
 		}
 		// KEY.TRACK time-travel — snapshot the new value when this key
-		// is opted into versioning. Cheap when nothing's tracked.
-		if e.History != nil && e.History.IsTracked(key) {
+		// is opted into versioning. HasAny is a lock-free atomic load;
+		// when nobody's opted any key into KEY.TRACK (the steady state)
+		// we skip the IsTracked RLock + GetTyped on every write.
+		if e.History != nil && e.History.HasAny() && e.History.IsTracked(key) {
 			if v, ok, _ := e.KV.GetTyped(key); ok {
 				e.History.Snapshot(key, v)
 			}

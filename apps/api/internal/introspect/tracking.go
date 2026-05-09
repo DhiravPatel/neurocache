@@ -2,6 +2,7 @@ package introspect
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // TrackingTable powers Redis 6+ server-assisted client-side caching.
@@ -19,6 +20,11 @@ import (
 // The NOLOOP flag suppresses invalidations triggered by the same
 // client's own writes — used by clients that already know they
 // invalidated their cached value.
+//
+// Hot-path note: the engine notifier calls Invalidations on every
+// write command. activeClients is an atomic mirror of len(clients)
+// that lets the notifier skip the call entirely when nobody has
+// `CLIENT TRACKING ON` (the steady state for most workloads).
 type TrackingTable struct {
 	mu sync.RWMutex
 
@@ -27,6 +33,10 @@ type TrackingTable struct {
 
 	// per-client state: clientID -> tracking flags + prefix list
 	clients map[uint64]*trackingClient
+
+	// activeClients is an atomic mirror of len(clients) — read by
+	// HasActive() on the dispatch hot path without taking t.mu.
+	activeClients atomic.Int64
 }
 
 type trackingClient struct {
@@ -49,16 +59,27 @@ func NewTrackingTable() *TrackingTable {
 func (t *TrackingTable) Enable(clientID uint64, bcast, noloop bool, redirect uint64, prefixes []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, dup := t.clients[clientID]; !dup {
+		t.activeClients.Add(1)
+	}
 	t.clients[clientID] = &trackingClient{
 		on: true, bcast: bcast, noloop: noloop,
 		redirect: redirect, prefixes: append([]string(nil), prefixes...),
 	}
 }
 
+// HasActive returns true when at least one client has tracking
+// enabled. Lock-free; called from the engine notifier on every write
+// to skip Invalidations() when nobody's listening.
+func (t *TrackingTable) HasActive() bool { return t.activeClients.Load() > 0 }
+
 // Disable removes a client from tracking and drops its key set.
 func (t *TrackingTable) Disable(clientID uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, was := t.clients[clientID]; was {
+		t.activeClients.Add(-1)
+	}
 	delete(t.clients, clientID)
 	for key, set := range t.keys {
 		delete(set, clientID)
