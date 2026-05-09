@@ -93,6 +93,18 @@ type Engine struct {
 	Conversations *llmstack.Conversations
 	Prompts       *llmstack.Prompts
 
+	// Tool result memoization for AI agents — cache the result of a
+	// tool/function call by (tool, normalized-args) so repeated calls
+	// within a TTL skip the upstream round-trip. Lock-free reads via
+	// sync.Map + atomic counters; stats track $ saved.
+	ToolCache *llmstack.ToolCache
+
+	// LLM cost guardrails — per-scope (user/session/global) hard $
+	// caps with atomic enforcement. Apps call CostGuard.Check before
+	// every chargeable LLM call so a runaway agent loop or leaked
+	// API key can't burn through the bill before someone notices.
+	CostGuard *llmstack.CostGuard
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -231,6 +243,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.EmbCache = llmstack.NewEmbCache()
 	e.Conversations = llmstack.NewConversations()
 	e.Prompts = llmstack.NewPrompts()
+	e.ToolCache = llmstack.NewToolCache()
+	e.CostGuard = llmstack.NewCostGuard()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

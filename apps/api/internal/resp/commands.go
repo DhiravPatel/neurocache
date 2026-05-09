@@ -397,6 +397,11 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.convCmd(strings.TrimPrefix(cmd, "CONV."), args)
 	case "PROMPT.SET", "PROMPT.GET", "PROMPT.RENDER", "PROMPT.LIST", "PROMPT.DELETE", "PROMPT.VERSIONS":
 		c.promptCmd(strings.TrimPrefix(cmd, "PROMPT."), args)
+	case "TOOL.SET", "TOOL.GET", "TOOL.FORGET", "TOOL.PURGE", "TOOL.STATS", "TOOL.LIST":
+		c.toolCmd(strings.TrimPrefix(cmd, "TOOL."), args)
+	case "GUARD.SETCAP", "GUARD.CHECK", "GUARD.RECORD", "GUARD.CHECKRECORD",
+		"GUARD.SPENT", "GUARD.LIMIT", "GUARD.RESET", "GUARD.LIST", "GUARD.STATS":
+		c.guardCmd(strings.TrimPrefix(cmd, "GUARD."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

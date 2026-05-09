@@ -247,6 +247,31 @@ MCP.TOOLS                                # 13 tools: kv_get/set, semantic_*,
                                           # memory_*, graph_*, retrieve_*,
                                           # rag_query, conv_*
 MCP.CALL neurocache.rag_query '{"index":"docs","query":"best small phone","k":3,"hops":2}'
+
+# Tool memoization — cache the result of any tool/function call by
+# (tool, normalized-args). Built for AI agents that repeatedly hit
+# the same expensive endpoint. Args are JSON-canonicalized (top-level
+# key sort) so {"city":"NYC"} and {"city":"NYC","_pad":""} hash
+# distinctly while {"a":1,"b":2} matches {"b":2,"a":1}. Tracks $
+# saved per cached call. Lock-free reads via sync.Map + atomic
+# counters — TOOL.GET bench: 121 ns/op (~8M ops/sec).
+TOOL.SET get_weather '{"city":"NYC"}' "sunny 72F" EX 60 COST 0.001
+TOOL.GET get_weather '{"city":"NYC"}'      # → "sunny 72F"
+TOOL.STATS                                  # hits / misses / saved_usd
+TOOL.LIST get_weather LIMIT 10              # peek at cached entries
+TOOL.PURGE get_weather                      # drop all entries for a tool
+
+# LLM cost guardrails — hard $ caps per scope (per-user, per-session,
+# global). Apps call GUARD.CHECK before each chargeable LLM call;
+# the engine atomically enforces the cap so a runaway agent loop or
+# leaked API key can't burn the bill before someone notices. Atomic
+# spend counter — GUARD.CHECK bench: 9 ns/op (~110M ops/sec).
+GUARD.SETCAP user:42 10.00 WINDOW 86400     # $10/day for user 42
+GUARD.CHECK user:42 0.05                    # would 5¢ fit? → 1 (yes)
+GUARD.CHECKRECORD user:42 0.05              # atomic check+bump (CAS)
+GUARD.SPENT user:42                         # current window spend in $
+GUARD.LIST                                  # every scope's status
+GUARD.RESET user:42                         # clear after manual review
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

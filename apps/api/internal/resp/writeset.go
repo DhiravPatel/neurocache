@@ -91,6 +91,12 @@ var writeCommands = map[string]bool{
 	"CONV.APPEND": true, "CONV.SUMMARIZE": true, "CONV.RESET": true,
 	"PROMPT.SET": true, "PROMPT.DELETE": true,
 
+	// Tool memoization + cost guardrails — durable state, must
+	// survive restart so the cap doesn't reset to "no limit" after
+	// the engine recovers from a crash.
+	"TOOL.SET": true, "TOOL.FORGET": true, "TOOL.PURGE": true,
+	"GUARD.SETCAP": true, "GUARD.RECORD": true, "GUARD.CHECKRECORD": true, "GUARD.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
