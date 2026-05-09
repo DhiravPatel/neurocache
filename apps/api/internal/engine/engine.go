@@ -105,6 +105,17 @@ type Engine struct {
 	// API key can't burn through the bill before someone notices.
 	CostGuard *llmstack.CostGuard
 
+	// Prompt analytics — group prompts by a normalization-robust
+	// fingerprint so ops can see "users are sending 50 variants of
+	// the same template." Used for cost analysis, prompt-injection
+	// detection, and cache-hit tuning.
+	PromptAnalytics *llmstack.PromptAnalytics
+
+	// Negative semantic cache — remembers queries that recently
+	// returned no SEMANTIC_GET match. Future identical queries
+	// short-circuit before the O(N) cosine scan.
+	NegSemCache *semcache.NegCache
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -245,6 +256,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Prompts = llmstack.NewPrompts()
 	e.ToolCache = llmstack.NewToolCache()
 	e.CostGuard = llmstack.NewCostGuard()
+	e.PromptAnalytics = llmstack.NewPromptAnalytics()
+	e.NegSemCache = semcache.NewNegCache()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

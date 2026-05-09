@@ -97,6 +97,12 @@ var writeCommands = map[string]bool{
 	"TOOL.SET": true, "TOOL.FORGET": true, "TOOL.PURGE": true,
 	"GUARD.SETCAP": true, "GUARD.RECORD": true, "GUARD.CHECKRECORD": true, "GUARD.RESET": true,
 
+	// Negative semantic cache + prompt analytics — durable counters,
+	// must survive restart so dashboards keep the running totals
+	// instead of resetting after a crash.
+	"SEMNEG.MARK": true, "SEMNEG.FORGET": true, "SEMNEG.CLEAR": true,
+	"PROMPT.RECORD": true, "PROMPT.RESET_ANALYTICS": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

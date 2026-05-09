@@ -402,6 +402,12 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "GUARD.SETCAP", "GUARD.CHECK", "GUARD.RECORD", "GUARD.CHECKRECORD",
 		"GUARD.SPENT", "GUARD.LIMIT", "GUARD.RESET", "GUARD.LIST", "GUARD.STATS":
 		c.guardCmd(strings.TrimPrefix(cmd, "GUARD."), args)
+	case "SEMNEG.MARK", "SEMNEG.CHECK", "SEMNEG.FORGET", "SEMNEG.CLEAR",
+		"SEMNEG.STATS", "SEMNEG.LIST":
+		c.semnegCmd(strings.TrimPrefix(cmd, "SEMNEG."), args)
+	case "PROMPT.FINGERPRINT", "PROMPT.RECORD", "PROMPT.GROUPS",
+		"PROMPT.SAMPLE", "PROMPT.STATS", "PROMPT.RESET_ANALYTICS":
+		c.promptAnalyticsCmd(strings.TrimPrefix(cmd, "PROMPT."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

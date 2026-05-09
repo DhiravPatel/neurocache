@@ -272,6 +272,31 @@ GUARD.CHECKRECORD user:42 0.05              # atomic check+bump (CAS)
 GUARD.SPENT user:42                         # current window spend in $
 GUARD.LIST                                  # every scope's status
 GUARD.RESET user:42                         # clear after manual review
+
+# Negative semantic cache — SEMANTIC_GET on a 100k-entry cache is
+# O(N) cosine comparisons; repeating the same miss wastes CPU.
+# SEMNEG remembers queries that returned no match so future
+# identical queries short-circuit before the scan. Whitespace + case
+# normalized so "How does X work?" and "how does x work" hit the
+# same entry. Lock-free reads — SEMNEG.CHECK bench: ~206 ns/op
+# (~4.8M ops/sec).
+SEMNEG.MARK "what is the airspeed velocity of an unladen swallow" TTL 300
+SEMNEG.CHECK "What is the AIRSPEED velocity of an unladen swallow"
+# → 1   (whitespace + case match; saves the O(N) cosine scan)
+SEMNEG.STATS                                # hits / misses / saved scans
+SEMNEG.LIST LIMIT 20                        # most-recently-marked queries
+
+# Prompt fingerprinting + clustering — group prompts by a
+# normalization-robust fingerprint (whitespace, case, soft punct,
+# digit runs, URLs all collapsed) so production teams can answer
+# "of every prompt sent today, what are the top 20 templates?"
+# Useful for cost analysis, prompt-injection detection, cache-warm
+# tuning. Sub-microsecond per call.
+PROMPT.RECORD "Find user 12345 in the system please"
+PROMPT.RECORD "find user 67890 in the system PLEASE"
+PROMPT.GROUPS LIMIT 5                       # top clusters with samples
+PROMPT.FINGERPRINT "Find user 99999 in the system"
+# → ab12cd34…  (matches the cluster above due to digit-run collapse)
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

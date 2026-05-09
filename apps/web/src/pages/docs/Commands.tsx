@@ -559,6 +559,142 @@ PROMPT.RENDER support-reply VARS name "Alice" topic "billing"
 PROMPT.GET support-reply VERSION 1
 PROMPT.RENDER support-reply VERSION 1 VARS name "Alice" topic "billing"`,
       },
+      {
+        id: "tool",
+        title: "Tool / function-call memoization",
+        blurb: (
+          <>
+            Cache the result of any tool/function call by{" "}
+            <code>(tool, args)</code>. Built for AI agents that repeatedly hit
+            the same expensive endpoint. Args are JSON-canonicalized
+            (top-level key sort) so <code>{`{"a":1,"b":2}`}</code> and{" "}
+            <code>{`{"b":2,"a":1}`}</code> hash identically. Tracks $ saved
+            per cached call. Lock-free reads via sync.Map + atomic counters
+            — <code>TOOL.GET</code> bench: ~120 ns/op (~8M ops/sec).
+          </>
+        ),
+        commands: [
+          { cmd: "TOOL.SET tool args value [EX sec] [COST usd]", desc: "Store a result keyed by (tool, normalized-args). EX adds a TTL; COST records the upstream-call cost so TOOL.STATS can report saved $." },
+          { cmd: "TOOL.GET tool args", desc: "Lock-free lookup. Returns the cached value or nil. Bumps hit/miss counters." },
+          { cmd: "TOOL.FORGET tool args", desc: "Drop a single entry. Returns 1/0 for hit/miss." },
+          { cmd: "TOOL.PURGE [tool]", desc: "Drop every entry, or every entry for a specific tool. Returns the count removed." },
+          { cmd: "TOOL.STATS", desc: "hits / misses / hit_rate / saved_usd / unique_entries." },
+          { cmd: "TOOL.LIST [tool] [LIMIT n]", desc: "Peek at cached entries (tool, hash, age, ttl, cost). Result body is omitted to keep the command cheap." },
+        ],
+        examplesLang: "bash",
+        examples: `TOOL.SET get_weather '{"city":"NYC"}' "sunny 72F" EX 60 COST 0.001
+TOOL.GET get_weather '{"city":"NYC"}'      # → "sunny 72F"
+TOOL.STATS                                  # hits, misses, saved_usd
+TOOL.LIST get_weather LIMIT 10
+TOOL.PURGE get_weather                      # invalidate when the API changes`,
+      },
+      {
+        id: "guard",
+        title: "LLM cost guardrails",
+        blurb: (
+          <>
+            Hard $ caps per scope (per-user, per-session, global). Apps call{" "}
+            <code>GUARD.CHECK</code> before each chargeable LLM call so a
+            runaway agent loop or leaked API key can't burn through the bill
+            before someone notices. Atomic spend counter with optional
+            rolling window — <code>GUARD.CHECK</code> bench: ~9 ns/op (~110M
+            ops/sec), fast enough to call before <em>every</em> LLM request.
+          </>
+        ),
+        commands: [
+          { cmd: "GUARD.SETCAP scope usd [WINDOW sec]", desc: "Configure (or update) a cap. WINDOW=0 (or omitted) is lifetime; otherwise the spend counter resets on a sliding window." },
+          { cmd: "GUARD.CHECK scope usd", desc: "Would this charge fit? Returns 1/0. Lock-free atomic; soft cap (small race window under contention)." },
+          { cmd: "GUARD.RECORD scope usd", desc: "Bump the spend counter; no check. Returns the new total in $." },
+          { cmd: "GUARD.CHECKRECORD scope usd", desc: "Atomic check-and-record via CAS. Strict: under 100 concurrent goroutines spending $1 against a $50 cap, exactly 50 succeed." },
+          { cmd: "GUARD.SPENT scope", desc: "Current window spend in $." },
+          { cmd: "GUARD.LIMIT scope", desc: "Configured cap in $." },
+          { cmd: "GUARD.RESET scope", desc: "Clear the spend counter (cap unchanged)." },
+          { cmd: "GUARD.LIST", desc: "Every scope's status (scope, limit, spent, window, util %). Drives the dashboard's Cost Guard panel." },
+          { cmd: "GUARD.STATS", desc: "Process-wide check / rejection counts." },
+        ],
+        examplesLang: "bash",
+        examples: `GUARD.SETCAP user:42 10.00 WINDOW 86400     # $10/day per user
+GUARD.CHECK user:42 0.05                    # would 5¢ fit? → 1
+GUARD.CHECKRECORD user:42 0.05              # atomic check+bump (CAS)
+GUARD.SPENT user:42                         # → "0.050000"
+GUARD.LIST                                  # for the dashboard
+GUARD.RESET user:42                         # after manual review`,
+      },
+      {
+        id: "semneg",
+        title: "Negative semantic cache",
+        blurb: (
+          <>
+            <code>SEMANTIC_GET</code> on a 100k-entry cache is O(N) cosine
+            comparisons — repeating the same miss wastes real CPU. SEMNEG
+            remembers queries that recently returned no match so future
+            identical queries short-circuit before the scan. Whitespace +
+            case normalized so <code>"How does X work?"</code> and{" "}
+            <code>"how does x work"</code> hit the same entry. Lock-free
+            reads — <code>SEMNEG.CHECK</code> bench: ~206 ns/op (~4.8M
+            ops/sec).
+          </>
+        ),
+        commands: [
+          { cmd: "SEMNEG.MARK query [TTL sec]", desc: "Record this query as having no semantic match. TTL=0 (or omitted) keeps it until SEMNEG.CLEAR or restart." },
+          { cmd: "SEMNEG.CHECK query", desc: "Was this query recently marked as a miss? Returns 1/0. Bumps a per-entry hit counter for SEMNEG.LIST." },
+          { cmd: "SEMNEG.FORGET query", desc: "Drop one entry — used after a manual cache-warm." },
+          { cmd: "SEMNEG.CLEAR", desc: "Wipe the entire cache. Returns the count removed." },
+          { cmd: "SEMNEG.STATS", desc: "hits / misses / marks / hit_rate / unique_entries." },
+          { cmd: "SEMNEG.LIST [LIMIT n]", desc: "Most-recently-marked queries with hit counts and TTL — surfaces the hottest known-misses for the dashboard." },
+        ],
+        examplesLang: "bash",
+        examples: `# Application gates SEMANTIC_GET on SEMNEG.CHECK first
+SEMNEG.CHECK "what is the airspeed velocity of an unladen swallow"
+# → 0  (never seen this miss before)
+
+SEMANTIC_GET "what is the airspeed velocity of an unladen swallow"
+# → nil  (no good match in the cache)
+
+# Application records the miss with a 5-minute TTL
+SEMNEG.MARK "what is the airspeed velocity of an unladen swallow" TTL 300
+
+# Next time the same question comes in within 5 minutes
+SEMNEG.CHECK "What is the AIRSPEED velocity of an UNLADEN swallow"
+# → 1  (whitespace + case normalized; saves the O(N) scan)`,
+      },
+      {
+        id: "promptanalytics",
+        title: "Prompt fingerprinting + clustering",
+        blurb: (
+          <>
+            Group prompts by a normalization-robust fingerprint to answer
+            questions like "of every prompt sent today, what are the top 20
+            templates with samples?" Useful for cost analysis,
+            prompt-injection variant detection, and cache-warm tuning. The
+            fingerprint normalizes whitespace, case, soft punctuation, runs
+            of digits ("user 12345" hashes the same as "user 99999"), and
+            URLs. Sub-microsecond per call — cheap enough to record before
+            every LLM request.
+          </>
+        ),
+        commands: [
+          { cmd: "PROMPT.FINGERPRINT text", desc: "Compute the fingerprint hash. Pure (no state mutation) — useful when you want to bucket prompts client-side." },
+          { cmd: "PROMPT.RECORD text", desc: "Bump the cluster counter for this prompt's fingerprint. Returns the fingerprint." },
+          { cmd: "PROMPT.GROUPS [LIMIT n]", desc: "Top-N most-frequent fingerprints with counts, first/last seen, and one example prompt per cluster." },
+          { cmd: "PROMPT.SAMPLE fingerprint", desc: "Return the canonical example prompt stored for a fingerprint, or nil." },
+          { cmd: "PROMPT.STATS", desc: "total_records / unique_groups." },
+          { cmd: "PROMPT.RESET_ANALYTICS", desc: "Wipe every cluster + counters. (PROMPT.SET / PROMPT.GET versioned templates are unaffected.)" },
+        ],
+        examplesLang: "bash",
+        examples: `# Production app records every incoming prompt
+PROMPT.RECORD "Find user 12345 in the system please"
+PROMPT.RECORD "find user 67890 in the system PLEASE"
+PROMPT.RECORD "find user 11111 in the system please"
+
+# Top clusters surface the dominant template
+PROMPT.GROUPS LIMIT 5
+# 1) fingerprint=ab12cd34… count=3 sample="Find user 12345 in the system please"
+
+# Same fingerprint regardless of case + digit values
+PROMPT.FINGERPRINT "FIND USER 99999 IN THE SYSTEM"
+# → ab12cd34…  (matches the cluster above)`,
+      },
     ],
   },
 
