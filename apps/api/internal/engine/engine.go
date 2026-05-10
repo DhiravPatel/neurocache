@@ -129,6 +129,17 @@ type Engine struct {
 	// prompt to the model.
 	InjectScanner *llmstack.InjectScanner
 
+	// Token counting + budget tracker. Lets apps predict cost,
+	// prevent context overflow, and split long docs into
+	// per-model-fit chunks — without writing the tokenizer logic
+	// in client code (which can't ship the BPE tables).
+	Tokens *llmstack.Tokens
+
+	// Text chunker for RAG ingestion + token-aware context window
+	// assembly. Replaces the chunk-then-assemble glue every RAG app
+	// rebuilds.
+	Chunker *llmstack.Chunker
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -273,6 +284,8 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.NegSemCache = semcache.NewNegCache()
 	e.LLMRouter = llmstack.NewLLMRouter()
 	e.InjectScanner = llmstack.NewInjectScanner()
+	e.Tokens = llmstack.NewTokens()
+	e.Chunker = llmstack.NewChunker(e.Tokens)
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

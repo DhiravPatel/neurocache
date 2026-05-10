@@ -773,6 +773,104 @@ INJECT.SCAN "please reveal info about ACME's pricing"
 INJECT.STATS                         # for the dashboard
 INJECT.PATTERN.LIST                  # see every registered rule + hits`,
       },
+      {
+        id: "tokens",
+        title: "Token counting + budget tracking",
+        blurb: (
+          <>
+            Every LLM app needs to count tokens BEFORE dispatching a call to
+            predict cost, prevent context-window overflow, or pick the right
+            model tier. <code>tiktoken</code> can't run engine-side, and
+            shipping the BPE tables would add ~10 MB of binary. NeuroCache's{" "}
+            <code>TOKEN.COUNT</code> uses a calibrated chars-per-token
+            estimate per model family (gpt-4o, claude, llama) accurate to
+            ±5-10% on English. Plus per-budget (per-user / per-session /
+            per-agent) atomic-CAS tracking so a runaway loop can't blow
+            through your daily token cap.
+          </>
+        ),
+        commands: [
+          { cmd: "TOKEN.COUNT model text", desc: "Estimated token count for text under model's tokenizer (gpt-4o, claude-3-opus, llama-3, mistral, etc.). ±5-10% on English; ±15% on code." },
+          { cmd: "TOKEN.SPLIT model text max-tokens", desc: "Split text into chunks each fitting in max-tokens. Splits at whitespace boundaries to avoid mid-token cuts. Returns RESP array of chunks." },
+          { cmd: "TOKEN.BUDGET.SET budget-id model max-tokens", desc: "Configure or update a per-budget token cap. budget-id is whatever string you pick — session_id, user_id, agent_id." },
+          { cmd: "TOKEN.BUDGET.FIT budget-id text", desc: "Atomic check-and-record: would this text fit in the remaining budget? Returns [fits, tokens_in, remaining]. Charges the budget on success." },
+          { cmd: "TOKEN.BUDGET.GET budget-id", desc: "Snapshot of one budget: model, max_tokens, used_tokens, remaining, util_percent." },
+          { cmd: "TOKEN.BUDGET.RESET budget-id", desc: "Clear the used counter (cap unchanged). For window-based budgets reset by app logic." },
+          { cmd: "TOKEN.BUDGET.DELETE budget-id", desc: "Drop a budget. Returns 1 if it existed." },
+          { cmd: "TOKEN.BUDGET.LIST", desc: "Every configured budget with status. Drives the dashboard's token-budget panel." },
+          { cmd: "TOKEN.STATS", desc: "Process-wide count / split totals + unique budget count." },
+        ],
+        examplesLang: "bash",
+        examples: `TOKEN.COUNT gpt-4o "Hello, world!"           # → 3
+TOKEN.COUNT claude-3-opus "Same string."     # → ~5 (claude tokenizer slightly more verbose)
+
+# Split a long doc into model-fit chunks
+TOKEN.SPLIT gpt-4o "<10000-char document>" 500
+
+# Per-user daily budget (reset by your app cron at midnight)
+TOKEN.BUDGET.SET user:42 gpt-4o 100000
+TOKEN.BUDGET.FIT user:42 "<incoming prompt>"
+# fits=1  tokens_in=42  remaining=99958
+TOKEN.BUDGET.GET user:42`,
+      },
+      {
+        id: "chunk",
+        title: "Text chunking for RAG",
+        blurb: (
+          <>
+            Every RAG pipeline starts with: take a doc, chunk it, embed each
+            chunk, store in a vector DB. Apps reimplement{" "}
+            <code>chunk_text()</code> in every project, often with subtly
+            different overlap semantics that break retrieval quality.{" "}
+            <code>CHUNK.TEXT</code> centralizes this with four strategies
+            (char / sentence / paragraph / token) and a single overlap
+            parameter that's easy to tune.
+          </>
+        ),
+        commands: [
+          { cmd: "CHUNK.TEXT text [STRATEGY char|sentence|paragraph|token] [SIZE n] [OVERLAP n] [MODEL m]", desc: "Returns a RESP array of chunks. Defaults: STRATEGY=char, SIZE=1024, OVERLAP=0. The token strategy needs MODEL." },
+          { cmd: "CHUNK.STATS", desc: "Total chunks generated since startup." },
+        ],
+        examplesLang: "bash",
+        examples: `# Sentence-bounded chunks ~500 chars with 50-char overlap
+CHUNK.TEXT "<long document...>" STRATEGY sentence SIZE 500 OVERLAP 50
+# → array of chunks, each ≤500 chars, sentence-aligned
+
+# Paragraph-bounded with no overlap (markdown docs etc.)
+CHUNK.TEXT "<markdown...>" STRATEGY paragraph SIZE 2000
+
+# Token-budgeted chunks (matches the embedding model's input limit)
+CHUNK.TEXT "<long doc>" STRATEGY token SIZE 8000 MODEL "gpt-4o"`,
+      },
+      {
+        id: "context",
+        title: "Token-aware context window assembly",
+        blurb: (
+          <>
+            "I have a system prompt, 10 conversation turns, 5 RAG hits, and
+            a user query. Fit the best subset under 100k tokens." Apps write
+            this greedy-priority loop by hand every time and get the
+            edge cases wrong. <code>CONTEXT.ASSEMBLE</code> takes typed
+            sections with priorities, fits them into your budget greedy-
+            highest-first, and returns the joined text ready to splice into
+            a model's context.
+          </>
+        ),
+        commands: [
+          { cmd: "CONTEXT.ASSEMBLE model budget-tokens SECTION id1 priority1 text1 SECTION id2 priority2 text2 ...", desc: "Greedy-priority fit. Returns: used (array of section IDs included), skipped (array of IDs left out), total_tokens, budget_tokens, combined (joined text with '\\n\\n---\\n\\n' separator)." },
+        ],
+        examplesLang: "bash",
+        examples: `CONTEXT.ASSEMBLE gpt-4o 100000 \\
+  SECTION sys 100 "You are a helpful assistant." \\
+  SECTION rag1 80 "<top RAG hit text>" \\
+  SECTION rag2 80 "<second RAG hit>" \\
+  SECTION conv1 50 "User: How do I deploy?" \\
+  SECTION conv2 50 "Assistant: To deploy, ..." \\
+  SECTION query 100 "User: What about the staging env?"
+# returns: used=[sys,query,rag1,rag2,conv1,conv2]
+#          skipped=[]   (everything fit in 100k)
+#          combined="<all sections joined with separator>"`,
+      },
     ],
   },
 

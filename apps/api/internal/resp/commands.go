@@ -416,6 +416,16 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"INJECT.PATTERN.REMOVE", "INJECT.PATTERN.LIST",
 		"INJECT.STATS", "INJECT.RESET":
 		c.injectCmd(strings.TrimPrefix(cmd, "INJECT."), args)
+	case "TOKEN.COUNT", "TOKEN.SPLIT",
+		"TOKEN.BUDGET.SET", "TOKEN.BUDGET.FIT",
+		"TOKEN.BUDGET.GET", "TOKEN.BUDGET.RESET",
+		"TOKEN.BUDGET.DELETE", "TOKEN.BUDGET.LIST",
+		"TOKEN.STATS":
+		c.tokenCmd(strings.TrimPrefix(cmd, "TOKEN."), args)
+	case "CHUNK.TEXT", "CHUNK.STATS":
+		c.chunkCmd(strings.TrimPrefix(cmd, "CHUNK."), args)
+	case "CONTEXT.ASSEMBLE":
+		c.contextAssembleCmd(args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

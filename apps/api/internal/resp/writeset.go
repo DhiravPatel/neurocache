@@ -110,6 +110,13 @@ var writeCommands = map[string]bool{
 	"LLM.ROUTE.SET": true, "LLM.ROUTE.FORGET": true,
 	"INJECT.PATTERN.ADD": true, "INJECT.PATTERN.REMOVE": true, "INJECT.RESET": true,
 
+	// Token budgets — config + counters survive restart so an
+	// established daily/session budget isn't blown away on engine
+	// recovery. TOKEN.COUNT / TOKEN.SPLIT / CHUNK.TEXT /
+	// CONTEXT.ASSEMBLE are pure functions — never in the writeset.
+	"TOKEN.BUDGET.SET": true, "TOKEN.BUDGET.FIT": true,
+	"TOKEN.BUDGET.RESET": true, "TOKEN.BUDGET.DELETE": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
