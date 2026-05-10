@@ -24,6 +24,7 @@ mod proxy;
 mod resp;
 mod server;
 mod store;
+mod zset;
 
 use std::sync::Arc;
 

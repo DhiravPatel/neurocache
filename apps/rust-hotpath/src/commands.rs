@@ -541,6 +541,655 @@ pub async fn spop<W: AsyncWriteExt + Unpin>(
     }
 }
 
+// ─── sorted sets ─────────────────────────────────────────────────
+
+pub async fn zadd<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    // ZADD key score1 member1 [score2 member2 ...]
+    if argv.len() < 4 || (argv.len() - 2) % 2 != 0 {
+        return write_err(w, "wrong number of arguments for 'zadd'").await;
+    }
+    let mut pairs = Vec::with_capacity((argv.len() - 2) / 2);
+    for i in (2..argv.len()).step_by(2) {
+        let score = match parse_float(&argv[i]) {
+            Some(f) => f,
+            None => return write_err(w, "value is not a valid float").await,
+        };
+        pairs.push((score, argv[i + 1].to_vec()));
+    }
+    match store.zadd(&argv[1], &pairs) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zscore<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'zscore'").await;
+    }
+    match store.zscore(&argv[1], &argv[2]) {
+        Ok(Some(s)) => write_bulk(w, crate::zset::format_score(s).as_bytes()).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zcard<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'zcard'").await;
+    }
+    match store.zcard(&argv[1]) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zincrby<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'zincrby'").await;
+    }
+    let delta = match parse_float(&argv[2]) {
+        Some(f) => f,
+        None => return write_err(w, "value is not a valid float").await,
+    };
+    match store.zincrby(&argv[1], delta, &argv[3]) {
+        Ok(s) => write_bulk(w, crate::zset::format_score(s).as_bytes()).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zrange<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'zrange'").await;
+    }
+    let start = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let stop = match parse_signed(&argv[3]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let with_scores = argv.iter().skip(4).any(|b| {
+        b.eq_ignore_ascii_case(b"WITHSCORES")
+    });
+    match store.zrange(&argv[1], start, stop, with_scores) {
+        Ok(items) => {
+            write_array_header(w, items.len() as i64).await?;
+            for v in items {
+                write_bulk(w, &v).await?;
+            }
+            Ok(())
+        }
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zrem<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'zrem'").await;
+    }
+    let members: Vec<&[u8]> = argv[2..].iter().map(|b| b.as_ref()).collect();
+    match store.zrem(&argv[1], &members) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zpopmin<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'zpopmin'").await;
+    }
+    let count: usize = if argv.len() >= 3 {
+        match parse_signed(&argv[2]) {
+            Some(n) if n >= 0 => n as usize,
+            _ => return write_err(w, NOT_INT_MSG).await,
+        }
+    } else {
+        1
+    };
+    match store.zpopmin(&argv[1], count) {
+        Ok(items) => {
+            write_array_header(w, items.len() as i64).await?;
+            for v in items {
+                write_bulk(w, &v).await?;
+            }
+            Ok(())
+        }
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zpopmax<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'zpopmax'").await;
+    }
+    let count: usize = if argv.len() >= 3 {
+        match parse_signed(&argv[2]) {
+            Some(n) if n >= 0 => n as usize,
+            _ => return write_err(w, NOT_INT_MSG).await,
+        }
+    } else {
+        1
+    };
+    match store.zpopmax(&argv[1], count) {
+        Ok(items) => {
+            write_array_header(w, items.len() as i64).await?;
+            for v in items {
+                write_bulk(w, &v).await?;
+            }
+            Ok(())
+        }
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+/// parse_float — minimal f64 parser via std::str::parse, with the
+/// extra Redis convention that "+inf" / "-inf" / "inf" / "nan" are
+/// accepted. Returns None on any other parse failure.
+fn parse_float(s: &[u8]) -> Option<f64> {
+    let txt = std::str::from_utf8(s).ok()?;
+    match txt.to_ascii_lowercase().as_str() {
+        "+inf" | "inf" => Some(f64::INFINITY),
+        "-inf" => Some(f64::NEG_INFINITY),
+        "nan" => None, // Redis ZADD rejects NaN
+        _ => txt.parse().ok(),
+    }
+}
+
+// ─── streams ─────────────────────────────────────────────────────
+
+pub async fn xadd<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    // XADD key id field1 value1 [field2 value2 ...]
+    if argv.len() < 5 || (argv.len() - 3) % 2 != 0 {
+        return write_err(w, "wrong number of arguments for 'xadd'").await;
+    }
+    let mut fields = Vec::with_capacity((argv.len() - 3) / 2);
+    for i in (3..argv.len()).step_by(2) {
+        fields.push((argv[i].clone(), argv[i + 1].clone()));
+    }
+    match store.xadd(&argv[1], &argv[2], fields) {
+        Ok(id) => write_bulk(w, id.as_bytes()).await,
+        Err(_) => {
+            // ID monotonicity violation or wrong type — Redis returns
+            // a generic -ERR for ID issues. WRONGTYPE handled separately.
+            write_err(w, "The ID specified in XADD is equal or smaller than the target stream top item").await
+        }
+    }
+}
+
+pub async fn xlen<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes],
+    store: &Store,
+    w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'xlen'").await;
+    }
+    match store.xlen(&argv[1]) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── string extras ───────────────────────────────────────────────
+
+pub async fn setnx<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'setnx'").await;
+    }
+    let ok = store.setnx(&argv[1], argv[2].clone());
+    write_int(w, if ok { 1 } else { 0 }).await
+}
+
+pub async fn getset<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'getset'").await;
+    }
+    match store.getset(&argv[1], argv[2].clone()) {
+        Ok(Some(v)) => write_bulk(w, &v).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn getdel<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'getdel'").await;
+    }
+    match store.getdel(&argv[1]) {
+        Ok(Some(v)) => write_bulk(w, &v).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn strlen<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'strlen'").await;
+    }
+    match store.strlen(&argv[1]) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn append<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'append'").await;
+    }
+    match store.append(&argv[1], argv[2].clone()) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn getrange<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'getrange'").await;
+    }
+    let start = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let end = match parse_signed(&argv[3]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    match store.getrange(&argv[1], start, end) {
+        Ok(b) => write_bulk(w, &b).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn bitcount<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'bitcount'").await;
+    }
+    let (start, end) = if argv.len() >= 4 {
+        let s = match parse_signed(&argv[2]) {
+            Some(n) => n,
+            None => return write_err(w, NOT_INT_MSG).await,
+        };
+        let e = match parse_signed(&argv[3]) {
+            Some(n) => n,
+            None => return write_err(w, NOT_INT_MSG).await,
+        };
+        (s, e)
+    } else {
+        (0, -1) // full string
+    };
+    match store.bitcount(&argv[1], start, end) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── hash extras ─────────────────────────────────────────────────
+
+pub async fn hmget<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'hmget'").await;
+    }
+    let fields: Vec<&[u8]> = argv[2..].iter().map(|b| b.as_ref()).collect();
+    match store.hmget(&argv[1], &fields) {
+        Ok(values) => {
+            write_array_header(w, values.len() as i64).await?;
+            for v in values {
+                match v {
+                    Some(b) => write_bulk(w, &b).await?,
+                    None => w.write_all(NIL_BULK).await?,
+                }
+            }
+            Ok(())
+        }
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn hincrby<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'hincrby'").await;
+    }
+    let delta = match parse_signed(&argv[3]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    match store.hincrby(&argv[1], &argv[2], delta) {
+        Ok(n) => write_int(w, n).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn hsetnx<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'hsetnx'").await;
+    }
+    match store.hsetnx(&argv[1], argv[2].to_vec(), argv[3].clone()) {
+        Ok(true) => write_int(w, 1).await,
+        Ok(false) => write_int(w, 0).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── zset extras ─────────────────────────────────────────────────
+
+pub async fn zrangebyscore<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'zrangebyscore'").await;
+    }
+    let min = match parse_float(&argv[2]) {
+        Some(f) => f,
+        None => return write_err(w, "min or max is not a float").await,
+    };
+    let max = match parse_float(&argv[3]) {
+        Some(f) => f,
+        None => return write_err(w, "min or max is not a float").await,
+    };
+    let with_scores = argv.iter().skip(4).any(|b| b.eq_ignore_ascii_case(b"WITHSCORES"));
+    match store.zrangebyscore(&argv[1], min, max, with_scores) {
+        Ok(items) => {
+            write_array_header(w, items.len() as i64).await?;
+            for v in items {
+                write_bulk(w, &v).await?;
+            }
+            Ok(())
+        }
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zrank<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'zrank'").await;
+    }
+    match store.zrank(&argv[1], &argv[2], false) {
+        Ok(Some(r)) => write_int(w, r as i64).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn zrevrank<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'zrevrank'").await;
+    }
+    match store.zrank(&argv[1], &argv[2], true) {
+        Ok(Some(r)) => write_int(w, r as i64).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── list extras ─────────────────────────────────────────────────
+
+pub async fn lset<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'lset'").await;
+    }
+    let idx = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    match store.lset(&argv[1], idx, argv[3].clone()) {
+        Ok(()) => w.write_all(OK).await,
+        Err(StoreError::NoSuchKey) => write_err(w, "index out of range").await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn lrem<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'lrem'").await;
+    }
+    let count = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    match store.lrem(&argv[1], count, &argv[3]) {
+        Ok(n) => write_int(w, n as i64).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn ltrim<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'ltrim'").await;
+    }
+    let start = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let stop = match parse_signed(&argv[3]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    match store.ltrim(&argv[1], start, stop) {
+        Ok(()) => w.write_all(OK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn linsert<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 5 {
+        return write_err(w, "wrong number of arguments for 'linsert'").await;
+    }
+    let before = if argv[2].eq_ignore_ascii_case(b"BEFORE") {
+        true
+    } else if argv[2].eq_ignore_ascii_case(b"AFTER") {
+        false
+    } else {
+        return write_err(w, "syntax error").await;
+    };
+    match store.linsert(&argv[1], before, &argv[3], argv[4].clone()) {
+        Ok(n) => write_int(w, n).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── set extras ──────────────────────────────────────────────────
+
+pub async fn srandmember<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'srandmember'").await;
+    }
+    match store.srandmember(&argv[1]) {
+        Ok(Some(v)) => write_bulk(w, &v).await,
+        Ok(None) => w.write_all(NIL_BULK).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+pub async fn smove<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 4 {
+        return write_err(w, "wrong number of arguments for 'smove'").await;
+    }
+    match store.smove(&argv[1], &argv[2], &argv[3]) {
+        Ok(true) => write_int(w, 1).await,
+        Ok(false) => write_int(w, 0).await,
+        Err(e) => write_store_err(w, e).await,
+    }
+}
+
+// ─── server-info / TTL ──────────────────────────────────────────
+
+pub async fn type_of<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'type'").await;
+    }
+    let t = store.type_of(&argv[1]);
+    w.write_all(b"+").await?;
+    w.write_all(t.as_bytes()).await?;
+    w.write_all(b"\r\n").await
+}
+
+pub async fn ttl<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'ttl'").await;
+    }
+    let ms = store.ttl_ms(&argv[1]);
+    let secs = if ms < 0 { ms } else { ms / 1000 };
+    write_int(w, secs).await
+}
+
+pub async fn pttl<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'pttl'").await;
+    }
+    write_int(w, store.ttl_ms(&argv[1])).await
+}
+
+pub async fn expire<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'expire'").await;
+    }
+    let secs = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let target = (now as i64).saturating_add(secs * 1000) as u64;
+    if store.expire_at_ms(&argv[1], target) {
+        write_int(w, 1).await
+    } else {
+        write_int(w, 0).await
+    }
+}
+
+pub async fn pexpire<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 3 {
+        return write_err(w, "wrong number of arguments for 'pexpire'").await;
+    }
+    let ms = match parse_signed(&argv[2]) {
+        Some(n) => n,
+        None => return write_err(w, NOT_INT_MSG).await,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let target = (now as i64).saturating_add(ms) as u64;
+    if store.expire_at_ms(&argv[1], target) {
+        write_int(w, 1).await
+    } else {
+        write_int(w, 0).await
+    }
+}
+
+pub async fn persist<W: AsyncWriteExt + Unpin>(
+    argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    if argv.len() < 2 {
+        return write_err(w, "wrong number of arguments for 'persist'").await;
+    }
+    if store.persist(&argv[1]) {
+        write_int(w, 1).await
+    } else {
+        write_int(w, 0).await
+    }
+}
+
+pub async fn dbsize<W: AsyncWriteExt + Unpin>(
+    _argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    write_int(w, store.dbsize() as i64).await
+}
+
+pub async fn randomkey<W: AsyncWriteExt + Unpin>(
+    _argv: &[Bytes], store: &Store, w: &mut W,
+) -> io::Result<()> {
+    match store.random_key() {
+        Some(k) => write_bulk(w, &k).await,
+        None => w.write_all(NIL_BULK).await,
+    }
+}
+
 // ─── reply primitives ───────────────────────────────────────────
 
 async fn write_bulk<W: AsyncWriteExt + Unpin>(w: &mut W, b: &[u8]) -> io::Result<()> {

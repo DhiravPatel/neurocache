@@ -35,6 +35,11 @@ pub struct UpstreamConn {
     /// Re-usable buffer for parsing reply frames so we don't malloc
     /// every reply.
     buf: BytesMut,
+    /// Outbox: requests serialized by send_only accumulate here until
+    /// flush_send writes the whole batch in one syscall. Pipelining
+    /// 16 XADDs through the proxy: 1 write to upstream instead of 16,
+    /// 1 fsync window instead of 16.
+    outbox: BytesMut,
 }
 
 impl UpstreamConn {
@@ -43,6 +48,7 @@ impl UpstreamConn {
             addr,
             sock: None,
             buf: BytesMut::with_capacity(8 * 1024),
+            outbox: BytesMut::with_capacity(8 * 1024),
         }
     }
 
@@ -64,54 +70,61 @@ impl UpstreamConn {
         self.sock = None;
     }
 
-    /// Forward the parsed `cmd` to upstream, read the entire RESP
-    /// reply, and write it to `client_w`. The reply may be any RESP
-    /// type (simple string, error, integer, bulk, array, nested).
-    pub async fn forward<W: AsyncWriteExt + Unpin>(
+    /// send_only — serialize the command into a per-conn outbox
+    /// buffer. Does NOT write to the socket yet — that happens on
+    /// the next flush_send call. This lets the dispatcher pipeline
+    /// many proxy sends into one write syscall.
+    ///
+    /// Returns Ok(true) when serialization succeeded. Always Ok
+    /// in practice — failure happens at flush_send time when we
+    /// actually touch the upstream socket.
+    pub async fn send_only(&mut self, cmd: &Command) -> io::Result<bool> {
+        // Pre-size the outbox slice for this command so the BytesMut
+        // grows at most once.
+        let needed = 16 + cmd.argv.iter().map(|a| a.len() + 16).sum::<usize>();
+        self.outbox.reserve(needed);
+        write_array_header(&mut self.outbox, cmd.argv.len() as i64);
+        for arg in &cmd.argv {
+            write_bulk_header(&mut self.outbox, arg.len() as i64);
+            self.outbox.extend_from_slice(arg);
+            self.outbox.extend_from_slice(b"\r\n");
+        }
+        Ok(true)
+    }
+
+    /// flush_send writes every buffered request to the upstream
+    /// socket in a single write_all. Pairs with send_only.
+    pub async fn flush_send(&mut self) -> io::Result<bool> {
+        if self.outbox.is_empty() {
+            return Ok(true);
+        }
+        // Open the upstream conn if not already; bail with false on
+        // failure so the caller surfaces -ERR.
+        if self.ensure().await.is_err() {
+            return Ok(false);
+        }
+        // Re-borrow split: take the socket and outbox separately so
+        // we can write_all(&self.outbox) without a dual mutable
+        // borrow on self.
+        let sock = self.sock.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "upstream gone")
+        })?;
+        if sock.write_all(&self.outbox).await.is_err() {
+            self.sock = None; // can't call reset() while sock is borrowed
+            self.outbox.clear();
+            return Ok(false);
+        }
+        self.outbox.clear();
+        Ok(true)
+    }
+
+    /// recv_one — read one full reply from the upstream and write it
+    /// to client_w. Pairs with send_only. Used by the proxy
+    /// dispatcher to drain pipelined replies after sending a batch.
+    pub async fn recv_one<W: AsyncWriteExt + Unpin>(
         &mut self,
-        cmd: &Command,
         client_w: &mut W,
     ) -> io::Result<()> {
-        // Serialize argv as a RESP array of bulk strings.
-        // Zero-copy from the original Bytes — we're just emitting
-        // headers + the raw arg bytes, not copying argv.
-        let mut header = BytesMut::with_capacity(64);
-        write_array_header(&mut header, cmd.argv.len() as i64);
-        let upstream = match self.ensure().await {
-            Ok(s) => s,
-            Err(_) => {
-                client_w
-                    .write_all(b"-ERR upstream unreachable\r\n")
-                    .await?;
-                return Ok(());
-            }
-        };
-        if let Err(e) = upstream.write_all(&header).await {
-            self.reset();
-            client_w
-                .write_all(format!("-ERR upstream write: {e}\r\n").as_bytes())
-                .await?;
-            return Ok(());
-        }
-        for arg in &cmd.argv {
-            let mut hdr = BytesMut::with_capacity(16);
-            write_bulk_header(&mut hdr, arg.len() as i64);
-            if upstream.write_all(&hdr).await.is_err()
-                || upstream.write_all(arg).await.is_err()
-                || upstream.write_all(b"\r\n").await.is_err()
-            {
-                self.reset();
-                client_w
-                    .write_all(b"-ERR upstream write failed\r\n")
-                    .await?;
-                return Ok(());
-            }
-        }
-
-        // Read the upstream reply, stream it to the client. We need
-        // to know how many bytes the reply is so we don't keep
-        // reading after it. Parse the leading byte to know the
-        // shape, then consume accordingly.
         match self.read_one_reply().await {
             Ok(reply) => client_w.write_all(&reply).await,
             Err(e) => {
@@ -121,6 +134,25 @@ impl UpstreamConn {
                     .await
             }
         }
+    }
+
+    /// Forward the parsed `cmd` to upstream, read the entire RESP
+    /// reply, and write it to `client_w`. Synchronous one-at-a-time
+    /// path — used as a fallback when callers don't want to manage
+    /// the pipelined send_only/flush_send/recv_one trio.
+    pub async fn forward<W: AsyncWriteExt + Unpin>(
+        &mut self,
+        cmd: &Command,
+        client_w: &mut W,
+    ) -> io::Result<()> {
+        self.send_only(cmd).await?;
+        if !self.flush_send().await? {
+            client_w
+                .write_all(b"-ERR upstream unreachable\r\n")
+                .await?;
+            return Ok(());
+        }
+        self.recv_one(client_w).await
     }
 
     /// Read a complete RESP reply from the upstream socket. Returns

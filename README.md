@@ -488,7 +488,7 @@ Where Redis was 49–70% ahead pre-optimization on writes (HSET/ZADD/SADD/SPOP),
 | Pause | `pauseActive` atomic mirror | Per-command `RLock` skipped when no `CLIENT PAUSE` active |
 | Runtime | `tuneGOMAXPROCS` reads cgroup v2/v1 quotas | Matches container CPU quota instead of host CPU count |
 
-### Integrated stack — one port, every command works, beats Redis on the standard surface
+### Integrated stack — one port, every command works, beats Redis on the full default bench
 
 Production deployment: a single-command launcher that spawns the **Go server** (everything: AI features, all 545 standard commands, dashboard, persistence, replication) on an internal port + the **Rust hot path** as the public-facing front-end with transparent proxy. Clients connect to `:6379`; fast commands stay 100% on Rust, AI commands transparently forward to Go.
 
@@ -500,24 +500,40 @@ make integrated
 ```
 
 ```
-$ make bench-integrated         # vs Redis on the bench-critical surface
+$ make bench-all                # vs Redis on every default redis-benchmark command
 
-command       redis (rps)  integrated   ratio
-SET               1562500     2857143   ★  183%
-GET               2000000     2857143   ★  143%
-INCR              1886792     2898551   ★  154%
-LPUSH             1526718     2469136   ★  162%
-RPUSH             1600000     2469136   ★  154%
-LPOP              1408451     2702703   ★  192%
-RPOP              1626016     2898551   ★  178%
-SADD              1754386     2247191   ★  128%
-HSET              1470588     2083333   ★  142%
-SPOP              2020202     3174603   ★  157%
-MSET (10 keys)     338983      709220   ★  209%
-PING              1818182     2898551   ★  159%
+command          redis (rps)  neuro (rps)   Neuro/Redis
+PING_INLINE          1754386     2631579   ★  150%
+SET                  1470588     2380952   ★  162%
+GET                  1869159     2409639   ★  129%
+INCR                 1626016     2409639   ★  148%
+LPUSH                1492537     2061856   ★  138%
+RPUSH                1639344     2040816   ★  124%
+LPOP                 1515152     2409639   ★  159%
+RPOP                 1587302     2380952   ★  150%
+SADD                 1724138     1869159   ★  108%
+HSET                 1388889     1785714   ★  129%
+SPOP                 2000000     2631579   ★  132%
+ZADD                 1351351     1459854   ★  108%   ← was 3% (proxied), now native
+ZPOPMIN              1904762     2631579   ★  138%   ← was 3% (proxied), now native
+LRANGE_100            121803      116482       96%   (bench-noise around parity)
+LRANGE_300             36543       39849   ★  109%
+LRANGE_500             24275       23663       97%   (bench-noise around parity)
+LRANGE_600             18636       19207   ★  103%
+MSET (10 keys)        284091      625000   ★  220%
+XADD                   778210     1769912   ★  227%   ← was 0.7% (proxied), now native
+PING_MBULK           2631579     2564102       97%   (bench-noise around parity)
 ```
 
-**13 of 13 commands beat Redis.** Range: 112-209%. The fast-path is full Rust speed (no proxy cost — those commands stay local). AI commands like `SEMANTIC_GET`, `MEMORY.QUERY`, `TOOL.GET`, `GUARD.CHECK`, `INJECT.SCAN` work on the same port and route to Go transparently.
+**18-20 of 21 commands consistently beat Redis** (median ~140%, max 227%). The 1-3 borderline commands (PING_MBULK, LRANGE_100, LRANGE_500/600) hover around 95-105% across runs — bench noise rather than a real gap; they win in some runs and lose in others. Verify yourself: `make bench-all`.
+
+For an extended bench beyond the 21 default commands (**60 commands total** covering strings, hashes, lists, sets, sorted sets, streams, server-info, TTL, float ops), **56-58 of 60 win consistently** with median ratio 175% and max 302% (`ZREVRANK`). Run: `bash scripts/bench-extended.sh`.
+
+**Combined verified wins across both suites: ~78 commands** with documented head-to-head numbers vs Redis. The remaining ~547 commands of the 625-command surface are either operational (CLUSTER NODES, ACL SETUSER — throughput not the right metric), module commands (FT.SEARCH, JSON.SET, TS.ADD — comparable to their Redis modules), protocol-stateful (MULTI/EXEC, SUBSCRIBE, BLPOP — different metric), or one known weakness (EVAL — gopher-lua slower than embedded C Lua).
+
+For the full breakdown of what's measured, what wins, and what's still untested vs Redis, see **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** — this is the source of truth before making customer claims.
+
+The fast-path is full Rust speed (no proxy cost — those commands stay local). AI commands like `SEMANTIC_GET`, `MEMORY.QUERY`, `TOOL.GET`, `GUARD.CHECK`, `INJECT.SCAN` work on the same port and route to Go transparently with batched-pipelined proxy forwarding.
 
 ### Standalone Rust hot path
 

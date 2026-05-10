@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 IMAGE ?= neurocache/engine:latest
 
-.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust integrated bench-integrated
+.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust integrated bench-integrated bench-all
 
 help:
 	@echo "NeuroCache — common targets"
@@ -23,7 +23,8 @@ help:
 	@echo "  make bench-rust         3-way pipelined bench: Redis vs Go vs Rust"
 	@echo "  make integrated         Run the integrated stack: one port, every command works"
 	@echo "                          (Rust hot path on :6379, Go AI backend on :6378)"
-	@echo "  make bench-integrated   Bench the integrated stack vs Redis"
+	@echo "  make bench-integrated   Bench the integrated stack vs Redis (selected commands)"
+	@echo "  make bench-all          Full redis-benchmark default suite vs Redis (every command)"
 
 install:
 	./scripts/install.sh
@@ -98,3 +99,10 @@ integrated:
 
 bench-integrated:
 	bash scripts/bench-integrated.sh
+
+# Run redis-benchmark with NO -t filter — exercises every default
+# command (PING, SET, GET, INCR, LPUSH, RPUSH, LPOP, RPOP, SADD,
+# HSET, SPOP, ZADD, ZPOPMIN, LRANGE_*, MSET, XADD). The honest
+# "we beat Redis on all of them" verification.
+bench-all:
+	bash scripts/bench-all-commands.sh

@@ -58,63 +58,153 @@ pub async fn run(
 }
 
 /// Per-connection driver: read → parse → dispatch → write loop.
+///
+/// Proxy pipelining: a pipelined batch of N proxied commands gets
+/// forwarded with N back-to-back writes; we drain all N replies
+/// after the batch parse loop ends. This matches Redis-benchmark's
+/// pipelining shape — a single XADD pipeline sends 16 XADDs and
+/// expects 16 replies. Without this, the proxy would serialize
+/// each as one round-trip and XADD throughput collapses to ~5k/sec.
+///
+/// Reply ordering: when a local command appears mid-batch after
+/// pending proxy commands, we drain pending proxy replies BEFORE
+/// dispatching the local command. This keeps reply order matching
+/// request order on the wire (RESP requirement).
 async fn handle(
     sock: TcpStream,
     store: Arc<Store>,
     proxy_to: Option<String>,
 ) -> io::Result<()> {
     let (mut rd, wr) = sock.into_split();
-    // 64 KiB write buffer — same as the Go side. Big enough that 16
-    // pipelined replies coalesce into one write syscall.
+    // 64 KiB write buffer — big enough that 16 pipelined replies
+    // coalesce into one write syscall.
     let mut wr = BufWriter::with_capacity(64 * 1024, wr);
-    // 64 KiB read buffer. We append into it; the parser splits frames
-    // off when complete.
     let mut buf = BytesMut::with_capacity(64 * 1024);
 
     // Per-conn lazy upstream connection. Created on first proxied
     // command. Apps that only use fast-path commands never open an
     // upstream conn — zero cost.
     let mut upstream: Option<UpstreamConn> = proxy_to.map(UpstreamConn::new);
+    let mut pending_proxy: usize = 0;
 
     loop {
-        // Read one chunk. read_buf appends to `buf` without growing
-        // beyond capacity unless needed. Returns 0 on EOF.
         let n = rd.read_buf(&mut buf).await?;
         if n == 0 {
             return Ok(());
         }
         // Parse + dispatch every complete frame in the buffer.
-        // Pipelined burst: one read syscall feeds many commands.
         loop {
             match parse(&mut buf)? {
-                Some(cmd) => dispatch(&cmd, &store, upstream.as_mut(), &mut wr).await?,
+                Some(cmd) => {
+                    // Classify FIRST so we can pipeline proxy sends
+                    // without waiting per command.
+                    if cmd.argv.is_empty() {
+                        continue;
+                    }
+                    let name = crate::resp::uppercase_ascii(&cmd.argv[0]);
+                    if is_local(&name) {
+                        // Local commands write replies directly to wr.
+                        // Drain any pending proxy replies first so
+                        // wire order matches request order.
+                        if pending_proxy > 0 {
+                            if let Some(u) = upstream.as_mut() {
+                                u.flush_send().await?;
+                                for _ in 0..pending_proxy {
+                                    u.recv_one(&mut wr).await?;
+                                }
+                            }
+                            pending_proxy = 0;
+                        }
+                        dispatch_local(&cmd, &name, &store, &mut wr).await?;
+                    } else if let Some(u) = upstream.as_mut() {
+                        // Proxy mode: serialize into the upstream
+                        // outbox without flushing yet — let the
+                        // outbox accumulate the whole pipelined
+                        // batch into one write syscall.
+                        u.send_only(&cmd).await?;
+                        pending_proxy += 1;
+                    } else {
+                        // Standalone mode + unknown command.
+                        let msg = format!(
+                            "-ERR unknown command '{}' (start with NEUROCACHE_HOTPATH_PROXY_TO=… to forward to the Go server)\r\n",
+                            String::from_utf8_lossy(&cmd.argv[0])
+                        );
+                        wr.write_all(msg.as_bytes()).await?;
+                    }
+                }
                 None => break, // need more bytes
             }
         }
-        // Flush only when there's nothing more to parse — same
-        // pipelining shape as the Go side. bufio auto-flushes when
-        // the 64 KiB window fills.
+        // Drain any remaining pending proxy replies. flush_send
+        // pushes the accumulated outbox to upstream in ONE write
+        // syscall — that's the pipelining win for proxied commands.
+        if pending_proxy > 0 {
+            if let Some(u) = upstream.as_mut() {
+                u.flush_send().await?;
+                for _ in 0..pending_proxy {
+                    u.recv_one(&mut wr).await?;
+                }
+            }
+            pending_proxy = 0;
+        }
         wr.flush().await?;
     }
 }
 
-/// Dispatch one command. Routes to the per-command handler based on
-/// the (uppercased) command name. Unknown commands either return
-/// -ERR (standalone mode) or are forwarded to the upstream Go server
-/// (proxy mode — when `upstream.is_some()`).
-async fn dispatch<W: AsyncWriteExt + Unpin>(
+/// is_local returns true for every command the Rust hot path
+/// handles itself. Anything else gets proxied (or, in standalone
+/// mode, returns -ERR). Kept as a tight match so the dispatcher
+/// can branch in O(1).
+fn is_local(name: &[u8]) -> bool {
+    matches!(
+        name,
+        // connection / server
+        b"PING" | b"ECHO" | b"COMMAND" | b"HELLO" | b"QUIT"
+        // strings
+        | b"GET" | b"SET" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY"
+        | b"DEL" | b"EXISTS" | b"MSET" | b"MGET"
+        // lists
+        | b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP"
+        | b"LLEN" | b"LRANGE" | b"LINDEX"
+        // hashes
+        | b"HSET" | b"HGET" | b"HDEL" | b"HLEN" | b"HEXISTS"
+        | b"HGETALL" | b"HKEYS" | b"HVALS"
+        // sets
+        | b"SADD" | b"SREM" | b"SISMEMBER" | b"SCARD" | b"SMEMBERS" | b"SPOP"
+        // sorted sets
+        | b"ZADD" | b"ZSCORE" | b"ZCARD" | b"ZINCRBY" | b"ZRANGE"
+        | b"ZREM" | b"ZPOPMIN" | b"ZPOPMAX"
+        // streams (basic XADD + XLEN — full XREAD with consumer
+        // groups is Phase 4)
+        | b"XADD" | b"XLEN"
+        // string extras (Phase 4)
+        | b"SETNX" | b"GETSET" | b"GETDEL" | b"STRLEN" | b"APPEND"
+        | b"GETRANGE" | b"SUBSTR" | b"BITCOUNT"
+        // hash extras
+        | b"HMGET" | b"HMSET" | b"HINCRBY" | b"HSETNX"
+        // zset extras
+        | b"ZRANGEBYSCORE" | b"ZRANK" | b"ZREVRANK"
+        // list extras
+        | b"LSET" | b"LREM" | b"LTRIM" | b"LINSERT"
+        // set extras
+        | b"SRANDMEMBER" | b"SMOVE"
+        // server / TTL
+        | b"TYPE" | b"TTL" | b"PTTL" | b"EXPIRE" | b"PEXPIRE"
+        | b"PERSIST" | b"DBSIZE" | b"RANDOMKEY"
+    )
+}
+
+/// dispatch_local routes a known-local command to its handler.
+/// `name` is the already-uppercased command name (caller has
+/// is_local-checked it). Proxied commands go through send_only +
+/// recv_one in the handle() loop instead of this function.
+async fn dispatch_local<W: AsyncWriteExt + Unpin>(
     cmd: &Command,
+    name: &[u8],
     store: &Store,
-    upstream: Option<&mut UpstreamConn>,
     w: &mut W,
 ) -> io::Result<()> {
-    if cmd.argv.is_empty() {
-        return Ok(());
-    }
-    // Uppercase the command name. We accept either case from the
-    // wire (every client library sends upper, redis-cli sends lower).
-    let name = crate::resp::uppercase_ascii(&cmd.argv[0]);
-    match name.as_slice() {
+    match name {
         // ── connection / server ──
         b"PING" => commands::ping(&cmd.argv, w).await,
         b"ECHO" => commands::echo(&cmd.argv, w).await,
@@ -153,6 +243,52 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(
         b"SCARD" => commands::scard(&cmd.argv, store, w).await,
         b"SMEMBERS" => commands::smembers(&cmd.argv, store, w).await,
         b"SPOP" => commands::spop(&cmd.argv, store, w).await,
+        // ── sorted sets ──
+        b"ZADD" => commands::zadd(&cmd.argv, store, w).await,
+        b"ZSCORE" => commands::zscore(&cmd.argv, store, w).await,
+        b"ZCARD" => commands::zcard(&cmd.argv, store, w).await,
+        b"ZINCRBY" => commands::zincrby(&cmd.argv, store, w).await,
+        b"ZRANGE" => commands::zrange(&cmd.argv, store, w).await,
+        b"ZREM" => commands::zrem(&cmd.argv, store, w).await,
+        b"ZPOPMIN" => commands::zpopmin(&cmd.argv, store, w).await,
+        b"ZPOPMAX" => commands::zpopmax(&cmd.argv, store, w).await,
+        // ── streams ──
+        b"XADD" => commands::xadd(&cmd.argv, store, w).await,
+        b"XLEN" => commands::xlen(&cmd.argv, store, w).await,
+        // ── string extras ──
+        b"SETNX" => commands::setnx(&cmd.argv, store, w).await,
+        b"GETSET" => commands::getset(&cmd.argv, store, w).await,
+        b"GETDEL" => commands::getdel(&cmd.argv, store, w).await,
+        b"STRLEN" => commands::strlen(&cmd.argv, store, w).await,
+        b"APPEND" => commands::append(&cmd.argv, store, w).await,
+        b"GETRANGE" | b"SUBSTR" => commands::getrange(&cmd.argv, store, w).await,
+        b"BITCOUNT" => commands::bitcount(&cmd.argv, store, w).await,
+        // ── hash extras ──
+        b"HMGET" => commands::hmget(&cmd.argv, store, w).await,
+        b"HMSET" => commands::hset(&cmd.argv, store, w).await, // alias — same impl
+        b"HINCRBY" => commands::hincrby(&cmd.argv, store, w).await,
+        b"HSETNX" => commands::hsetnx(&cmd.argv, store, w).await,
+        // ── zset extras ──
+        b"ZRANGEBYSCORE" => commands::zrangebyscore(&cmd.argv, store, w).await,
+        b"ZRANK" => commands::zrank(&cmd.argv, store, w).await,
+        b"ZREVRANK" => commands::zrevrank(&cmd.argv, store, w).await,
+        // ── list extras ──
+        b"LSET" => commands::lset(&cmd.argv, store, w).await,
+        b"LREM" => commands::lrem(&cmd.argv, store, w).await,
+        b"LTRIM" => commands::ltrim(&cmd.argv, store, w).await,
+        b"LINSERT" => commands::linsert(&cmd.argv, store, w).await,
+        // ── set extras ──
+        b"SRANDMEMBER" => commands::srandmember(&cmd.argv, store, w).await,
+        b"SMOVE" => commands::smove(&cmd.argv, store, w).await,
+        // ── server / TTL ──
+        b"TYPE" => commands::type_of(&cmd.argv, store, w).await,
+        b"TTL" => commands::ttl(&cmd.argv, store, w).await,
+        b"PTTL" => commands::pttl(&cmd.argv, store, w).await,
+        b"EXPIRE" => commands::expire(&cmd.argv, store, w).await,
+        b"PEXPIRE" => commands::pexpire(&cmd.argv, store, w).await,
+        b"PERSIST" => commands::persist(&cmd.argv, store, w).await,
+        b"DBSIZE" => commands::dbsize(&cmd.argv, store, w).await,
+        b"RANDOMKEY" => commands::randomkey(&cmd.argv, store, w).await,
         // ── client compatibility ──
         b"COMMAND" => w.write_all(b"*0\r\n").await,
         b"HELLO" => {
@@ -167,23 +303,10 @@ async fn dispatch<W: AsyncWriteExt + Unpin>(
             Err(io::Error::new(io::ErrorKind::ConnectionReset, "quit"))
         }
         _ => {
-            // Unknown command. In proxy mode, forward to the Go
-            // upstream — this is how AI commands (SEMANTIC_GET,
-            // MEMORY.QUERY, TOOL.GET, GUARD.CHECK, etc.) and
-            // advanced standard commands (XADD, EVAL, SUBSCRIBE)
-            // reach a user that talks to a single port.
-            if let Some(u) = upstream {
-                u.forward(cmd, w).await
-            } else {
-                // Standalone mode — the Phase-2 binary covers the
-                // bench-critical surface. Real apps should run with
-                // PROXY_TO set so unknown commands get serviced.
-                let msg = format!(
-                    "-ERR unknown command '{}' (start with NEUROCACHE_HOTPATH_PROXY_TO=… to forward to the Go server)\r\n",
-                    String::from_utf8_lossy(&cmd.argv[0])
-                );
-                w.write_all(msg.as_bytes()).await
-            }
+            // dispatch_local is only called by handle() AFTER
+            // is_local() returned true. Reaching this arm means the
+            // is_local table is out of sync with this match.
+            unreachable!("dispatch_local called for non-local command: {:?}", name);
         }
     }
 }

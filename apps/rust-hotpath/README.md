@@ -73,7 +73,7 @@ compile to one instruction with no scheduler overhead.
 
 ---
 
-## What's implemented (Phase 2 — full bench surface)
+## What's implemented (Phase 3 — every redis-benchmark command)
 
 **Strings:** `GET` `SET` `INCR` `DECR` `INCRBY` `DECRBY` `DEL` `EXISTS` `MSET` `MGET`
 
@@ -83,7 +83,13 @@ compile to one instruction with no scheduler overhead.
 
 **Sets:** `SADD` `SREM` `SISMEMBER` `SCARD` `SMEMBERS` `SPOP`
 
+**Sorted sets:** `ZADD` `ZSCORE` `ZCARD` `ZINCRBY` `ZRANGE` `ZREM` `ZPOPMIN` `ZPOPMAX`
+
+**Streams (basic):** `XADD` `XLEN`
+
 **Connection:** `PING` `ECHO` `COMMAND` `HELLO` `QUIT`
+
+**Proxy fallback:** every other command (AI primitives, advanced standard commands like `EVAL`/`SUBSCRIBE`/`XREAD`-with-groups) transparently forwards to the Go server with batched-pipelined upstream writes — so even proxied commands stay fast under load.
 
 Anything not listed returns `-ERR unknown command 'X'` with a list of
 supported commands so callers fail fast instead of hanging. The full
