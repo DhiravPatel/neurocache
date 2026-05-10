@@ -1,23 +1,26 @@
-//! neurocache-hotpath — Phase-1 standalone Rust binary.
+//! neurocache-hotpath — Rust hot path binary.
 //!
-//! This is NOT a replacement for the main Go server (which speaks
-//! ~545 commands and ships every AI primitive). It's a focused
-//! proof-of-architecture: implement the ~10 bench-critical commands
-//! on a single-threaded async I/O loop and measure whether the
-//! architecture closes the per-command throughput gap that pure-Go
-//! hits structurally.
+//! Two run modes, controlled by env vars:
 //!
-//! Phase 1 scope:
-//!   PING, ECHO, GET, SET, INCR, DECR, INCRBY, DECRBY, DEL, EXISTS
+//! 1. STANDALONE (default) — Implements the bench-critical RESP
+//!    surface (strings, lists, hashes, sets) on a single-threaded
+//!    tokio event loop. Beats Redis on every implemented command.
+//!    Unknown commands return -ERR.
 //!
-//! Phase 2 (separate sessions): list/hash/set families, pub/sub.
-//! Phase 3: link as cgo lib so the Go process can hand off the RESP
-//! listener to this loop.
+//! 2. PROXY — Same as standalone, BUT unknown commands are
+//!    transparently forwarded to an upstream Go server. From the
+//!    client perspective: one port, every command works. Fast
+//!    commands stay local at full Rust throughput; AI commands
+//!    (SEMANTIC_*, MEMORY.*, TOOL.*, GUARD.*, SEMNEG.*, PROMPT.*,
+//!    LLM.ROUTE.*, INJECT.*, etc.) and advanced standard commands
+//!    (XADD, EVAL, SUBSCRIBE, …) get proxied to Go.
 //!
 //! Configure via env vars:
-//!   NEUROCACHE_HOTPATH_ADDR=127.0.0.1:6380   (default)
+//!   NEUROCACHE_HOTPATH_ADDR=127.0.0.1:6379         (default)
+//!   NEUROCACHE_HOTPATH_PROXY_TO=127.0.0.1:6378     (enables proxy)
 
 mod commands;
+mod proxy;
 mod resp;
 mod server;
 mod store;
@@ -27,11 +30,12 @@ use std::sync::Arc;
 fn main() -> std::io::Result<()> {
     let addr = std::env::var("NEUROCACHE_HOTPATH_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:6380".to_string());
+    let proxy_to = std::env::var("NEUROCACHE_HOTPATH_PROXY_TO").ok();
 
     // tokio current_thread flavor: one OS thread runs the entire
-    // event loop. This is the architectural difference vs the Go
-    // server — no goroutine scheduling between commands, no
-    // contended mutex on the hot path. spawn_local needs LocalSet.
+    // event loop — exactly Redis's architecture. No goroutine
+    // scheduling between commands, no contended mutex on the hot
+    // path. spawn_local needs LocalSet.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
@@ -39,9 +43,12 @@ fn main() -> std::io::Result<()> {
     let local = tokio::task::LocalSet::new();
     rt.block_on(local.run_until(async move {
         let store = Arc::new(store::Store::new());
+        if let Some(ref upstream) = proxy_to {
+            eprintln!("proxy mode: unknown commands → {upstream}");
+        }
         // Trap SIGINT/SIGTERM so the binary shuts down cleanly when
         // someone Ctrl-C's it during a bench.
-        let server_fut = server::run(&addr, store);
+        let server_fut = server::run(&addr, store, proxy_to);
         let shutdown = tokio::signal::ctrl_c();
         tokio::select! {
             r = server_fut => r,

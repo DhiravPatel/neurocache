@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 IMAGE ?= neurocache/engine:latest
 
-.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust
+.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust integrated bench-integrated
 
 help:
 	@echo "NeuroCache — common targets"
@@ -17,10 +17,13 @@ help:
 	@echo "  make clean        Remove build artefacts"
 	@echo "  make test         Run backend + web tests"
 	@echo ""
-	@echo "  Rust hot path (Phase 1 — beats Redis on PING/GET/SET/INCR/DEL/EXISTS)"
+	@echo "  Rust hot path + integrated stack"
 	@echo "  make rust-hotpath       Build the standalone Rust binary"
 	@echo "  make rust-hotpath-test  Run Rust unit tests"
 	@echo "  make bench-rust         3-way pipelined bench: Redis vs Go vs Rust"
+	@echo "  make integrated         Run the integrated stack: one port, every command works"
+	@echo "                          (Rust hot path on :6379, Go AI backend on :6378)"
+	@echo "  make bench-integrated   Bench the integrated stack vs Redis"
 
 install:
 	./scripts/install.sh
@@ -83,3 +86,15 @@ rust-hotpath-test:
 
 bench-rust:
 	bash scripts/bench-rust-vs-go-vs-redis.sh
+
+# ─── Integrated stack — one port, every command works ────────────────────
+# Spawns the Go server on an internal port and the Rust hot path as the
+# public-facing front-end with proxy mode enabled. From the client
+# perspective: connect to :6379, get fast Rust hot path for standard
+# commands AND full AI feature surface, all transparently routed.
+
+integrated:
+	bash scripts/neurocache-integrated.sh
+
+bench-integrated:
+	bash scripts/bench-integrated.sh

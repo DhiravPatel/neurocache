@@ -60,8 +60,8 @@ trap '
   rm -rf '"$NC_DATA $NC_GO_BINARY"' /tmp/nc-go-bench.log /tmp/nc-rust-bench.log /tmp/bench-redis.csv /tmp/bench-go.csv /tmp/bench-rust.csv
 ' EXIT
 
-# Restrict to Phase-1 Rust commands
-CMDS="ping,get,set,incr,decr,incrby,del,exists"
+# Phase-2 Rust commands — strings + lists + hashes + sets
+CMDS="ping,get,set,incr,lpush,rpush,lpop,rpop,sadd,hset,spop,mset"
 
 echo "Running benches: -n $N -c $C -P $P"
 redis-benchmark -p "$REDIS_PORT"   -q -n "$N" -c "$C" -P "$P" -t "$CMDS" --csv 2>/dev/null > /tmp/bench-redis.csv
