@@ -449,6 +449,15 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "FEWSHOT.ADD", "FEWSHOT.QUERY", "FEWSHOT.GET", "FEWSHOT.DEL",
 		"FEWSHOT.LIST", "FEWSHOT.BANKS", "FEWSHOT.FORGET", "FEWSHOT.STATS":
 		c.fewshotCmd(strings.TrimPrefix(cmd, "FEWSHOT."), args)
+	case "GUARDRAIL.DEFINE", "GUARDRAIL.RUN", "GUARDRAIL.LIST",
+		"GUARDRAIL.FORGET", "GUARDRAIL.STATS":
+		c.guardrailCmd(strings.TrimPrefix(cmd, "GUARDRAIL."), args)
+	case "STRUCT.SCHEMA.SET", "STRUCT.SCHEMA.GET", "STRUCT.SCHEMA.LIST",
+		"STRUCT.VALIDATE", "STRUCT.REPAIR_PROMPT", "STRUCT.FORGET", "STRUCT.STATS":
+		c.structCmd(strings.TrimPrefix(cmd, "STRUCT."), args)
+	case "COALESCE.LOCK", "COALESCE.PUBLISH", "COALESCE.WAIT",
+		"COALESCE.STATUS", "COALESCE.FORGET", "COALESCE.KEYS", "COALESCE.STATS":
+		c.coalesceCmd(strings.TrimPrefix(cmd, "COALESCE."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

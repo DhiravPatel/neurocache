@@ -156,6 +156,23 @@ var writeCommands = map[string]bool{
 	// are reads.
 	"FEWSHOT.ADD": true, "FEWSHOT.DEL": true, "FEWSHOT.FORGET": true,
 
+	// Guardrail pipeline definitions are durable; RUN updates global
+	// counters but doesn't change schema state — leave it out of the
+	// writeset since recovering counters from runs would replay every
+	// scan. (Operators who care about cumulative pass/fail use the
+	// dashboard.)
+	"GUARDRAIL.DEFINE": true, "GUARDRAIL.FORGET": true,
+
+	// Struct schemas are durable. VALIDATE / REPAIR_PROMPT are reads
+	// (they update counters but don't change schema state).
+	"STRUCT.SCHEMA.SET": true, "STRUCT.FORGET": true,
+
+	// Coalesce primitives are entirely in-flight runtime state. LOCK
+	// / PUBLISH / WAIT only matter for currently-active herds; on
+	// restart, every in-flight call gets re-issued by the app, which
+	// is the correct semantic. So none of COALESCE.* is in the
+	// writeset.
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

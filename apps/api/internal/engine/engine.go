@@ -181,6 +181,26 @@ type Engine struct {
 	// tag filter for multi-tenant banks.
 	FewShot *llmstack.FewShotBank
 
+	// Composable safety pipeline. GUARDRAIL.RUN executes a named
+	// chain of stages (inject + redact + ground + length + regex
+	// blocks + custom verdicts) and returns a per-stage breakdown
+	// + the final mutated text. Replaces the bespoke safety glue
+	// every team rebuilds.
+	Guardrail *llmstack.GuardrailManager
+
+	// JSON schema validation + auto-repair-prompt generation. Apps
+	// validate LLM-generated JSON against a registered schema; on
+	// failure, REPAIR_PROMPT synthesises a clear "your output didn't
+	// match, fix it" instruction the app passes back to the model.
+	Struct *llmstack.StructValidator
+
+	// Single-flight thundering-herd protection. When 100 users all
+	// ask the same popular question simultaneously, only the first
+	// COALESCE.LOCK winner fires the upstream call; the rest WAIT
+	// and share the result. Per-key channels close on PUBLISH so
+	// thousands of waiters wake up at once with no polling.
+	Coalesce *llmstack.Coalescer
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -333,6 +353,10 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Rerank = llmstack.NewRerankCache()
 	e.Judge = llmstack.NewJudgeSuite()
 	e.FewShot = llmstack.NewFewShotBank()
+	e.Guardrail = llmstack.NewGuardrailManager()
+	e.Guardrail.SetEngine(e.InjectScanner, e.Redactor, e.Ground)
+	e.Struct = llmstack.NewStructValidator()
+	e.Coalesce = llmstack.NewCoalescer()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

@@ -547,6 +547,32 @@ var registry = map[string]commandInfo{
 	"FEWSHOT.BANKS":  {[]string{CatAI, CatRead, CatFast}},
 	"FEWSHOT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
 	"FEWSHOT.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// GUARDRAIL.* — composable safety pipeline.
+	"GUARDRAIL.DEFINE": {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.RUN":    {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"GUARDRAIL.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// STRUCT.* — JSON schema validation + repair prompts.
+	"STRUCT.SCHEMA.SET":   {[]string{CatAI, CatWrite, CatFast}},
+	"STRUCT.SCHEMA.GET":   {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.SCHEMA.LIST":  {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.VALIDATE":     {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.REPAIR_PROMPT": {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.FORGET":       {[]string{CatAI, CatWrite, CatFast}},
+	"STRUCT.STATS":        {[]string{CatAI, CatRead, CatFast}},
+
+	// COALESCE.* — single-flight thundering-herd protection.
+	// WAIT is CatSlow because it can block for the full timeout.
+	"COALESCE.LOCK":    {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.PUBLISH": {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.WAIT":    {[]string{CatAI, CatRead, CatSlow}},
+	"COALESCE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"COALESCE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.KEYS":    {[]string{CatAI, CatRead, CatFast}},
+	"COALESCE.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
