@@ -426,6 +426,18 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.chunkCmd(strings.TrimPrefix(cmd, "CHUNK."), args)
 	case "CONTEXT.ASSEMBLE":
 		c.contextAssembleCmd(args)
+	case "REDACT.SCRUB", "REDACT.RESTORE", "REDACT.FORGET",
+		"REDACT.PATTERN.ADD", "REDACT.PATTERN.REMOVE",
+		"REDACT.PATTERN.LIST", "REDACT.STATS":
+		c.redactCmd(strings.TrimPrefix(cmd, "REDACT."), args)
+	case "GROUND.CHECK", "GROUND.THRESHOLDS",
+		"GROUND.SET_THRESHOLDS", "GROUND.STATS":
+		c.groundCmd(strings.TrimPrefix(cmd, "GROUND."), args)
+	case "CANARY.CREATE", "CANARY.PICK", "CANARY.RECORD",
+		"CANARY.STATUS", "CANARY.SET_TRAFFIC",
+		"CANARY.PROMOTE", "CANARY.ROLLBACK",
+		"CANARY.LIST", "CANARY.FORGET", "CANARY.STATS":
+		c.canaryCmd(strings.TrimPrefix(cmd, "CANARY."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

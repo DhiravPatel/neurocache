@@ -140,6 +140,27 @@ type Engine struct {
 	// rebuilds.
 	Chunker *llmstack.Chunker
 
+	// PII redaction with restore tokens. Strips emails / phones /
+	// SSNs / credit cards / IP addresses / API keys before they hit
+	// an external model, and swaps the originals back into the
+	// model's response. Solves GDPR/HIPAA + prompt-injection at one
+	// hop.
+	Redactor *llmstack.Redactor
+
+	// Citation grounding scorer. Splits LLM output into sentences
+	// and computes max Jaccard overlap against the source passages
+	// the answer was supposed to ground itself in. Detects
+	// fabrications / fact swaps / made-up numbers before the answer
+	// reaches the user.
+	Ground *llmstack.GroundChecker
+
+	// Prompt canary deployments. Routes a configurable fraction of
+	// traffic to a candidate prompt, tallies per-arm scores, and
+	// auto-rolls back when the candidate regresses below a delta
+	// threshold. Lightweight alternative to a full A/B service for
+	// the "ship a prompt tweak safely" pain point.
+	Canaries *llmstack.CanaryDeploys
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -286,6 +307,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.InjectScanner = llmstack.NewInjectScanner()
 	e.Tokens = llmstack.NewTokens()
 	e.Chunker = llmstack.NewChunker(e.Tokens)
+	e.Redactor = llmstack.NewRedactor()
+	e.Ground = llmstack.NewGroundChecker()
+	e.Canaries = llmstack.NewCanaryDeploys()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

@@ -871,6 +871,142 @@ CHUNK.TEXT "<long doc>" STRATEGY token SIZE 8000 MODEL "gpt-4o"`,
 #          skipped=[]   (everything fit in 100k)
 #          combined="<all sections joined with separator>"`,
       },
+      {
+        id: "redact",
+        title: "PII redaction with restore tokens",
+        blurb: (
+          <>
+            Strip emails, phones, SSNs, credit cards, IPs, and API keys from
+            text BEFORE it leaves your environment for an external LLM —
+            then swap the originals back into the response so users still see
+            their real data. Six built-in patterns cover the GDPR/HIPAA/PCI
+            common cases; operators add custom regex (employee IDs, internal
+            host formats) at runtime. Solves prompt-injection of foreign PII,
+            regulatory exposure, and token-cost bloat in one hop.
+          </>
+        ),
+        commands: [
+          { cmd: "REDACT.SCRUB text", desc: "Replace every matching pattern with a numbered placeholder (<EMAIL_1>, <PHONE_1>...). Returns the redacted text + a restore_token + per-pattern hit counts." },
+          { cmd: "REDACT.RESTORE token text", desc: "Swap placeholders back to original values using the restoration map for token. Returns [text, ok-int]. Apps call this on the LLM response." },
+          { cmd: "REDACT.FORGET token", desc: "Drop a restoration map. Apps SHOULD call this once they've restored — otherwise the table grows." },
+          { cmd: "REDACT.PATTERN.ADD name regex placeholder", desc: "Register a custom pattern (or override a built-in by name). Bad regex returns an error." },
+          { cmd: "REDACT.PATTERN.REMOVE name", desc: "Drop a pattern (built-ins included — operators sometimes need to disable IPv4 for telemetry workloads)." },
+          { cmd: "REDACT.PATTERN.LIST", desc: "Every registered pattern with name, source, placeholder, builtin flag, and per-pattern hit count." },
+          { cmd: "REDACT.STATS", desc: "Total scrubs / total hits / total restores. Drives the dashboard's PII panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Round-trip: redact before LLM call, restore after
+REDACT.SCRUB "Email jane@example.com about order 4111-1111-1111-1111"
+# text="Email <EMAIL_1> about order <CARD_1>"
+# restore_token="a3f7e9..."
+# replacements=email:1 credit-card:1
+
+# (LLM responds, references the placeholders)
+REDACT.RESTORE a3f7e9... "I sent jane <EMAIL_1> a refund to <CARD_1>."
+# text="I sent jane jane@example.com a refund to 4111-1111-1111-1111."
+# ok=1
+
+# Custom pattern for internal employee IDs
+REDACT.PATTERN.ADD employee 'EMP-\\d{6}' '<EMP>'
+REDACT.SCRUB "Bug filed by EMP-123456"
+# text="Bug filed by <EMP_1>"`,
+      },
+      {
+        id: "ground",
+        title: "Citation grounding (hallucination scorer)",
+        blurb: (
+          <>
+            Every RAG app suffers the same failure mode: the model fabricates,
+            mixes passages, or confidently inverts facts that aren't in the
+            retrieved context. <code>GROUND.CHECK</code> splits the LLM
+            response into sentence-sized claims and computes max Jaccard
+            overlap (1-grams + 2-grams) against each source passage.
+            Per-claim verdict + worst-claim doc score so apps can{" "}
+            <strong>refuse / regenerate / flag</strong> answers BEFORE
+            shipping them. Three-state output (accept / gray / reject) lets
+            apps escalate the gray zone to an LLM judge while short-
+            circuiting clean accepts and obvious rejects.
+          </>
+        ),
+        commands: [
+          { cmd: "GROUND.CHECK output SOURCE text [SOURCE text...]", desc: "Score output against source passages. Returns doc_score (worst claim's score), verdict, and per-claim breakdown with the best-matching source for each claim." },
+          { cmd: "GROUND.THRESHOLDS", desc: "Current accept/reject gates. Default: ok=0.45 (accept), bad=0.15 (reject); in-between is gray." },
+          { cmd: "GROUND.SET_THRESHOLDS ok bad", desc: "Adjust gates per-tenant. Chat apps tolerate gray more than legal/medical apps. bad must be < ok." },
+          { cmd: "GROUND.STATS", desc: "Total checks / accept / gray / reject + active threshold values. Drives the dashboard's grounding panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Clean accept
+GROUND.CHECK "The Eiffel Tower is in Paris." \\
+  SOURCE "The Eiffel Tower is in Paris and stands 330m tall."
+# verdict=accept  doc_score=0.6364
+
+# Hallucination caught (no overlap with source)
+GROUND.CHECK "Quantum entanglement powers our refrigerators." \\
+  SOURCE "Snowboards arrived in retail stores in the late 1980s."
+# verdict=reject  doc_score=0.0000
+
+# Worst-claim policy: one fabrication drags the doc down
+GROUND.CHECK "The cat sat. The cat invented the wheel in 1873." \\
+  SOURCE "The cat sat on the mat."
+# verdict=reject  (claim[1] best_score=0.05)
+
+# Tighten thresholds for a regulated workload
+GROUND.SET_THRESHOLDS 0.7 0.4`,
+      },
+      {
+        id: "canary",
+        title: "Prompt canary deployments",
+        blurb: (
+          <>
+            Every team shipping LLM features hits the same bug: a "small
+            tweak to the system prompt" silently regresses output quality,
+            only caught when users complain a week later.{" "}
+            <code>CANARY.*</code> routes a configurable fraction of traffic
+            to a candidate prompt, tracks per-arm scores, and{" "}
+            <strong>auto-rolls back</strong> when the candidate drifts more
+            than a delta threshold below baseline. Sticky-bucketed by seed
+            (e.g. session_id) so the same user keeps seeing the same arm.
+            Lightweight alternative to full A/B services for the "ship a
+            prompt tweak safely" case.
+          </>
+        ),
+        commands: [
+          { cmd: "CANARY.CREATE id baseline candidate [PCT n] [DELTA d] [MIN_N n]", desc: "Register a canary. PCT=10 default traffic to candidate. DELTA=0.05 auto-rollback threshold. MIN_N=50 samples per arm before any verdict fires." },
+          { cmd: "CANARY.PICK id [seed]", desc: "Sticky-bucketed routing. Returns [arm, prompt]. Same seed always lands on the same arm; empty seed = random. After auto-rollback, always returns baseline." },
+          { cmd: "CANARY.RECORD id baseline|candidate score", desc: "Add a score observation (typically 0..1 success-rate proxy). Returns post-record status — apps react inline if auto-rollback fired." },
+          { cmd: "CANARY.STATUS id", desc: "Snapshot: per-arm n + mean, delta, verdict (monitoring/improved/neutral/regressed/auto_rollback)." },
+          { cmd: "CANARY.SET_TRAFFIC id pct", desc: "Adjust live traffic percent (0-100). Operators ramp this up manually after seeing neutral candidate behavior." },
+          { cmd: "CANARY.PROMOTE id", desc: "Candidate becomes baseline; tallies cleared. Happy path: candidate proved itself, ship it." },
+          { cmd: "CANARY.ROLLBACK id", desc: "Manual rollback. Wipes candidate traffic to 0% and flags verdict=auto_rollback." },
+          { cmd: "CANARY.LIST", desc: "Every active canary status, ordered by creation. Drives the dashboard's prompt-deploys panel." },
+          { cmd: "CANARY.FORGET id", desc: "Drop a canary entirely." },
+          { cmd: "CANARY.STATS", desc: "creates / picks / records / rollbacks / promotes / active count." },
+        ],
+        examplesLang: "bash",
+        examples: `# Ship a new system-prompt safely
+CANARY.CREATE checkout-summary \\
+  "You are a concise summarizer. Return 1 sentence." \\
+  "You are a concise summarizer. Return exactly 12 words." \\
+  PCT 10 DELTA 0.05 MIN_N 100
+
+# Per-request routing (sticky by session_id)
+CANARY.PICK checkout-summary session-42
+# arm="baseline"  prompt="You are a concise summarizer..."
+
+# Score each response (1.0 if QA passed, 0.0 if user clicked thumbs-down)
+CANARY.RECORD checkout-summary candidate 0.95
+CANARY.RECORD checkout-summary baseline 0.92
+
+# Watch the verdict
+CANARY.STATUS checkout-summary
+# baseline_n=120  candidate_n=15  baseline_mean=0.91  candidate_mean=0.94
+# delta=0.03  verdict=monitoring (need ≥100 candidate samples)
+
+# Once the candidate proves itself
+CANARY.SET_TRAFFIC checkout-summary 50
+# (continue recording for a day)
+CANARY.PROMOTE checkout-summary    # candidate is now baseline`,
+      },
     ],
   },
 

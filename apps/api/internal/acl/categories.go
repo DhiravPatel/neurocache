@@ -489,6 +489,33 @@ var registry = map[string]commandInfo{
 	"CRDT.LIST":      {[]string{CatAI, CatRead, CatFast}},
 	"CRDT.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
 	"CRDT.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// REDACT.* — PII redaction with restore tokens.
+	"REDACT.SCRUB":          {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.RESTORE":        {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.FORGET":         {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"REDACT.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// GROUND.* — citation grounding scorer.
+	"GROUND.CHECK":          {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.THRESHOLDS":     {[]string{CatAI, CatRead, CatFast}},
+	"GROUND.SET_THRESHOLDS": {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// CANARY.* — prompt canary deployments with auto-rollback.
+	"CANARY.CREATE":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.PICK":        {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.RECORD":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.STATUS":      {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.SET_TRAFFIC": {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.PROMOTE":     {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.ROLLBACK":    {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.LIST":        {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.FORGET":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.STATS":       {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

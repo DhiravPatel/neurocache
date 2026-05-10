@@ -117,6 +117,28 @@ var writeCommands = map[string]bool{
 	"TOKEN.BUDGET.SET": true, "TOKEN.BUDGET.FIT": true,
 	"TOKEN.BUDGET.RESET": true, "TOKEN.BUDGET.DELETE": true,
 
+	// Redaction patterns survive restart so operator-added regex
+	// (custom employee-ID format, internal-host pattern) isn't lost
+	// after a crash. SCRUB itself updates the per-pattern hit counter
+	// and registers a restore-token, so it's a write too. RESTORE +
+	// FORGET both mutate the restore-table.
+	"REDACT.SCRUB": true, "REDACT.RESTORE": true, "REDACT.FORGET": true,
+	"REDACT.PATTERN.ADD": true, "REDACT.PATTERN.REMOVE": true,
+
+	// Grounding thresholds + counters are durable so dashboards
+	// don't reset after a crash and operator-tuned gates persist.
+	// GROUND.CHECK is a write because it updates the global accept/
+	// gray/reject tallies. SET_THRESHOLDS is obviously a write.
+	"GROUND.CHECK": true, "GROUND.SET_THRESHOLDS": true,
+
+	// Canary deployments — every state-changing op. PICK is NOT a
+	// write (it's a deterministic seed-based read). RECORD updates
+	// per-arm tallies and may flip auto_rollback. PROMOTE swaps the
+	// baseline and clears tallies. SET_TRAFFIC adjusts the live %.
+	"CANARY.CREATE": true, "CANARY.RECORD": true,
+	"CANARY.SET_TRAFFIC": true, "CANARY.PROMOTE": true,
+	"CANARY.ROLLBACK": true, "CANARY.FORGET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

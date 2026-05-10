@@ -350,6 +350,40 @@ CONTEXT.ASSEMBLE gpt-4o 100000 \
   SECTION conv 50 "<recent turns>" \
   SECTION query 100 "<user query>"
 # → used=[sys,query,rag1,conv]  skipped=[]  combined="<joined text>"
+
+# PII redaction with restore tokens — strip emails / phones / SSNs /
+# cards / IPs / API keys before they hit an external model, then swap
+# the originals back into the response. Solves GDPR/HIPAA exposure +
+# foreign-PII prompt-injection in one hop.
+REDACT.SCRUB "Email jane@example.com about order 4111-1111-1111-1111"
+# text="Email <EMAIL_1> about order <CARD_1>"  restore_token="a3f7..."
+REDACT.RESTORE a3f7... "I sent jane <EMAIL_1> a refund."
+# text="I sent jane jane@example.com a refund."  ok=1
+REDACT.PATTERN.ADD employee 'EMP-\d{6}' '<EMP>'   # custom pattern
+
+# Citation grounding scorer — splits the LLM response into claims
+# and computes max Jaccard overlap against each source. Detects
+# fabrications / fact swaps / made-up numbers BEFORE the answer
+# reaches the user. Three-state output (accept / gray / reject) so
+# apps short-circuit clean accepts and escalate the gray zone to
+# an LLM judge.
+GROUND.CHECK "The Eiffel Tower is in Paris." \
+  SOURCE "The Eiffel Tower is in Paris and stands 330m tall."
+# verdict=accept  doc_score=0.6364
+GROUND.CHECK "Quantum entanglement powers our refrigerators." \
+  SOURCE "Snowboards arrived in retail stores in the late 1980s."
+# verdict=reject  doc_score=0.0000
+GROUND.SET_THRESHOLDS 0.7 0.4    # tighter gates for regulated workloads
+
+# Prompt canary deployments with auto-rollback — ship a system-prompt
+# tweak safely. Sticky-bucket by session_id, track per-arm scores,
+# auto-rollback if candidate regresses more than DELTA below baseline.
+CANARY.CREATE checkout-summary "OLD prompt" "NEW prompt" \
+  PCT 10 DELTA 0.05 MIN_N 100
+CANARY.PICK checkout-summary session-42      # → arm=baseline prompt="OLD..."
+CANARY.RECORD checkout-summary candidate 0.95
+CANARY.STATUS checkout-summary               # delta + verdict
+CANARY.PROMOTE checkout-summary              # candidate → baseline once proven
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
