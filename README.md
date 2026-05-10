@@ -384,6 +384,37 @@ CANARY.PICK checkout-summary session-42      # → arm=baseline prompt="OLD..."
 CANARY.RECORD checkout-summary candidate 0.95
 CANARY.STATUS checkout-summary               # delta + verdict
 CANARY.PROMOTE checkout-summary              # candidate → baseline once proven
+
+# Cross-encoder rerank score cache — every prod RAG app pays for
+# reranker calls (Cohere, BGE-rerank, Jina, Voyage). Memoize
+# (query, doc) → score. Bulk SCORE returns cached scores + hits[]
+# bitmap so apps fan out only the misses. Reports saved_usd directly.
+RERANK.SETCOST 0.002                         # Cohere ~$2/1k calls
+RERANK.SCORE "best small phone" \
+  DOC iphone-13 DOC pixel-7a DOC galaxy-s22
+# scores=[0.91, "", ""]  hits=[1,0,0]  hit_n=1  miss_n=2
+RERANK.SET "best small phone" pixel-7a 0.88 EX 86400
+RERANK.STATS                                 # hit_rate + saved_usd
+
+# LLM-as-judge eval suite — 5 graders (exact / contains / regex /
+# numeric_within / llm). Per-prompt pass-rate over a sliding window
+# powers regression alerts in CI.
+JUDGE.CASE.ADD support-reply greeting "user said hi" "Hi" GRADER contains
+JUDGE.CASE.ADD support-reply year_format "what year" '^Year: \d{4}$' GRADER regex
+JUDGE.SCORE support-reply greeting "Hi! How can I help?"
+# pass=1  score=1.00  grader=contains
+JUDGE.PASSRATE support-reply WINDOW 100      # pass_rate=0.94
+
+# Few-shot example library w/ semantic retrieval — store labeled
+# (input, output) examples per bank; QUERY returns top-K most-similar
+# for in-context learning. Apps pass real embeddings from their own
+# model, or rely on the deterministic 128-dim hashed-BoW fallback.
+FEWSHOT.ADD support reset-pw \
+  "How do I reset my password?" \
+  "Click 'forgot password' on the login page." \
+  TAGS auth
+FEWSHOT.QUERY support "i forgot my password" K 2
+# → top-2 similar examples to drop into the prompt
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

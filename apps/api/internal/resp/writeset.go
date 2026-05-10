@@ -139,6 +139,23 @@ var writeCommands = map[string]bool{
 	"CANARY.SET_TRAFFIC": true, "CANARY.PROMOTE": true,
 	"CANARY.ROLLBACK": true, "CANARY.FORGET": true,
 
+	// Rerank cache — every state-changing op. GET/SCORE are reads.
+	// SETCAP/SETCOST are durable config so saved_usd numbers don't
+	// reset to zero after restart.
+	"RERANK.SET": true, "RERANK.FORGET": true, "RERANK.PURGE": true,
+	"RERANK.SETCAP": true, "RERANK.SETCOST": true,
+
+	// Judge suite — case definitions + run history must survive
+	// restart so CI dashboards keep their pass-rate trends.
+	// JUDGE.SCORE is a write (records the run). LIST/HISTORY/
+	// PASSRATE/STATS/PROMPTS/CASE.LIST are pure reads.
+	"JUDGE.CASE.ADD": true, "JUDGE.CASE.REMOVE": true,
+	"JUDGE.SCORE": true, "JUDGE.FORGET": true,
+
+	// Few-shot bank — examples are durable. QUERY/GET/LIST/BANKS
+	// are reads.
+	"FEWSHOT.ADD": true, "FEWSHOT.DEL": true, "FEWSHOT.FORGET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

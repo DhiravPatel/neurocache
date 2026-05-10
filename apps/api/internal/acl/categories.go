@@ -516,6 +516,37 @@ var registry = map[string]commandInfo{
 	"CANARY.LIST":        {[]string{CatAI, CatRead, CatFast}},
 	"CANARY.FORGET":      {[]string{CatAI, CatWrite, CatFast}},
 	"CANARY.STATS":       {[]string{CatAI, CatRead, CatFast}},
+
+	// RERANK.* — cross-encoder rerank score cache.
+	"RERANK.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"RERANK.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SCORE":   {[]string{CatAI, CatRead, CatFast}},
+	"RERANK.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SETCOST": {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// JUDGE.* — LLM-as-judge eval suite.
+	"JUDGE.CASE.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.CASE.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.CASE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.SCORE":       {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.HISTORY":     {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.PASSRATE":    {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.PROMPTS":     {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.FORGET":      {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.STATS":       {[]string{CatAI, CatRead, CatFast}},
+
+	// FEWSHOT.* — few-shot example library w/ semantic retrieval.
+	"FEWSHOT.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.QUERY":  {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.DEL":    {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.BANKS":  {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

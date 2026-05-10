@@ -161,6 +161,26 @@ type Engine struct {
 	// the "ship a prompt tweak safely" pain point.
 	Canaries *llmstack.CanaryDeploys
 
+	// Cross-encoder rerank cache. Memoizes (query, doc_id) -> score
+	// so the second time the same pair shows up the rerank-call cost
+	// drops to zero. Bulk SCORE API is the production hot path:
+	// returns cached scores + a parallel hits bitmap so apps know
+	// which pairs still need an upstream call.
+	Rerank *llmstack.RerankCache
+
+	// LLM-as-judge eval suite. Stores test cases (input + expected +
+	// grader) per prompt-id, accepts actual outputs from the app's
+	// own LLM call, scores them with one of five graders (exact /
+	// contains / regex / numeric_within / llm), and tracks pass-rate
+	// over a sliding window for regression alerts.
+	Judge *llmstack.JudgeSuite
+
+	// Few-shot example library with semantic retrieval. Stores
+	// labeled (input, output) examples per bank; QUERY returns the
+	// top-K most-similar examples for in-context learning. Optional
+	// tag filter for multi-tenant banks.
+	FewShot *llmstack.FewShotBank
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -310,6 +330,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Redactor = llmstack.NewRedactor()
 	e.Ground = llmstack.NewGroundChecker()
 	e.Canaries = llmstack.NewCanaryDeploys()
+	e.Rerank = llmstack.NewRerankCache()
+	e.Judge = llmstack.NewJudgeSuite()
+	e.FewShot = llmstack.NewFewShotBank()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

@@ -438,6 +438,17 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"CANARY.PROMOTE", "CANARY.ROLLBACK",
 		"CANARY.LIST", "CANARY.FORGET", "CANARY.STATS":
 		c.canaryCmd(strings.TrimPrefix(cmd, "CANARY."), args)
+	case "RERANK.GET", "RERANK.SET", "RERANK.SCORE",
+		"RERANK.FORGET", "RERANK.PURGE",
+		"RERANK.SETCAP", "RERANK.SETCOST", "RERANK.STATS":
+		c.rerankCmd(strings.TrimPrefix(cmd, "RERANK."), args)
+	case "JUDGE.CASE.ADD", "JUDGE.CASE.REMOVE", "JUDGE.CASE.LIST",
+		"JUDGE.SCORE", "JUDGE.HISTORY", "JUDGE.PASSRATE",
+		"JUDGE.PROMPTS", "JUDGE.FORGET", "JUDGE.STATS":
+		c.judgeCmd(strings.TrimPrefix(cmd, "JUDGE."), args)
+	case "FEWSHOT.ADD", "FEWSHOT.QUERY", "FEWSHOT.GET", "FEWSHOT.DEL",
+		"FEWSHOT.LIST", "FEWSHOT.BANKS", "FEWSHOT.FORGET", "FEWSHOT.STATS":
+		c.fewshotCmd(strings.TrimPrefix(cmd, "FEWSHOT."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

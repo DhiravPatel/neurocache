@@ -1007,6 +1007,167 @@ CANARY.SET_TRAFFIC checkout-summary 50
 # (continue recording for a day)
 CANARY.PROMOTE checkout-summary    # candidate is now baseline`,
       },
+      {
+        id: "rerank",
+        title: "Cross-encoder rerank score cache",
+        blurb: (
+          <>
+            Every production RAG app eventually adds a reranker after
+            hybrid retrieval — Cohere Rerank, BGE-rerank, Jina, Voyage.
+            Each call costs money or local-GPU time, and the same{" "}
+            <code>(query, doc)</code> pair gets rescored across user
+            sessions. <code>RERANK.*</code> memoizes the scores so the
+            second time the pair shows up the upstream cost drops to
+            zero. The bulk <code>SCORE</code> API is the production hot
+            path: pass query + N doc IDs, get scores back in the same
+            order with a parallel hits bitmap so apps know which pairs
+            still need an upstream call. Configurable per-call cost so
+            <code>STATS</code> reports <code>saved_usd</code> directly.
+          </>
+        ),
+        commands: [
+          { cmd: "RERANK.GET query doc-id", desc: "Single lookup. Returns the cached score as a bulk string or nil." },
+          { cmd: "RERANK.SET query doc-id score [EX sec | PX ms]", desc: "Store a score. Optional TTL (rerank scores stay valid until docs change)." },
+          { cmd: "RERANK.SCORE query DOC doc-id [DOC doc-id...]", desc: "Bulk hot path. Returns scores[] (NaN→empty for misses), hits[] bitmap, hit_n, miss_n. Apps fan out only the misses to the upstream reranker." },
+          { cmd: "RERANK.FORGET query doc-id", desc: "Drop one entry. Returns 1 if it existed." },
+          { cmd: "RERANK.PURGE", desc: "Wipe the cache. Returns the dropped count." },
+          { cmd: "RERANK.SETCAP n", desc: "Soft eviction threshold (default 100k). When reached, the oldest 10% drop in a single sweep." },
+          { cmd: "RERANK.SETCOST usd", desc: "Configure $/upstream-call so STATS can report saved_usd. Apps set once at boot." },
+          { cmd: "RERANK.STATS", desc: "entries / cap / total gets-hits-misses-sets / saved_calls / saved_usd / hit_rate / total_evicts." },
+        ],
+        examplesLang: "bash",
+        examples: `RERANK.SETCOST 0.002              # Cohere Rerank ~$2/1k calls
+
+# After hybrid retrieval, rerank the top-K candidates
+RERANK.SCORE "best small phone" \\
+  DOC iphone-13 \\
+  DOC pixel-7a \\
+  DOC galaxy-s22 \\
+  DOC oneplus-nord
+# scores=["0.91", "", "", "0.74"]   hits=[1,0,0,1]   hit_n=2  miss_n=2
+# → app calls upstream reranker only for pixel-7a + galaxy-s22
+
+# Cache the new scores so the next session never re-pays
+RERANK.SET "best small phone" pixel-7a 0.88 EX 86400
+RERANK.SET "best small phone" galaxy-s22 0.83 EX 86400
+
+RERANK.STATS
+# entries=4  hit_rate=0.50  saved_calls=2  saved_usd=0.004
+# (after weeks of traffic, hit rate climbs into the 60-90% band)`,
+      },
+      {
+        id: "judge",
+        title: "LLM-as-judge eval suite",
+        blurb: (
+          <>
+            Every team that ships LLM features tries to write "tests
+            for prompts" and fails — pytest doesn't know what to do
+            with stochastic strings, hosted services cost money, and
+            rolling your own grader is yet another project.{" "}
+            <code>JUDGE.*</code> stores test cases per prompt-id,
+            accepts actual outputs from the app's own LLM call, and
+            scores them with one of <strong>five graders</strong>:
+            exact, contains, regex, numeric_within (numeric tolerance),
+            and llm (caller submits the verdict from their own LLM
+            judge). Per-prompt pass-rate over a sliding window powers
+            regression alerts in CI.
+          </>
+        ),
+        commands: [
+          { cmd: "JUDGE.CASE.ADD prompt-id case-id input expected [GRADER exact|contains|regex|numeric_within|llm] [TOL n]", desc: "Register a test case. Default grader is exact. TOL is for numeric_within. Bad regex returns an error." },
+          { cmd: "JUDGE.CASE.REMOVE prompt-id case-id", desc: "Drop one case. Returns 1 if it existed." },
+          { cmd: "JUDGE.CASE.LIST prompt-id", desc: "Every case for a prompt with input/expected/grader/tol." },
+          { cmd: "JUDGE.SCORE prompt-id case-id actual [LLM_PASS 0|1] [LLM_SCORE n]", desc: "Grade actual against the case. For grader=llm, the caller passes the verdict + score from their own LLM judge. Records the run; returns [pass, score, grader, details]." },
+          { cmd: "JUDGE.HISTORY prompt-id [LIMIT n]", desc: "Most-recent runs for a prompt, newest first. Capped at 1000 per prompt." },
+          { cmd: "JUDGE.PASSRATE prompt-id [WINDOW n]", desc: "Pass-rate over the last n runs (or all). Drives the dashboard's regression-alert panel." },
+          { cmd: "JUDGE.PROMPTS", desc: "Every registered prompt id, sorted." },
+          { cmd: "JUDGE.FORGET prompt-id", desc: "Drop a prompt entirely (cases + runs)." },
+          { cmd: "JUDGE.STATS", desc: "Total runs / pass / fail + prompts + cases counts." },
+        ],
+        examplesLang: "bash",
+        examples: `# Define cases for the support-reply prompt
+JUDGE.CASE.ADD support-reply greeting \\
+  "user said hello" "Hi" GRADER contains
+JUDGE.CASE.ADD support-reply year_format \\
+  "what year" '^Year: \\d{4}$' GRADER regex
+JUDGE.CASE.ADD support-reply price_estimate \\
+  "what's 1/3" "0.33" GRADER numeric_within TOL 0.01
+
+# CI runs the prompt against each case, then submits actual outputs
+JUDGE.SCORE support-reply greeting "Hi! How can I help?"
+# pass=1  score=1.00  grader=contains
+JUDGE.SCORE support-reply year_format "Year: 2024"
+# pass=1  score=1.00  grader=regex
+JUDGE.SCORE support-reply price_estimate "0.333"
+# pass=1  score=1.00  grader=numeric_within  details="|0.333 - 0.33| = 0.003 (tol=0.01)"
+
+# Watch pass-rate drift in production
+JUDGE.PASSRATE support-reply WINDOW 100
+# pass_rate=0.94  pass=94  fail=6  cases=3
+
+# Use an LLM judge for vibes-only cases (the cache just records)
+JUDGE.CASE.ADD support-reply tone "complaint" "empathetic" GRADER llm
+JUDGE.SCORE support-reply tone "<actual response>" LLM_PASS 1 LLM_SCORE 0.85`,
+      },
+      {
+        id: "fewshot",
+        title: "Few-shot example library w/ semantic retrieval",
+        blurb: (
+          <>
+            Every team that builds an LLM agent reaches the step "give
+            me the K most similar past examples for this input so I
+            can include them in the prompt" and reimplements cosine
+            sim over a list of <code>(input, output)</code> tuples.{" "}
+            <code>FEWSHOT.*</code> centralizes it: store labeled
+            examples in named banks (one per agent or per tenant),{" "}
+            <code>QUERY</code> returns the top-K most-similar by
+            cosine. Optional tag filter for multi-tenant banks. Apps
+            can pass real embeddings from their own model at{" "}
+            <code>ADD</code> time, or rely on the deterministic
+            128-dim hashed-BoW fallback (good enough for topical ICL
+            without an embedding service).
+          </>
+        ),
+        commands: [
+          { cmd: "FEWSHOT.ADD bank-id ex-id input output [TAGS t1,t2,...] [EMBED v1,v2,...]", desc: "Register an example. EMBED accepts a comma-separated vector; if omitted, the fallback embedding is computed from input. Replacing an existing ex-id is allowed." },
+          { cmd: "FEWSHOT.QUERY bank-id input [K n] [TAGS t1,t2,...] [EMBED v1,v2,...]", desc: "Top-K most-similar examples by cosine. K defaults to 3. TAGS narrows the search (ALL specified tags must be present)." },
+          { cmd: "FEWSHOT.GET bank-id ex-id", desc: "Single example fetch. Returns nil-array on miss." },
+          { cmd: "FEWSHOT.DEL bank-id ex-id", desc: "Drop one example. Returns 1 if it existed." },
+          { cmd: "FEWSHOT.LIST bank-id", desc: "Every example in a bank, ordered by ex-id." },
+          { cmd: "FEWSHOT.BANKS", desc: "Every bank with example count + active dim." },
+          { cmd: "FEWSHOT.FORGET bank-id", desc: "Drop a bank entirely." },
+          { cmd: "FEWSHOT.STATS", desc: "Total adds / queries / returns + banks/examples counts." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build a customer-support example bank
+FEWSHOT.ADD support reset-pw \\
+  "How do I reset my password?" \\
+  "Click 'forgot password' on the login page." \\
+  TAGS auth,onboarding
+FEWSHOT.ADD support refund \\
+  "What's the refund policy?" \\
+  "30-day refund for all annual plans." \\
+  TAGS billing
+FEWSHOT.ADD support download \\
+  "Where do I download the app?" \\
+  "App Store / Play Store / desktop installer at /download." \\
+  TAGS onboarding
+
+# Pull top-2 similar examples for an incoming question
+FEWSHOT.QUERY support "i forgot my password" K 2
+# → [{id: reset-pw, score: 0.92, ...}, {id: download, score: 0.18, ...}]
+
+# Tenant-scoped: only return billing examples
+FEWSHOT.QUERY support "can i get my money back" K 3 TAGS billing
+# → [{id: refund, ...}]
+
+# With a real embedding (from OpenAI / Cohere / local)
+FEWSHOT.ADD support escalate \\
+  "speak to a human" "Connecting you to an agent now." \\
+  EMBED 0.12,0.45,0.78,...
+FEWSHOT.QUERY support "i need help from a person" \\
+  EMBED 0.11,0.44,0.79,... K 1`,
+      },
     ],
   },
 
