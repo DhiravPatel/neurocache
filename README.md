@@ -450,6 +450,41 @@ COALESCE.PUBLISH answer:trump-tariffs a3f9... "<the answer>"
 # (the other 99 callers each got owner=0 from LOCK and parked in WAIT)
 # COALESCE.WAIT answer:trump-tariffs 25000  → got=1 result="<the answer>"
 COALESCE.STATS                               # save_rate=0.85 typical
+
+# Multi-provider hedged call tracker — fire same prompt to N
+# providers in parallel, first wins, late arrivals tracked for
+# per-provider latency stats. Atomic CAS on winner_idx; ~450 ns/op.
+HEDGE.START req-99af openai anthropic google-vertex
+# token=a3f7...  (app fires 3 parallel upstream calls)
+HEDGE.PUBLISH req-99af anthropic "<answer>" a3f7...
+# is_winner=1  winner=anthropic  latency_ms=420
+HEDGE.PUBLISH req-99af openai "<answer>" a3f7...
+# is_winner=0  winner=anthropic  latency_ms=890 (~470ms saved)
+HEDGE.STATS                          # per-provider win_rate + saved_ms
+
+# Self-consistency consensus over N model samples — for high-stakes
+# outputs (medical/legal/code), run query 5x → return consensus +
+# confidence. Three strategies: exact (string buckets), medoid
+# (token-Jaccard), cluster (cosine-bucketed semantics). ~330 ns/op.
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "43"
+VERIFY.CONSENSUS math:1234 STRATEGY exact
+# chosen="42"  confidence=0.75 (3 of 4)
+
+# Query rewrite cache for hyDE / step-back / decompose / multi-query
+# / paraphrase — lock-free (technique, query) → variants cache.
+# ~264 ns/op (3.8M ops/sec), faster than Redis GET.
+REWRITE.SETCOST 0.0005
+REWRITE.SET hyDE "what is bitcoin?" \
+  "Bitcoin is a decentralized digital currency..."
+REWRITE.GET hyDE "what is bitcoin?"    # instant cache hit
+REWRITE.SET_MULTI multi-query "best phone for grandparents" \
+  "easy-to-use phone for elderly" \
+  "simple smartphone for seniors" \
+  "phone with large buttons"
+REWRITE.STATS                          # per-technique hit_rate + saved_usd
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

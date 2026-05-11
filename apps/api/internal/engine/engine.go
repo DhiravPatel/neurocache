@@ -201,6 +201,27 @@ type Engine struct {
 	// thousands of waiters wake up at once with no polling.
 	Coalesce *llmstack.Coalescer
 
+	// Hedged-call tracker. Apps fire the same prompt to N providers
+	// in parallel; HEDGE deduplicates results, records who-won, and
+	// per-provider latency stats. Atomic CAS on winner_idx ensures
+	// only one publisher claims the winner slot under concurrent
+	// publishes. Lock-free reads via sync.Map; per-call channel
+	// broadcast wakeup for waiters.
+	Hedge *llmstack.HedgeTracker
+
+	// Self-consistency consensus over N model samples. For high-
+	// stakes outputs (medical / legal / code), three voting
+	// strategies: exact (bucket by string match), medoid (highest
+	// token-Jaccard to all others), cluster (largest semantic
+	// cluster by cosine over hashed-BoW). Returns chosen sample +
+	// confidence + bucket breakdown.
+	Verify *llmstack.VerifyManager
+
+	// Query-rewrite cache for hyDE / step-back / decompose /
+	// multi-query / paraphrase. Lock-free reads, soft 50k cap,
+	// per-technique hit-rate tracking, saved_usd reporting.
+	Rewrite *llmstack.RewriteCache
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -357,6 +378,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Guardrail.SetEngine(e.InjectScanner, e.Redactor, e.Ground)
 	e.Struct = llmstack.NewStructValidator()
 	e.Coalesce = llmstack.NewCoalescer()
+	e.Hedge = llmstack.NewHedgeTracker()
+	e.Verify = llmstack.NewVerifyManager()
+	e.Rewrite = llmstack.NewRewriteCache()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

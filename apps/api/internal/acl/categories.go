@@ -573,6 +573,33 @@ var registry = map[string]commandInfo{
 	"COALESCE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
 	"COALESCE.KEYS":    {[]string{CatAI, CatRead, CatFast}},
 	"COALESCE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// HEDGE.* — multi-provider hedged call tracker.
+	// WAIT is CatSlow (it can block).
+	"HEDGE.START":   {[]string{CatAI, CatWrite, CatFast}},
+	"HEDGE.PUBLISH": {[]string{CatAI, CatWrite, CatFast}},
+	"HEDGE.WAIT":    {[]string{CatAI, CatRead, CatSlow}},
+	"HEDGE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"HEDGE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"HEDGE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// VERIFY.* — self-consistency consensus.
+	"VERIFY.SAMPLE":    {[]string{CatAI, CatWrite, CatFast}},
+	"VERIFY.CONSENSUS": {[]string{CatAI, CatRead, CatFast}},
+	"VERIFY.SAMPLES":   {[]string{CatAI, CatRead, CatFast}},
+	"VERIFY.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
+	"VERIFY.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// REWRITE.* — query rewrite cache (hyDE / step-back / etc.).
+	"REWRITE.SET":       {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.GET":       {[]string{CatAI, CatRead, CatFast}},
+	"REWRITE.SET_MULTI": {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.LIST":      {[]string{CatAI, CatRead, CatFast}},
+	"REWRITE.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.PURGE":     {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.SETCAP":    {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.SETCOST":   {[]string{CatAI, CatWrite, CatFast}},
+	"REWRITE.STATS":     {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
