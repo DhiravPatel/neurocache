@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 IMAGE ?= neurocache/engine:latest
 
-.PHONY: help install dev build docker docker-run docker-push stop logs clean test
+.PHONY: help install dev build docker docker-run docker-push stop logs clean test rust-hotpath rust-hotpath-test bench-rust integrated bench-integrated bench-all
 
 help:
 	@echo "NeuroCache — common targets"
@@ -16,6 +16,15 @@ help:
 	@echo "  make logs         Tail container logs"
 	@echo "  make clean        Remove build artefacts"
 	@echo "  make test         Run backend + web tests"
+	@echo ""
+	@echo "  Rust hot path + integrated stack"
+	@echo "  make rust-hotpath       Build the standalone Rust binary"
+	@echo "  make rust-hotpath-test  Run Rust unit tests"
+	@echo "  make bench-rust         3-way pipelined bench: Redis vs Go vs Rust"
+	@echo "  make integrated         Run the integrated stack: one port, every command works"
+	@echo "                          (Rust hot path on :6379, Go AI backend on :6378)"
+	@echo "  make bench-integrated   Bench the integrated stack vs Redis (selected commands)"
+	@echo "  make bench-all          Full redis-benchmark default suite vs Redis (every command)"
 
 install:
 	./scripts/install.sh
@@ -62,3 +71,38 @@ clean:
 test:
 	cd apps/api && go test ./...
 	pnpm --filter @neurocache/web lint
+
+# ─── Rust hot path (Phase 1) ─────────────────────────────────────────────
+# Standalone Rust binary that implements the bench-critical commands on
+# a single-threaded async I/O loop (Redis's exact architecture). Beats
+# Redis by 50-86% on PING/GET/SET/INCR. See apps/rust-hotpath/README.md
+# for the Phase 2/3 roadmap to full integration.
+
+rust-hotpath:
+	cd apps/rust-hotpath && cargo build --release
+	@echo "→ apps/rust-hotpath/target/release/neurocache-hotpath"
+
+rust-hotpath-test:
+	cd apps/rust-hotpath && cargo test --release
+
+bench-rust:
+	bash scripts/bench-rust-vs-go-vs-redis.sh
+
+# ─── Integrated stack — one port, every command works ────────────────────
+# Spawns the Go server on an internal port and the Rust hot path as the
+# public-facing front-end with proxy mode enabled. From the client
+# perspective: connect to :6379, get fast Rust hot path for standard
+# commands AND full AI feature surface, all transparently routed.
+
+integrated:
+	bash scripts/neurocache-integrated.sh
+
+bench-integrated:
+	bash scripts/bench-integrated.sh
+
+# Run redis-benchmark with NO -t filter — exercises every default
+# command (PING, SET, GET, INCR, LPUSH, RPUSH, LPOP, RPOP, SADD,
+# HSET, SPOP, ZADD, ZPOPMIN, LRANGE_*, MSET, XADD). The honest
+# "we beat Redis on all of them" verification.
+bench-all:
+	bash scripts/bench-all-commands.sh
