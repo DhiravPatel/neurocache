@@ -1696,6 +1696,174 @@ AGENTLOOP.STATS
 # total_starts=148200  total_steps=2.1M  total_stops=4820
 # (~3.2% of agent runs hit a budget cap — usually the intended outcome)`,
       },
+      {
+        id: "dedupsem",
+        title: "Semantic deduplication for streams",
+        blurb: (
+          <>
+            High-volume text streams — bug reports, customer
+            complaints, news ingest, agent traces — get the same
+            item rephrased 50 ways. Hash-based dedup misses every
+            paraphrase. The standard fix is cosine over recent
+            items, but apps reimplement the sliding window + the
+            (subtly wrong) eviction policy in every project.{" "}
+            <code>DEDUP.SEM.*</code> gives the cache one command:{" "}
+            <code>SEEN</code> does dedup-check-and-insert in a
+            single round trip over a per-bucket FIFO window. 128-dim
+            hashed-BoW vectors are L2-normalised so cosine reduces
+            to a dot product. <strong>66 µs over a 1000-item window</strong>{" "}
+            — 15k QPS per core.
+          </>
+        ),
+        commands: [
+          { cmd: "DEDUP.SEM.SEEN bucket text [THRESHOLD f] [WINDOW n] [EMBED v1,v2,...]", desc: "Atomic dedup-check-and-insert. Returns [is_dup, similar_id, similar_text, score, new_id]. On a miss, the item is inserted and assigned an ID. Threshold defaults to 0.85; window to 1000." },
+          { cmd: "DEDUP.SEM.PEEK bucket text [THRESHOLD f] [EMBED v,v,...]", desc: "Query-only variant — never inserts. Useful for read-only dedup checks." },
+          { cmd: "DEDUP.SEM.ADD bucket id text [EMBED v,v,...]", desc: "Explicit insert with caller-supplied ID. Bypasses the dedup check." },
+          { cmd: "DEDUP.SEM.RECENT bucket [N n]", desc: "The N most-recent items in the bucket (newest last)." },
+          { cmd: "DEDUP.SEM.FORGET bucket", desc: "Drop a whole bucket." },
+          { cmd: "DEDUP.SEM.BUCKETS", desc: "Every active bucket with current size + configured window." },
+          { cmd: "DEDUP.SEM.STATS", desc: "Total seens / hits / misses / adds / evictions + hit_rate. Drives the dashboard's stream-dedup panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Customer support: dedup paraphrased complaints
+DEDUP.SEM.SEEN tickets "I can't log in on Safari, page just crashes" THRESHOLD 0.75
+# is_dup=0  new_id="a3f7e9"   ← first sighting, recorded
+
+DEDUP.SEM.SEEN tickets "Safari login broken, the page crashes" THRESHOLD 0.75
+# is_dup=1  similar_id="a3f7e9"  score=0.81
+# similar_text="I can't log in on Safari, page just crashes"
+# (App merges into the existing ticket instead of opening a new one)
+
+# Different topic — not deduped
+DEDUP.SEM.SEEN tickets "Refund not received yet" THRESHOLD 0.75
+# is_dup=0  new_id="b1c8d4"   ← genuinely new
+
+# After a day of traffic
+DEDUP.SEM.STATS
+# total_seens=8420  total_hits=3105  hit_rate=0.37
+# (37% of incoming items were paraphrases of recent ones)
+
+# News ingest: stricter threshold for headline dedup
+DEDUP.SEM.SEEN news "Apple announces M5 chip" THRESHOLD 0.90 WINDOW 5000
+
+# Multi-tenant: bucket per tenant
+DEDUP.SEM.SEEN tenant:acme:bugs "<text>" THRESHOLD 0.85`,
+      },
+      {
+        id: "prefix",
+        title: "KV-cache-aware prefix routing",
+        blurb: (
+          <>
+            Modern LLM-serving stacks (vLLM, TGI, SGLang) reuse the
+            KV-cache when prompt prefixes match an already-computed
+            one — frequently a 5-10x speedup on the prefill phase.
+            But this only helps if your routing layer KNOWS which
+            worker has the prefix loaded. Random / round-robin
+            routing leaves most of that win on the table.{" "}
+            <code>PREFIX.*</code> gives the cache a coordination
+            point: workers REGISTER what they have warm; apps
+            LOOKUP and route to the freshest worker. Atomic CAS
+            ops, nested <code>sync.Map</code>, lazy TTL expiry —{" "}
+            <strong>160 ns/op LOOKUP, faster than Redis GET</strong>.
+          </>
+        ),
+        commands: [
+          { cmd: "PREFIX.REGISTER prefix-hash worker [TTL ms]", desc: "Worker just processed a prompt with this prefix — record the claim. TTL defaults to no-expiry (worker explicitly evicts when shutting down)." },
+          { cmd: "PREFIX.LOOKUP prefix-hash", desc: "Return workers that have the prefix warm, ordered most-recently-registered first (LRU front). Apps pick the first as their routing target." },
+          { cmd: "PREFIX.HASH text", desc: "16-hex-char sha256 prefix. Convenience for callers that don't want to hash client-side. Hash the system prompt + few-shot block, NOT the per-request tail." },
+          { cmd: "PREFIX.FORGET prefix-hash [WORKER w]", desc: "Drop one prefix entirely (worker omitted) or just one (prefix, worker) claim." },
+          { cmd: "PREFIX.EVICT worker", desc: "Drop ALL prefix claims for a worker in one call. Used when a worker shuts down (graceful) or is detected dead (heartbeat timeout)." },
+          { cmd: "PREFIX.LIST", desc: "Every registered prefix-hash with its worker count, sorted by worker count desc. Useful for debugging prefix popularity." },
+          { cmd: "PREFIX.STATS", desc: "prefixes / lookups / hits / misses / registers / evictions + hit_rate. Drives the dashboard's KV-cache-reuse panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Stable prefix hash for the system prompt + few-shot block
+PREFIX.HASH "You are a helpful assistant. Examples: Q: foo / A: bar"
+# → "a3f9e7b22d8c1f04"
+
+# On every successful request, the worker registers:
+PREFIX.REGISTER a3f9e7b22d8c1f04 worker-7 TTL 600000
+# OK   (10-minute TTL — KV-cache usually evicted by then anyway)
+
+# Routing layer chooses where to send the next request:
+PREFIX.LOOKUP a3f9e7b22d8c1f04
+# [
+#   {worker: "worker-7",  registered_at_ms: ..., age_ms: 1200},  ← warmest
+#   {worker: "worker-3",  registered_at_ms: ..., age_ms: 45000},
+#   {worker: "worker-12", registered_at_ms: ..., age_ms: 89000}
+# ]
+# (App routes the next request to worker-7 — 5-10x faster prefill)
+
+# Worker shutting down — evict cleanly
+PREFIX.EVICT worker-7
+# → 142   (dropped 142 prefix claims for this worker)
+
+# Dashboard: are we benefiting from cache-aware routing?
+PREFIX.STATS
+# prefixes=1240  total_lookups=58400  total_hits=46200
+# hit_rate=0.79   ← 79% of requests route to a warm worker`,
+      },
+      {
+        id: "toolbox",
+        title: "Tool schema registry with semantic search",
+        blurb: (
+          <>
+            Modern agentic apps register dozens to hundreds of
+            tools — each with a name, description, JSON-schema args,
+            and tags. Two production pains: (1) the function-call
+            manifest balloons (200 tool schemas per LLM call costs
+            tokens AND degrades the model's tool-pick accuracy), and
+            (2) tool discovery via human docs is slow.{" "}
+            <code>TOOLBOX.*</code> solves both with one registry +
+            semantic search:{" "}
+            <code>TOOLBOX.SEARCH "weather questions"</code> returns
+            top-K relevant tools so apps feed a slim manifest to the
+            LLM. Cosine over hashed-BoW or app-supplied embeddings.{" "}
+            <strong>11 µs for 100 tools × 128-dim search</strong>.
+          </>
+        ),
+        commands: [
+          { cmd: "TOOLBOX.REGISTER tool-id name description schema-json [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Register or replace a tool. Schema must be valid JSON (apps usually pass the function-calling args schema verbatim). Optional EMBED for real embeddings; otherwise a hashed-BoW vector is computed from name+description." },
+          { cmd: "TOOLBOX.SEARCH query [K n] [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Top-K tools by semantic match. K defaults to 5. TAGS narrows the candidate set." },
+          { cmd: "TOOLBOX.GET tool-id", desc: "Single tool fetch." },
+          { cmd: "TOOLBOX.LIST [TAGS t1,t2,...]", desc: "Every tool, optionally tag-filtered. Ordered by id." },
+          { cmd: "TOOLBOX.FORGET tool-id", desc: "Drop a tool. Returns 1 if it existed." },
+          { cmd: "TOOLBOX.STATS", desc: "Total tools / registers / searches / returns. Drives the dashboard's tool-discovery panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register 50 tools at app boot
+TOOLBOX.REGISTER get_weather get_weather \\
+  "Fetch current weather conditions for a city" \\
+  '{"type":"object","properties":{"city":{"type":"string"}}}' \\
+  TAGS weather,travel
+
+TOOLBOX.REGISTER web_search web_search \\
+  "Search the web for general queries" \\
+  '{"type":"object","properties":{"q":{"type":"string"}}}' \\
+  TAGS research,realtime
+
+TOOLBOX.REGISTER calculator calculator \\
+  "Evaluate arithmetic expressions" \\
+  '{"type":"object","properties":{"expr":{"type":"string"}}}' \\
+  TAGS math
+
+# For each user request, find relevant tools (not all 50)
+TOOLBOX.SEARCH "what's the temperature in paris" K 3
+# [
+#   {id: get_weather, score: 0.71, schema: "...", tags: [weather, travel]},
+#   {id: web_search,  score: 0.34, schema: "...", tags: [research, realtime]},
+#   {id: calculator,  score: 0.05, schema: "...", tags: [math]}
+# ]
+# (App passes only the top 3 to the LLM — 6x fewer tokens, better pick)
+
+# Multi-tenant: filter by tenant tag
+TOOLBOX.SEARCH "anything" K 10 TAGS tenant:acme
+
+# Dashboard
+TOOLBOX.STATS
+# tools=58  total_registers=58  total_searches=128400  total_returns=412000
+# (avg 3.2 tools returned per search across the day)`,
+      },
     ],
   },
 

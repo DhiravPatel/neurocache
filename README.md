@@ -513,6 +513,37 @@ AGENTLOOP.STEP sess-1234 TOKENS 850 TOOL_CALL 1
 # ... after many turns:
 AGENTLOOP.STEP sess-1234 TOKENS 1200 TOOL_CALL 1
 # should_stop=1  reason="max_tokens exceeded (51200 > 50000)"
+
+# Semantic deduplication for high-volume streams — catches
+# paraphrases that hash dedup misses. SEEN does atomic
+# check-and-insert in a single round-trip. 66 µs over a
+# 1000-item window.
+DEDUP.SEM.SEEN tickets "I can't log in on Safari" THRESHOLD 0.75
+# is_dup=0  new_id="a3f7e9"
+DEDUP.SEM.SEEN tickets "Safari login broken" THRESHOLD 0.75
+# is_dup=1  similar_id="a3f7e9"  score=0.81
+#                                ↑ merge into existing ticket
+
+# KV-cache-aware prefix routing — vLLM/TGI/SGLang reuse the KV
+# cache when prompt prefixes match (5-10x faster prefill). Apps
+# REGISTER what's warm; LOOKUP routes to the freshest worker.
+# ~160 ns/op — faster than Redis GET.
+PREFIX.HASH "You are a helpful assistant. Examples..."
+# → "a3f9e7b22d8c1f04"
+PREFIX.REGISTER a3f9e7b22d8c1f04 worker-7 TTL 600000
+PREFIX.LOOKUP a3f9e7b22d8c1f04
+# [{worker: worker-7, age_ms: 1200}, ...]  ← route to first
+
+# Tool schema registry with semantic capability search — apps
+# register 50+ tools once; SEARCH returns top-K relevant per
+# request, keeping the LLM's function-call manifest slim.
+# 11 µs for 100 tools × 128-dim cosine.
+TOOLBOX.REGISTER get_weather get_weather \
+  "Fetch current weather for a city" \
+  '{"type":"object","properties":{"city":{"type":"string"}}}' \
+  TAGS weather
+TOOLBOX.SEARCH "temperature in paris" K 3
+# top-3 tools by semantic match — only these go into the prompt
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

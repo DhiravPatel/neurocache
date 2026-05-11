@@ -195,6 +195,23 @@ var writeCommands = map[string]bool{
 	// restart, agents either crashed (state is meaningless) or
 	// continue from scratch. None of AGENTLOOP.* is in the writeset.
 
+	// Semantic dedup bucket contents are durable — operators want
+	// the same dedup decisions across restart (otherwise the same
+	// paraphrase floods through immediately after recovery).
+	// SEEN/ADD insert; FORGET drops a bucket. PEEK / RECENT /
+	// BUCKETS / STATS are reads.
+	"DEDUP.SEM.SEEN": true, "DEDUP.SEM.ADD": true, "DEDUP.SEM.FORGET": true,
+
+	// Prefix router state is in-flight runtime data — KV-caches
+	// don't survive worker restarts so reproducing the registration
+	// state across a cache restart would be misleading. Workers
+	// re-REGISTER on their next request anyway. None of PREFIX.*
+	// is in the writeset.
+
+	// Toolbox entries are durable. SEARCH / GET / LIST / STATS are
+	// reads. REGISTER / FORGET are writes.
+	"TOOLBOX.REGISTER": true, "TOOLBOX.FORGET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

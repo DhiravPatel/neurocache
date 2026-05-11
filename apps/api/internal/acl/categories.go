@@ -619,6 +619,32 @@ var registry = map[string]commandInfo{
 	"AGENTLOOP.FORGET": {[]string{CatAI, CatWrite, CatFast}},
 	"AGENTLOOP.ACTIVE": {[]string{CatAI, CatRead, CatFast}},
 	"AGENTLOOP.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// DEDUP.SEM.* — semantic dedup for high-volume streams.
+	"DEDUP.SEM.SEEN":    {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.PEEK":    {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.RECENT":  {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.BUCKETS": {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// PREFIX.* — KV-cache-aware prefix routing.
+	"PREFIX.REGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.LOOKUP":   {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.HASH":     {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.EVICT":    {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// TOOLBOX.* — tool schema registry w/ semantic search.
+	"TOOLBOX.REGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLBOX.SEARCH":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.GET":      {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLBOX.STATS":    {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

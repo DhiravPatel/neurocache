@@ -240,6 +240,25 @@ type Engine struct {
 	// budgets. Lock-free, sub-100ns per step.
 	AgentLoop *llmstack.AgentLoopTracker
 
+	// Semantic deduplication for streams. SEEN does dedup-check-
+	// and-insert in a single round trip: cosine over a per-bucket
+	// FIFO window. Catches paraphrases that hash dedup misses.
+	// 128-dim hashed-BoW fallback or app-supplied embeddings.
+	SemDedup *llmstack.SemDeduper
+
+	// KV-cache-aware prefix routing. Tracks which workers have
+	// which prompt prefixes warm so apps route to a warm worker
+	// instead of round-robin. Lock-free reads via sync.Map nested
+	// in sync.Map. Sub-microsecond LOOKUP at typical N.
+	PrefixRouter *llmstack.PrefixRouter
+
+	// Tool schema registry with semantic capability search. Apps
+	// register N tools once; SEARCH returns the top-K relevant to
+	// a query so the LLM's function-call manifest stays slim.
+	// Replaces the "give me only tools relevant to THIS query"
+	// glue every team writes.
+	Toolbox *llmstack.ToolBox
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -402,6 +421,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Citations = llmstack.NewCitationExtractor()
 	e.Shrinker = llmstack.NewPromptShrinker(e.Tokens)
 	e.AgentLoop = llmstack.NewAgentLoopTracker()
+	e.SemDedup = llmstack.NewSemDeduper()
+	e.PrefixRouter = llmstack.NewPrefixRouter()
+	e.Toolbox = llmstack.NewToolBox()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
