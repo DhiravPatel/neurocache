@@ -91,6 +91,25 @@ var writeCommands = map[string]bool{
 	"CONV.APPEND": true, "CONV.SUMMARIZE": true, "CONV.RESET": true,
 	"PROMPT.SET": true, "PROMPT.DELETE": true,
 
+	// Tool memoization + cost guardrails — durable state, must
+	// survive restart so the cap doesn't reset to "no limit" after
+	// the engine recovers from a crash.
+	"TOOL.SET": true, "TOOL.FORGET": true, "TOOL.PURGE": true,
+	"GUARD.SETCAP": true, "GUARD.RECORD": true, "GUARD.CHECKRECORD": true, "GUARD.RESET": true,
+
+	// Negative semantic cache + prompt analytics — durable counters,
+	// must survive restart so dashboards keep the running totals
+	// instead of resetting after a crash.
+	"SEMNEG.MARK": true, "SEMNEG.FORGET": true, "SEMNEG.CLEAR": true,
+	"PROMPT.RECORD": true, "PROMPT.RESET_ANALYTICS": true,
+
+	// LLM provider failover ladder + injection scanner config —
+	// route definitions and custom patterns must survive restart;
+	// in-flight Mark Up/Down should NOT (let circuit breakers
+	// re-probe upstreams on startup), so they're absent here.
+	"LLM.ROUTE.SET": true, "LLM.ROUTE.FORGET": true,
+	"INJECT.PATTERN.ADD": true, "INJECT.PATTERN.REMOVE": true, "INJECT.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
