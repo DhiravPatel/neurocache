@@ -485,6 +485,34 @@ REWRITE.SET_MULTI multi-query "best phone for grandparents" \
   "simple smartphone for seniors" \
   "phone with large buttons"
 REWRITE.STATS                          # per-technique hit_rate + saved_usd
+
+# Citation extractor + validator — parses [N] / [Source-A] markers
+# from LLM output, resolves against actual sources, flags
+# hallucinated references AND unreferenced sources. ~485 ns/op.
+CITE.VALIDATE "Per [1] and [imaginary], Paris is in France." \
+  SOURCE wiki "Wikipedia article on Paris" \
+  SOURCE britannica "Britannica entry"
+# valid=0  invalid_labels=["[imaginary]"]   unreferenced_ids=["britannica"]
+
+# Prompt compression — composable strategies (whitespace + stopwords
+# + truncate). Preserves identifiers (is_admin) and negations (not).
+# ~794 ns/op. At scale: 10-25% cost savings on every prompt.
+SHRINK.TEXT "The user is requesting that we should provide a refund" \
+  STRATEGY all
+# text="user requesting we provide refund"  ratio=0.55  tokens_saved=6
+SHRINK.TEXT "<10000-char doc>" STRATEGY truncate TARGET 4000 MODEL gpt-4o
+SHRINK.STATS                           # total_tokens_saved across all calls
+
+# Agent step-budget enforcer — atomic check-and-increment, latches
+# on first breach (CAS) so concurrent steps see one consistent stop
+# reason. ~89 ns/op, comparable to Redis INCR.
+AGENTLOOP.START sess-1234 \
+  MAX_STEPS 20 MAX_TOOL_CALLS 30 MAX_TOKENS 50000 MAX_TIME_MS 60000
+AGENTLOOP.STEP sess-1234 TOKENS 850 TOOL_CALL 1
+# should_stop=0  steps=1  tool_calls=1  tokens=850
+# ... after many turns:
+AGENTLOOP.STEP sess-1234 TOKENS 1200 TOOL_CALL 1
+# should_stop=1  reason="max_tokens exceeded (51200 > 50000)"
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

@@ -600,6 +600,25 @@ var registry = map[string]commandInfo{
 	"REWRITE.SETCAP":    {[]string{CatAI, CatWrite, CatFast}},
 	"REWRITE.SETCOST":   {[]string{CatAI, CatWrite, CatFast}},
 	"REWRITE.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// CITE.* — citation extractor + validator.
+	"CITE.EXTRACT":  {[]string{CatAI, CatRead, CatFast}},
+	"CITE.RESOLVE":  {[]string{CatAI, CatRead, CatFast}},
+	"CITE.VALIDATE": {[]string{CatAI, CatRead, CatFast}},
+	"CITE.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// SHRINK.* — prompt compression. Pure compute, no durable state.
+	"SHRINK.TEXT":  {[]string{CatAI, CatRead, CatFast}},
+	"SHRINK.STATS": {[]string{CatAI, CatRead, CatFast}},
+
+	// AGENTLOOP.* — agent step budget enforcer.
+	"AGENTLOOP.START":  {[]string{CatAI, CatWrite, CatFast}},
+	"AGENTLOOP.STEP":   {[]string{CatAI, CatWrite, CatFast}},
+	"AGENTLOOP.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"AGENTLOOP.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"AGENTLOOP.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"AGENTLOOP.ACTIVE": {[]string{CatAI, CatRead, CatFast}},
+	"AGENTLOOP.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

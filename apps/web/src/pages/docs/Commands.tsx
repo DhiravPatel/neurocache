@@ -1535,6 +1535,167 @@ REWRITE.STATS
 #   {technique: step-back,   hits:4120, misses:1880, hit_rate: 0.69}
 # ]`,
       },
+      {
+        id: "cite",
+        title: "Citation extractor + validator",
+        blurb: (
+          <>
+            Every RAG app instructs the model to cite sources with
+            markers like <code>[1]</code> / <code>[Source-A]</code>{" "}
+            but apps then have to write the resolution code
+            themselves — and it's full of off-by-one bugs,
+            hallucinated reference IDs, and missing/unreferenced
+            citations. <code>CITE.*</code> gives the cache one
+            command set: extract markers (default pattern handles
+            both numeric and string labels), resolve them against
+            caller-supplied sources (by label OR by 1-based
+            position interchangeably), and flag invalid references{" "}
+            <strong>plus</strong> unreferenced sources the model
+            ignored. ~485 ns/op for a typical 4-citation response.
+          </>
+        ),
+        commands: [
+          { cmd: "CITE.EXTRACT text [PATTERN regex]", desc: "Parse citation markers. Default regex matches '[1]', '[42]', '[Source-A]', '[wiki_2024]'. Apps with non-standard formats supply their own pattern (first capture group becomes the label). Returns [marker, label, start, end] for each." },
+          { cmd: "CITE.RESOLVE text SOURCE id text [SOURCE id text...] [PATTERN regex]", desc: "Map each marker to its source. Numeric labels match by 1-based position; string labels match by ID. Returns per-citation [marker, label, valid, source_text]." },
+          { cmd: "CITE.VALIDATE text SOURCE id text [SOURCE id text...] [PATTERN regex]", desc: "Binary verdict + telemetry. Returns valid bool + counts + invalid_labels (the markers the model invented) + unreferenced_ids (sources the model ignored)." },
+          { cmd: "CITE.STATS", desc: "Total extracts / resolves / citations / invalid count. Drives the dashboard's RAG attribution panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Extract citations from a model response
+CITE.EXTRACT "Paris [1] is the capital of France [Wikipedia]."
+# → [
+#   {marker: "[1]",          label: "1",         start: 7, end: 10},
+#   {marker: "[Wikipedia]",  label: "Wikipedia", start: 38, end: 49}
+# ]
+
+# Validate against the actual sources we retrieved
+CITE.VALIDATE "Per [1] and [imaginary], Paris is in France." \\
+  SOURCE wiki "Wikipedia article on Paris" \\
+  SOURCE britannica "Britannica entry"
+# valid=0  total=2  valid_n=1  invalid_n=1
+# invalid_labels=["[imaginary]"]    ← the model hallucinated a citation
+# unreferenced_ids=["britannica"]   ← we passed a source the model ignored
+
+# Custom marker format
+CITE.EXTRACT "See <cite:doc1/> and <cite:doc2/>" \\
+  PATTERN "<cite:([a-z0-9]+)/>"
+# → [{marker:"<cite:doc1/>", label:"doc1"}, {marker:"<cite:doc2/>", label:"doc2"}]
+
+CITE.STATS
+# total_extracts=15420  total_citations=58200  total_invalid=1240
+# (~2% hallucinated citation rate — alert threshold)`,
+      },
+      {
+        id: "shrink",
+        title: "Prompt compression",
+        blurb: (
+          <>
+            Every token saved is real money. Even a 10% reduction
+            across millions of calls is a five-figure monthly bill
+            difference — but the same shrinking logic gets
+            reimplemented in every app with subtly different rules.{" "}
+            <code>SHRINK.*</code> is one command with composable
+            strategies: <code>whitespace</code> (collapse runs,
+            normalize newlines), <code>stopwords</code>{" "}
+            (drops common filler — preserves identifiers like{" "}
+            <code>is_admin</code> and negations like <code>not</code>),{" "}
+            <code>truncate</code> (binary-search to fit a token
+            target). Pure compute, lock-free, atomic counters report{" "}
+            <code>total_tokens_saved</code>. ~794 ns/op.
+          </>
+        ),
+        commands: [
+          { cmd: "SHRINK.TEXT text [STRATEGY whitespace|stopwords|truncate|all] [TARGET tokens] [MODEL m] [FROM_END 1]", desc: "Compress text. Strategy 'all' chains whitespace → stopwords → (truncate if TARGET set). MODEL configures the token estimator. FROM_END truncates to the LAST N tokens instead of the first. Returns [text, original_*, shrunk_*, ratio, tokens_saved, strategy]." },
+          { cmd: "SHRINK.STATS", desc: "Total runs / tokens in-out-saved + avg ratio. Drives the dashboard's cost panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Whitespace-only (safest — never changes meaning)
+SHRINK.TEXT "Hello   world\\n\\n\\nfoo\\tbar" STRATEGY whitespace
+# text="Hello world foo bar"  ratio=0.62  tokens_saved=2
+
+# All strategies (whitespace + stopwords)
+SHRINK.TEXT "The user is requesting that we should provide a refund" \\
+  STRATEGY all
+# text="user requesting we provide refund"   ratio=0.55   tokens_saved=6
+# (preserves "user"/"refund"; drops "the", "is", "that", "should", "a")
+
+# Identifiers preserved (we don't break code snippets)
+SHRINK.TEXT "Set the is_admin flag to true on the User_Profile record" \\
+  STRATEGY stopwords
+# text="Set is_admin flag true User_Profile record"
+# (is_admin and User_Profile survive — internal caps + underscores)
+
+# Token budget enforcement on long context
+SHRINK.TEXT "<10000-char doc>" STRATEGY truncate TARGET 4000 MODEL gpt-4o
+# Binary-search the boundary — fits in 4000 gpt-4o tokens exactly
+
+# Cost dashboard after a week
+SHRINK.STATS
+# total_runs=842000  total_tokens_in=125M  total_tokens_out=98M
+# total_tokens_saved=27M   avg_ratio=0.78
+# (At $5/1M input tokens that's $135 saved per week from SHRINK alone)`,
+      },
+      {
+        id: "agentloop",
+        title: "Agent step-budget enforcer",
+        blurb: (
+          <>
+            The single most common production incident in agentic
+            apps is the "runaway agent" — a stuck reasoning loop
+            that fires the same tool 500 times in 90 seconds and
+            blows through the daily token budget before anyone
+            notices. Apps add hand-rolled counters with off-by-one
+            bugs or no enforcement at all.{" "}
+            <code>AGENTLOOP.*</code> gives the cache one coordinated
+            state machine: STEP atomically increments every counter
+            and checks all four caps (steps / tool_calls / tokens /
+            time_ms); returns <code>should_stop=true</code> on the
+            FIRST breach with the triggering reason. Once stopped,
+            the loop stays stopped (latched via CAS) until RESET.{" "}
+            <strong>~89 ns/op — sub-100ns, comparable to Redis
+            INCR.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "AGENTLOOP.START loop-id [MAX_STEPS n] [MAX_TOOL_CALLS n] [MAX_TOKENS n] [MAX_TIME_MS ms]", desc: "Register a new loop. Zero caps mean no limit. Replacing an existing loop_id is allowed (state is discarded)." },
+          { cmd: "AGENTLOOP.STEP loop-id [TOKENS n] [TOOL_CALL 0|1]", desc: "Atomic increment. Returns [should_stop, reason, steps, tool_calls, tokens, elapsed_ms]. After the first breach, subsequent calls return should_stop=true without incrementing further." },
+          { cmd: "AGENTLOOP.STATUS loop-id", desc: "Full snapshot: stopped bool + reason + current counters + configured caps." },
+          { cmd: "AGENTLOOP.RESET loop-id", desc: "Zero counters and clear the stop reason. Caps preserved. Useful for retry-from-clean-state recovery." },
+          { cmd: "AGENTLOOP.FORGET loop-id", desc: "Drop a loop entirely. Returns 1 if it existed." },
+          { cmd: "AGENTLOOP.ACTIVE", desc: "Every running loop_id, sorted." },
+          { cmd: "AGENTLOOP.STATS", desc: "Total starts / steps / stops + active count. Drives the dashboard's agent-budget panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Configure budgets before the agent's first action
+AGENTLOOP.START sess-1234 \\
+  MAX_STEPS 20 \\
+  MAX_TOOL_CALLS 30 \\
+  MAX_TOKENS 50000 \\
+  MAX_TIME_MS 60000
+
+# Each turn, app calls STEP to record + check
+AGENTLOOP.STEP sess-1234 TOKENS 850 TOOL_CALL 1
+# should_stop=0  reason=""  steps=1  tool_calls=1  tokens=850  elapsed_ms=240
+
+# ... many turns later ...
+AGENTLOOP.STEP sess-1234 TOKENS 1200 TOOL_CALL 1
+# should_stop=1  reason="max_tokens exceeded (51200 > 50000)"
+# (App receives the verdict, exits the loop cleanly with the
+# current partial result instead of blowing the budget)
+
+# Inspect what triggered the stop
+AGENTLOOP.STATUS sess-1234
+# stopped=1  reason="max_tokens exceeded..."  steps=17  tool_calls=22
+# tokens=51200  elapsed_ms=43500   max_tokens=50000  max_steps=20
+
+# After investigation, retry with a fresh state
+AGENTLOOP.RESET sess-1234           # caps preserved; counters zeroed
+
+# Daily incident report
+AGENTLOOP.STATS
+# total_starts=148200  total_steps=2.1M  total_stops=4820
+# (~3.2% of agent runs hit a budget cap — usually the intended outcome)`,
+      },
     ],
   },
 

@@ -188,6 +188,13 @@ var writeCommands = map[string]bool{
 	"REWRITE.FORGET": true, "REWRITE.PURGE": true,
 	"REWRITE.SETCAP": true, "REWRITE.SETCOST": true,
 
+	// CITE / SHRINK are pure compute — no durable state. Counters
+	// reset on restart, which dashboards expect.
+
+	// AGENTLOOP state is purely in-flight (a single agent run). On
+	// restart, agents either crashed (state is meaningless) or
+	// continue from scratch. None of AGENTLOOP.* is in the writeset.
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

@@ -467,6 +467,13 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "REWRITE.SET", "REWRITE.GET", "REWRITE.SET_MULTI", "REWRITE.LIST",
 		"REWRITE.FORGET", "REWRITE.PURGE", "REWRITE.SETCAP", "REWRITE.SETCOST", "REWRITE.STATS":
 		c.rewriteCmd(strings.TrimPrefix(cmd, "REWRITE."), args)
+	case "CITE.EXTRACT", "CITE.RESOLVE", "CITE.VALIDATE", "CITE.STATS":
+		c.citeCmd(strings.TrimPrefix(cmd, "CITE."), args)
+	case "SHRINK.TEXT", "SHRINK.STATS":
+		c.shrinkCmd(strings.TrimPrefix(cmd, "SHRINK."), args)
+	case "AGENTLOOP.START", "AGENTLOOP.STEP", "AGENTLOOP.STATUS",
+		"AGENTLOOP.RESET", "AGENTLOOP.FORGET", "AGENTLOOP.ACTIVE", "AGENTLOOP.STATS":
+		c.agentLoopCmd(strings.TrimPrefix(cmd, "AGENTLOOP."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
