@@ -110,6 +110,69 @@ var writeCommands = map[string]bool{
 	"LLM.ROUTE.SET": true, "LLM.ROUTE.FORGET": true,
 	"INJECT.PATTERN.ADD": true, "INJECT.PATTERN.REMOVE": true, "INJECT.RESET": true,
 
+	// Token budgets — config + counters survive restart so an
+	// established daily/session budget isn't blown away on engine
+	// recovery. TOKEN.COUNT / TOKEN.SPLIT / CHUNK.TEXT /
+	// CONTEXT.ASSEMBLE are pure functions — never in the writeset.
+	"TOKEN.BUDGET.SET": true, "TOKEN.BUDGET.FIT": true,
+	"TOKEN.BUDGET.RESET": true, "TOKEN.BUDGET.DELETE": true,
+
+	// Redaction patterns survive restart so operator-added regex
+	// (custom employee-ID format, internal-host pattern) isn't lost
+	// after a crash. SCRUB itself updates the per-pattern hit counter
+	// and registers a restore-token, so it's a write too. RESTORE +
+	// FORGET both mutate the restore-table.
+	"REDACT.SCRUB": true, "REDACT.RESTORE": true, "REDACT.FORGET": true,
+	"REDACT.PATTERN.ADD": true, "REDACT.PATTERN.REMOVE": true,
+
+	// Grounding thresholds + counters are durable so dashboards
+	// don't reset after a crash and operator-tuned gates persist.
+	// GROUND.CHECK is a write because it updates the global accept/
+	// gray/reject tallies. SET_THRESHOLDS is obviously a write.
+	"GROUND.CHECK": true, "GROUND.SET_THRESHOLDS": true,
+
+	// Canary deployments — every state-changing op. PICK is NOT a
+	// write (it's a deterministic seed-based read). RECORD updates
+	// per-arm tallies and may flip auto_rollback. PROMOTE swaps the
+	// baseline and clears tallies. SET_TRAFFIC adjusts the live %.
+	"CANARY.CREATE": true, "CANARY.RECORD": true,
+	"CANARY.SET_TRAFFIC": true, "CANARY.PROMOTE": true,
+	"CANARY.ROLLBACK": true, "CANARY.FORGET": true,
+
+	// Rerank cache — every state-changing op. GET/SCORE are reads.
+	// SETCAP/SETCOST are durable config so saved_usd numbers don't
+	// reset to zero after restart.
+	"RERANK.SET": true, "RERANK.FORGET": true, "RERANK.PURGE": true,
+	"RERANK.SETCAP": true, "RERANK.SETCOST": true,
+
+	// Judge suite — case definitions + run history must survive
+	// restart so CI dashboards keep their pass-rate trends.
+	// JUDGE.SCORE is a write (records the run). LIST/HISTORY/
+	// PASSRATE/STATS/PROMPTS/CASE.LIST are pure reads.
+	"JUDGE.CASE.ADD": true, "JUDGE.CASE.REMOVE": true,
+	"JUDGE.SCORE": true, "JUDGE.FORGET": true,
+
+	// Few-shot bank — examples are durable. QUERY/GET/LIST/BANKS
+	// are reads.
+	"FEWSHOT.ADD": true, "FEWSHOT.DEL": true, "FEWSHOT.FORGET": true,
+
+	// Guardrail pipeline definitions are durable; RUN updates global
+	// counters but doesn't change schema state — leave it out of the
+	// writeset since recovering counters from runs would replay every
+	// scan. (Operators who care about cumulative pass/fail use the
+	// dashboard.)
+	"GUARDRAIL.DEFINE": true, "GUARDRAIL.FORGET": true,
+
+	// Struct schemas are durable. VALIDATE / REPAIR_PROMPT are reads
+	// (they update counters but don't change schema state).
+	"STRUCT.SCHEMA.SET": true, "STRUCT.FORGET": true,
+
+	// Coalesce primitives are entirely in-flight runtime state. LOCK
+	// / PUBLISH / WAIT only matter for currently-active herds; on
+	// restart, every in-flight call gets re-issued by the app, which
+	// is the correct semantic. So none of COALESCE.* is in the
+	// writeset.
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

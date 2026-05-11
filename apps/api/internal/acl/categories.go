@@ -489,6 +489,90 @@ var registry = map[string]commandInfo{
 	"CRDT.LIST":      {[]string{CatAI, CatRead, CatFast}},
 	"CRDT.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
 	"CRDT.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// REDACT.* — PII redaction with restore tokens.
+	"REDACT.SCRUB":          {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.RESTORE":        {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.FORGET":         {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"REDACT.PATTERN.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"REDACT.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// GROUND.* — citation grounding scorer.
+	"GROUND.CHECK":          {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.THRESHOLDS":     {[]string{CatAI, CatRead, CatFast}},
+	"GROUND.SET_THRESHOLDS": {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// CANARY.* — prompt canary deployments with auto-rollback.
+	"CANARY.CREATE":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.PICK":        {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.RECORD":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.STATUS":      {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.SET_TRAFFIC": {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.PROMOTE":     {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.ROLLBACK":    {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.LIST":        {[]string{CatAI, CatRead, CatFast}},
+	"CANARY.FORGET":      {[]string{CatAI, CatWrite, CatFast}},
+	"CANARY.STATS":       {[]string{CatAI, CatRead, CatFast}},
+
+	// RERANK.* — cross-encoder rerank score cache.
+	"RERANK.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"RERANK.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SCORE":   {[]string{CatAI, CatRead, CatFast}},
+	"RERANK.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.SETCOST": {[]string{CatAI, CatWrite, CatFast}},
+	"RERANK.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// JUDGE.* — LLM-as-judge eval suite.
+	"JUDGE.CASE.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.CASE.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.CASE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.SCORE":       {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.HISTORY":     {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.PASSRATE":    {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.PROMPTS":     {[]string{CatAI, CatRead, CatFast}},
+	"JUDGE.FORGET":      {[]string{CatAI, CatWrite, CatFast}},
+	"JUDGE.STATS":       {[]string{CatAI, CatRead, CatFast}},
+
+	// FEWSHOT.* — few-shot example library w/ semantic retrieval.
+	"FEWSHOT.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.QUERY":  {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.DEL":    {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.BANKS":  {[]string{CatAI, CatRead, CatFast}},
+	"FEWSHOT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"FEWSHOT.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// GUARDRAIL.* — composable safety pipeline.
+	"GUARDRAIL.DEFINE": {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.RUN":    {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"GUARDRAIL.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"GUARDRAIL.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// STRUCT.* — JSON schema validation + repair prompts.
+	"STRUCT.SCHEMA.SET":   {[]string{CatAI, CatWrite, CatFast}},
+	"STRUCT.SCHEMA.GET":   {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.SCHEMA.LIST":  {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.VALIDATE":     {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.REPAIR_PROMPT": {[]string{CatAI, CatRead, CatFast}},
+	"STRUCT.FORGET":       {[]string{CatAI, CatWrite, CatFast}},
+	"STRUCT.STATS":        {[]string{CatAI, CatRead, CatFast}},
+
+	// COALESCE.* — single-flight thundering-herd protection.
+	// WAIT is CatSlow because it can block for the full timeout.
+	"COALESCE.LOCK":    {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.PUBLISH": {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.WAIT":    {[]string{CatAI, CatRead, CatSlow}},
+	"COALESCE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"COALESCE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"COALESCE.KEYS":    {[]string{CatAI, CatRead, CatFast}},
+	"COALESCE.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

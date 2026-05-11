@@ -129,6 +129,78 @@ type Engine struct {
 	// prompt to the model.
 	InjectScanner *llmstack.InjectScanner
 
+	// Token counting + budget tracker. Lets apps predict cost,
+	// prevent context overflow, and split long docs into
+	// per-model-fit chunks — without writing the tokenizer logic
+	// in client code (which can't ship the BPE tables).
+	Tokens *llmstack.Tokens
+
+	// Text chunker for RAG ingestion + token-aware context window
+	// assembly. Replaces the chunk-then-assemble glue every RAG app
+	// rebuilds.
+	Chunker *llmstack.Chunker
+
+	// PII redaction with restore tokens. Strips emails / phones /
+	// SSNs / credit cards / IP addresses / API keys before they hit
+	// an external model, and swaps the originals back into the
+	// model's response. Solves GDPR/HIPAA + prompt-injection at one
+	// hop.
+	Redactor *llmstack.Redactor
+
+	// Citation grounding scorer. Splits LLM output into sentences
+	// and computes max Jaccard overlap against the source passages
+	// the answer was supposed to ground itself in. Detects
+	// fabrications / fact swaps / made-up numbers before the answer
+	// reaches the user.
+	Ground *llmstack.GroundChecker
+
+	// Prompt canary deployments. Routes a configurable fraction of
+	// traffic to a candidate prompt, tallies per-arm scores, and
+	// auto-rolls back when the candidate regresses below a delta
+	// threshold. Lightweight alternative to a full A/B service for
+	// the "ship a prompt tweak safely" pain point.
+	Canaries *llmstack.CanaryDeploys
+
+	// Cross-encoder rerank cache. Memoizes (query, doc_id) -> score
+	// so the second time the same pair shows up the rerank-call cost
+	// drops to zero. Bulk SCORE API is the production hot path:
+	// returns cached scores + a parallel hits bitmap so apps know
+	// which pairs still need an upstream call.
+	Rerank *llmstack.RerankCache
+
+	// LLM-as-judge eval suite. Stores test cases (input + expected +
+	// grader) per prompt-id, accepts actual outputs from the app's
+	// own LLM call, scores them with one of five graders (exact /
+	// contains / regex / numeric_within / llm), and tracks pass-rate
+	// over a sliding window for regression alerts.
+	Judge *llmstack.JudgeSuite
+
+	// Few-shot example library with semantic retrieval. Stores
+	// labeled (input, output) examples per bank; QUERY returns the
+	// top-K most-similar examples for in-context learning. Optional
+	// tag filter for multi-tenant banks.
+	FewShot *llmstack.FewShotBank
+
+	// Composable safety pipeline. GUARDRAIL.RUN executes a named
+	// chain of stages (inject + redact + ground + length + regex
+	// blocks + custom verdicts) and returns a per-stage breakdown
+	// + the final mutated text. Replaces the bespoke safety glue
+	// every team rebuilds.
+	Guardrail *llmstack.GuardrailManager
+
+	// JSON schema validation + auto-repair-prompt generation. Apps
+	// validate LLM-generated JSON against a registered schema; on
+	// failure, REPAIR_PROMPT synthesises a clear "your output didn't
+	// match, fix it" instruction the app passes back to the model.
+	Struct *llmstack.StructValidator
+
+	// Single-flight thundering-herd protection. When 100 users all
+	// ask the same popular question simultaneously, only the first
+	// COALESCE.LOCK winner fires the upstream call; the rest WAIT
+	// and share the result. Per-key channels close on PUBLISH so
+	// thousands of waiters wake up at once with no polling.
+	Coalesce *llmstack.Coalescer
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -273,6 +345,18 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.NegSemCache = semcache.NewNegCache()
 	e.LLMRouter = llmstack.NewLLMRouter()
 	e.InjectScanner = llmstack.NewInjectScanner()
+	e.Tokens = llmstack.NewTokens()
+	e.Chunker = llmstack.NewChunker(e.Tokens)
+	e.Redactor = llmstack.NewRedactor()
+	e.Ground = llmstack.NewGroundChecker()
+	e.Canaries = llmstack.NewCanaryDeploys()
+	e.Rerank = llmstack.NewRerankCache()
+	e.Judge = llmstack.NewJudgeSuite()
+	e.FewShot = llmstack.NewFewShotBank()
+	e.Guardrail = llmstack.NewGuardrailManager()
+	e.Guardrail.SetEngine(e.InjectScanner, e.Redactor, e.Ground)
+	e.Struct = llmstack.NewStructValidator()
+	e.Coalesce = llmstack.NewCoalescer()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
