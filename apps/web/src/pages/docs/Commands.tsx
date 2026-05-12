@@ -1864,6 +1864,192 @@ TOOLBOX.STATS
 # tools=58  total_registers=58  total_searches=128400  total_returns=412000
 # (avg 3.2 tools returned per search across the day)`,
       },
+      {
+        id: "translate",
+        title: "Multi-language translation cache",
+        blurb: (
+          <>
+            Translation is one of the most cacheable LLM-adjacent
+            workloads — every text translates identically every time,
+            and queries repeat across users + tenants. The upstream
+            APIs are pricey (Google ~$20/M chars, DeepL ~$25/M).
+            Apps still pay for the same translation hundreds of times
+            because nobody centralised the cache.{" "}
+            <code>TRANSLATE.*</code> is a sub-microsecond
+            (source-lang, target-lang, text) → translation cache
+            with per-language-pair hit stats and bulk{" "}
+            <code>MGET</code> for paragraph-level fan-out.{" "}
+            <strong>272 ns/op GET — parallel-safe, ~3.7M ops/sec.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "TRANSLATE.SET source target text translation [EX sec | PX ms]", desc: "Store a translation with optional TTL." },
+          { cmd: "TRANSLATE.GET source target text", desc: "Return the cached translation or nil." },
+          { cmd: "TRANSLATE.MGET source target text1 text2 ...", desc: "Bulk fetch for the same language pair. Returns array of {text, translation, hit} preserving input order. Single round-trip." },
+          { cmd: "TRANSLATE.FORGET source target text", desc: "Drop one entry. Returns 1 if it existed." },
+          { cmd: "TRANSLATE.PURGE [SOURCE s] [TARGET t]", desc: "Wipe everything, or just one lang's entries (filter by source, target, or both)." },
+          { cmd: "TRANSLATE.SETCAP n", desc: "Soft eviction threshold (default 100k)." },
+          { cmd: "TRANSLATE.SETCOST usd", desc: "Configure $/upstream-call so STATS reports saved_usd." },
+          { cmd: "TRANSLATE.STATS", desc: "Global counters + per-pair hit rate (en|es, en|fr...). Drives the dashboard's i18n panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Cache translations as the app receives them
+TRANSLATE.SETCOST 0.00002              # Google charges ~$20/M chars
+TRANSLATE.SET en es "Welcome back!" "¡Bienvenido de nuevo!"
+TRANSLATE.SET en es "Order shipped" "Pedido enviado"
+
+# Next request: instant cache hit
+TRANSLATE.GET en es "Welcome back!"
+# → "¡Bienvenido de nuevo!"
+
+# Bulk fetch for paragraph-level translation
+TRANSLATE.MGET en es \\
+  "Welcome back!" \\
+  "Your order is on the way" \\
+  "Order shipped"
+# [
+#   {text: "Welcome back!",            translation: "...",  hit: 1},
+#   {text: "Your order is on the way", translation: "",     hit: 0},  ← upstream needed
+#   {text: "Order shipped",            translation: "...",  hit: 1}
+# ]
+# (App calls upstream only for the misses)
+
+# Tenant-scoped purge after a deploy
+TRANSLATE.PURGE SOURCE en TARGET fr
+
+# Dashboard
+TRANSLATE.STATS
+# entries=124000  hit_rate=0.83  saved_calls=1.2M  saved_usd=24.00
+# pairs=[
+#   {pair: en|es, hits: 480k, misses: 90k, hit_rate: 0.84},
+#   {pair: en|fr, hits: 320k, misses: 75k, hit_rate: 0.81},
+#   ...
+# ]`,
+      },
+      {
+        id: "embedmat",
+        title: "Inline embedding matrix with top-K cosine",
+        blurb: (
+          <>
+            "I want to do top-K cosine over a few thousand vectors"
+            is too small for a full vector DB but too slow to do
+            client-side (you'd ship every vector across the network).{" "}
+            <code>EMBED.MAT.*</code> keeps the matrix in the cache
+            and runs cosine server-side: vectors stored L2-normalised
+            so the hot path reduces to a single dot product per row.{" "}
+            <strong>7.77 ms for 10k rows × 768 dims</strong> — beats
+            a network roundtrip to Pinecone (~10-50 ms). Per-prefix
+            FILTER for multi-tenant matrices.
+          </>
+        ),
+        commands: [
+          { cmd: "EMBED.MAT.SET matrix-id row-id v1,v2,v3,...", desc: "Insert or replace a row. First insert fixes the matrix dimensionality; subsequent rows must match. Vector is L2-normalised in place. Zero-norm rejected." },
+          { cmd: "EMBED.MAT.DEL matrix-id row-id", desc: "Remove a row. Returns 1 if it existed." },
+          { cmd: "EMBED.MAT.TOPK matrix-id query-vec K [FILTER prefix]", desc: "Top-K rows by cosine similarity. K defaults to 10. FILTER narrows by row_id prefix (e.g. multi-tenant)." },
+          { cmd: "EMBED.MAT.COSINE matrix-id row-a row-b", desc: "Cosine similarity between two stored rows. Returns bulk float or nil if either row is missing." },
+          { cmd: "EMBED.MAT.DOT matrix-id row-a row-b", desc: "Same as COSINE (vectors stored normalised — dot = cosine). Provided for API symmetry." },
+          { cmd: "EMBED.MAT.LEN matrix-id", desc: "Row count, 0 if matrix not found." },
+          { cmd: "EMBED.MAT.LIST matrix-id [PREFIX p]", desc: "All row_ids, optionally prefix-filtered, sorted." },
+          { cmd: "EMBED.MAT.FORGET matrix-id", desc: "Drop a whole matrix. Returns the number of rows removed." },
+          { cmd: "EMBED.MAT.STATS", desc: "Total sets / topks / rows + per-matrix size + dim. Drives the dashboard's small-vector-search panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build a doc-similarity matrix
+EMBED.MAT.SET docs doc-1 0.12,0.45,-0.31,0.78,...
+EMBED.MAT.SET docs doc-2 0.05,0.92,-0.18,0.34,...
+EMBED.MAT.SET docs doc-3 0.88,-0.12,0.45,-0.22,...
+# (... 10k docs ...)
+
+# Top-5 most similar to a query embedding
+EMBED.MAT.TOPK docs 0.11,0.44,-0.30,0.77,... 5
+# [
+#   {row_id: doc-1, score: 0.9982},
+#   {row_id: doc-7, score: 0.8341},
+#   {row_id: doc-92, score: 0.7720},
+#   ...
+# ]
+
+# Multi-tenant: filter by row_id prefix
+EMBED.MAT.SET docs tenant_acme:doc-1 ...
+EMBED.MAT.SET docs tenant_globex:doc-1 ...
+EMBED.MAT.TOPK docs <query> 10 FILTER tenant_acme:
+# (only acme's docs)
+
+# Per-pair similarity for explanation
+EMBED.MAT.COSINE docs doc-1 doc-7
+# → "0.834102"
+
+# Cleanup after deprecating an index
+EMBED.MAT.FORGET old-docs
+# → 5420   (rows removed)`,
+      },
+      {
+        id: "opcache",
+        title: "Deterministic LLM operation memoisation",
+        blurb: (
+          <>
+            Different from the semantic cache — that one matches{" "}
+            <em>paraphrases</em>; <code>OPCACHE.*</code> matches{" "}
+            <strong>exactly</strong> on (op_id, input, model, params).
+            For temperature=0 workloads where identical inputs must
+            produce bit-identical outputs:
+            <strong> code generation, SQL synthesis, named-entity
+            extraction, function-call argument generation</strong>.
+            A paraphrase match would be wrong here — exact-match is
+            valuable because the same app sends the same prompt
+            repeatedly across users.{" "}
+            <strong>269 ns/op GET — sub-microsecond, parallel-safe.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "OPCACHE.SET op-id input output [MODEL m] [PARAMS json] [EX sec | PX ms]", desc: "Store output keyed by the full (op_id, input, model, params) tuple. Different model or params → different cache entry (correctly — outputs would differ)." },
+          { cmd: "OPCACHE.GET op-id input [MODEL m] [PARAMS json]", desc: "Exact-match lookup. Returns the cached output or nil." },
+          { cmd: "OPCACHE.FORGET op-id input [MODEL m] [PARAMS json]", desc: "Drop one entry." },
+          { cmd: "OPCACHE.PURGE [OP op-id]", desc: "Wipe all or just one op_id's entries." },
+          { cmd: "OPCACHE.SETCAP n", desc: "Soft eviction threshold (default 100k)." },
+          { cmd: "OPCACHE.SETCOST usd", desc: "Configure $/upstream-call so STATS reports saved_usd." },
+          { cmd: "OPCACHE.STATS", desc: "Global hit rate + per-op_id breakdown. Drives the dashboard's deterministic-ops panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Cache code completions (deterministic at temp=0)
+OPCACHE.SETCOST 0.005                  # $5/M tokens upstream
+
+OPCACHE.SET code_complete \\
+  "def fibonacci(n):" \\
+  "def fibonacci(n):\\n    if n < 2: return n\\n    return fibonacci(n-1) + fibonacci(n-2)" \\
+  MODEL gpt-4 PARAMS '{"temp":0,"max_tokens":200}'
+
+# Next user types the same prefix → instant cached completion
+OPCACHE.GET code_complete "def fibonacci(n):" \\
+  MODEL gpt-4 PARAMS '{"temp":0,"max_tokens":200}'
+# → cached completion
+
+# Different model or temp → different cache entry (correct!)
+OPCACHE.GET code_complete "def fibonacci(n):" \\
+  MODEL claude PARAMS '{"temp":0,"max_tokens":200}'
+# → nil (claude wasn't cached)
+
+# SQL generation from natural language
+OPCACHE.SET sql_gen "users registered last week" \\
+  "SELECT * FROM users WHERE created_at >= NOW() - INTERVAL '7 days'"
+
+# Named-entity extraction
+OPCACHE.SET ner "Tim Cook met with President Macron in Paris yesterday" \\
+  '[{"text":"Tim Cook","type":"PERSON"},{"text":"President Macron","type":"PERSON"},{"text":"Paris","type":"LOCATION"}]'
+
+# Cleanup after a prompt rev
+OPCACHE.PURGE OP code_complete
+# → 4820   (entries dropped — re-cache with new prompt)
+
+# Dashboard
+OPCACHE.STATS
+# total_gets=820000  hit_rate=0.61  saved_calls=500k  saved_usd=2500.00
+# ops=[
+#   {op_id: code_complete, hits: 280k, misses: 84k, hit_rate: 0.77},
+#   {op_id: sql_gen,       hits: 145k, misses: 65k, hit_rate: 0.69},
+#   {op_id: ner,           hits:  75k, misses: 50k, hit_rate: 0.60}
+# ]`,
+      },
     ],
   },
 

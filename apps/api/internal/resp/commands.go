@@ -483,6 +483,17 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "TOOLBOX.REGISTER", "TOOLBOX.SEARCH", "TOOLBOX.GET",
 		"TOOLBOX.LIST", "TOOLBOX.FORGET", "TOOLBOX.STATS":
 		c.toolboxCmd(strings.TrimPrefix(cmd, "TOOLBOX."), args)
+	case "TRANSLATE.SET", "TRANSLATE.GET", "TRANSLATE.MGET",
+		"TRANSLATE.FORGET", "TRANSLATE.PURGE", "TRANSLATE.SETCAP",
+		"TRANSLATE.SETCOST", "TRANSLATE.STATS":
+		c.translateCmd(strings.TrimPrefix(cmd, "TRANSLATE."), args)
+	case "EMBED.MAT.SET", "EMBED.MAT.DEL", "EMBED.MAT.TOPK",
+		"EMBED.MAT.DOT", "EMBED.MAT.COSINE", "EMBED.MAT.LEN",
+		"EMBED.MAT.LIST", "EMBED.MAT.FORGET", "EMBED.MAT.STATS":
+		c.embedMatCmd(strings.TrimPrefix(cmd, "EMBED.MAT."), args)
+	case "OPCACHE.SET", "OPCACHE.GET", "OPCACHE.FORGET", "OPCACHE.PURGE",
+		"OPCACHE.SETCAP", "OPCACHE.SETCOST", "OPCACHE.STATS":
+		c.opcacheCmd(strings.TrimPrefix(cmd, "OPCACHE."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

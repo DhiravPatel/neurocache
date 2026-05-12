@@ -212,6 +212,21 @@ var writeCommands = map[string]bool{
 	// reads. REGISTER / FORGET are writes.
 	"TOOLBOX.REGISTER": true, "TOOLBOX.FORGET": true,
 
+	// Translation cache is durable — operator-paid translations
+	// should survive restart so hit rate doesn't crater on deploy.
+	"TRANSLATE.SET": true, "TRANSLATE.FORGET": true, "TRANSLATE.PURGE": true,
+	"TRANSLATE.SETCAP": true, "TRANSLATE.SETCOST": true,
+
+	// Embedding matrix is durable — apps store curated embeddings
+	// that took real compute time to generate. SET/DEL/FORGET are
+	// writes; TOPK/DOT/COSINE/LEN/LIST are reads.
+	"EMBED.MAT.SET": true, "EMBED.MAT.DEL": true, "EMBED.MAT.FORGET": true,
+
+	// OpCache is durable. Deterministic outputs are valuable to
+	// preserve across restart.
+	"OPCACHE.SET": true, "OPCACHE.FORGET": true, "OPCACHE.PURGE": true,
+	"OPCACHE.SETCAP": true, "OPCACHE.SETCOST": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

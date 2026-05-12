@@ -544,6 +544,35 @@ TOOLBOX.REGISTER get_weather get_weather \
   TAGS weather
 TOOLBOX.SEARCH "temperature in paris" K 3
 # top-3 tools by semantic match — only these go into the prompt
+
+# Multi-language translation cache — single sha256 lookup, per-pair
+# stats, bulk MGET for paragraph-level fan-out. Google/DeepL charge
+# $20-25/M chars; this drops every cache hit to $0. ~272 ns/op GET.
+TRANSLATE.SETCOST 0.00002
+TRANSLATE.SET en es "Welcome back!" "¡Bienvenido de nuevo!"
+TRANSLATE.MGET en es "Welcome back!" "Order shipped" "..." \
+# → array with hit flag per text; app fans out only the misses
+
+# Inline embedding matrix with server-side cosine top-K. Beats a
+# roundtrip to Pinecone for sub-100k row matrices. Vectors stored
+# L2-normalised so cosine = dot. 7.77 ms for 10k×768 search.
+EMBED.MAT.SET docs doc-1 0.12,0.45,-0.31,...
+EMBED.MAT.SET docs doc-2 0.05,0.92,-0.18,...
+EMBED.MAT.TOPK docs 0.11,0.44,-0.30,... 5
+# top-5 most similar by cosine
+EMBED.MAT.COSINE docs doc-1 doc-2     # → "0.834102"
+
+# Deterministic LLM op memoisation — exact-match cache for temp=0
+# workloads (code gen, SQL synthesis, NER) where you NEED the same
+# answer. Different from semantic cache which matches paraphrases.
+# ~269 ns/op GET, parallel-safe.
+OPCACHE.SETCOST 0.005
+OPCACHE.SET code_complete "def fibonacci(n):" "<completion>" \
+  MODEL gpt-4 PARAMS '{"temp":0}'
+OPCACHE.GET code_complete "def fibonacci(n):" \
+  MODEL gpt-4 PARAMS '{"temp":0}'
+# → cached completion (exact-match — different model = different entry)
+OPCACHE.STATS                         # per-op hit_rate + saved_usd
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

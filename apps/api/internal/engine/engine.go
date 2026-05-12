@@ -259,6 +259,25 @@ type Engine struct {
 	// glue every team writes.
 	Toolbox *llmstack.ToolBox
 
+	// Translation cache by (source_lang, target_lang, text).
+	// Translation calls are massively cacheable — same input always
+	// produces the same output and queries repeat across users.
+	// Sub-microsecond hash-keyed lookup; per-language-pair stats.
+	Translate *llmstack.TranslateCache
+
+	// Inline embedding matrix with server-side cosine top-K.
+	// Replaces "ship vectors to a separate vector DB just for math"
+	// for small-scale (sub-100k row) retrieval workloads. Vectors
+	// stored L2-normalised so cosine = dot product on the hot path.
+	EmbedMat *llmstack.EmbedMatrix
+
+	// Deterministic LLM operation memoisation. Exact-match cache
+	// keyed by (op_id, input, model, params) — for temp=0 workloads
+	// where the same prompt MUST yield the same output (code
+	// generation, SQL synthesis, structured extraction). Distinct
+	// from the semantic cache which matches paraphrases.
+	OpCache *llmstack.OpCache
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -424,6 +443,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.SemDedup = llmstack.NewSemDeduper()
 	e.PrefixRouter = llmstack.NewPrefixRouter()
 	e.Toolbox = llmstack.NewToolBox()
+	e.Translate = llmstack.NewTranslateCache()
+	e.EmbedMat = llmstack.NewEmbedMatrix()
+	e.OpCache = llmstack.NewOpCache()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
