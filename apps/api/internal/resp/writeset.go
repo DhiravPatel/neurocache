@@ -227,6 +227,23 @@ var writeCommands = map[string]bool{
 	"OPCACHE.SET": true, "OPCACHE.FORGET": true, "OPCACHE.PURGE": true,
 	"OPCACHE.SETCAP": true, "OPCACHE.SETCOST": true,
 
+	// Autocomplete phrase lists are durable — operator-curated
+	// dictionaries should survive restart.
+	"AUTOCOMPLETE.ADD": true, "AUTOCOMPLETE.DEL": true, "AUTOCOMPLETE.FORGET": true,
+
+	// CHAINSTATE definitions + runs are durable. The whole point is
+	// crash-safe orchestration; runs that survive AOF replay can be
+	// resumed from the exact step the original worker died on.
+	"CHAINSTATE.DEFINE": true, "CHAINSTATE.START": true,
+	"CHAINSTATE.DONE": true, "CHAINSTATE.FAIL": true,
+	"CHAINSTATE.FORGET": true, "CHAINSTATE.FORGET_CHAIN": true,
+
+	// MOE expert definitions are durable; RECORD updates atomic
+	// counters that don't need replay (live health is naturally
+	// rebuilt from new traffic post-restart). REGISTER + FORGET in
+	// the writeset.
+	"MOE.EXPERT.REGISTER": true, "MOE.FORGET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

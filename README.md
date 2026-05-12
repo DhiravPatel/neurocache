@@ -573,6 +573,38 @@ OPCACHE.GET code_complete "def fibonacci(n):" \
   MODEL gpt-4 PARAMS '{"temp":0}'
 # → cached completion (exact-match — different model = different entry)
 OPCACHE.STATS                         # per-op hit_rate + saved_usd
+
+# Prefix autocomplete — sorted-string list with case-folded keys +
+# score-weighted top-K. For chat suggestions, command palettes,
+# gazetteer lookups, NER. ~363 ns/op SUGGEST over 10k phrases.
+AUTOCOMPLETE.ADD commands "kill server" SCORE 100
+AUTOCOMPLETE.ADD commands "list files"  SCORE 75
+AUTOCOMPLETE.SUGGEST commands "kil" K 5
+# [{phrase: "kill server", score: 100}, ...]   ← score then alphabetical
+
+# Crash-safe multi-step workflow state machine — DEFINE chain once,
+# DONE each step storing the artifact; RESUME after a crash returns
+# the next pending step + every prior artifact. Different from
+# AGENTLOOP (budgets) — this is for orchestration. ~671 ns/op.
+CHAINSTATE.DEFINE ingest-doc fetch parse extract embed store
+CHAINSTATE.START job-abc ingest-doc
+CHAINSTATE.DONE job-abc fetch "<binary>"
+CHAINSTATE.DONE job-abc parse "<text>"
+# (worker crashes here)
+CHAINSTATE.RESUME job-abc
+# → next_step=extract  artifacts={fetch:..., parse:...}
+#   (recovery worker picks up exactly where the prior one died)
+
+# Mixture-of-Experts router — combines capability cosine × live
+# success-rate health for smart model selection. Atomic RECORD
+# counters: ~142 ns/op (~7M ops/sec). 100-expert ROUTE: 10 µs.
+MOE.EXPERT.REGISTER math-gpt4 "MathGPT-4" \
+  "Solves math problems including calculus and linear algebra" \
+  TAGS math
+MOE.ROUTE "solve this calculus problem" K 1
+# top expert by capability × health
+MOE.RECORD math-gpt4 1 LATENCY_MS 420  # success in 420ms
+# (after 100 failures, the router auto-routes around the bad expert)
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

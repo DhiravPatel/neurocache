@@ -2050,6 +2050,188 @@ OPCACHE.STATS
 #   {op_id: ner,           hits:  75k, misses: 50k, hit_rate: 0.60}
 # ]`,
       },
+      {
+        id: "autocomplete",
+        title: "Prefix autocomplete (chat suggestions / command palettes / gazetteer)",
+        blurb: (
+          <>
+            "Show top-10 phrases starting with what the user typed" is
+            a primitive every chat-suggestion UI, command palette,
+            and NER gazetteer rebuilds with either an O(N) prefix
+            scan (slow at scale) or a heavyweight search engine
+            (overkill).{" "}
+            <code>AUTOCOMPLETE.*</code> is a sorted-string list per
+            list-id with case-folded keys + score-weighted ranking.{" "}
+            <strong>363 ns/op SUGGEST over 10k phrases — 2.7M ops/sec</strong>.
+            Apps register the phrases at boot, SUGGEST on every keystroke.
+          </>
+        ),
+        commands: [
+          { cmd: "AUTOCOMPLETE.ADD list-id phrase [SCORE n]", desc: "Insert or update a phrase. Same phrase twice → score updated in place. Case-insensitive matching; original casing preserved in output." },
+          { cmd: "AUTOCOMPLETE.SUGGEST list-id prefix [K n]", desc: "Top-K phrases starting with prefix, ordered by score desc then alphabetical. K defaults to 10. Case-insensitive prefix match." },
+          { cmd: "AUTOCOMPLETE.DEL list-id phrase", desc: "Remove a phrase. Returns 1 if it existed." },
+          { cmd: "AUTOCOMPLETE.SIZE list-id", desc: "Number of phrases in the list, or 0 if list doesn't exist." },
+          { cmd: "AUTOCOMPLETE.LIST list-id [PREFIX p]", desc: "Every phrase in alphabetical order, optionally prefix-filtered." },
+          { cmd: "AUTOCOMPLETE.FORGET list-id", desc: "Drop the whole list. Returns the number of phrases removed." },
+          { cmd: "AUTOCOMPLETE.STATS", desc: "Lists / total phrases / adds / suggests / hits." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build a command-palette list at app boot
+AUTOCOMPLETE.ADD commands "kill server"   SCORE 100
+AUTOCOMPLETE.ADD commands "kill process"  SCORE 50
+AUTOCOMPLETE.ADD commands "killall"       SCORE 25
+AUTOCOMPLETE.ADD commands "list files"    SCORE 75
+
+# On every keystroke
+AUTOCOMPLETE.SUGGEST commands "kil" K 5
+# [
+#   {phrase: "kill server",  score: 100},   ← highest score wins
+#   {phrase: "kill process", score: 50},
+#   {phrase: "killall",      score: 25}
+# ]
+
+# NER gazetteer: company names
+AUTOCOMPLETE.ADD companies "Apple Inc"       SCORE 95
+AUTOCOMPLETE.ADD companies "Apple Records"   SCORE 70
+AUTOCOMPLETE.ADD companies "Apricot Holdings" SCORE 10
+AUTOCOMPLETE.SUGGEST companies "appl" K 3
+# (case-insensitive prefix; matches both Apple entries)
+
+# Chat-suggestion UI scoring by recent click-through rate
+AUTOCOMPLETE.ADD chat:user-42 "How do I reset my password?" SCORE 9.4
+AUTOCOMPLETE.ADD chat:user-42 "What's the refund policy?"   SCORE 7.1
+AUTOCOMPLETE.SUGGEST chat:user-42 "how" K 3`,
+      },
+      {
+        id: "chainstate",
+        title: "Crash-safe multi-step workflow state machine",
+        blurb: (
+          <>
+            Today's agentic frameworks lose all intermediate state on
+            crash — the agent re-plans the whole task from scratch,
+            often with different (or worse) artifacts the second time.{" "}
+            <code>CHAINSTATE.*</code> is the resumable-workflow
+            primitive every team reinvents: DEFINE a chain once,
+            START a run, DONE each step storing the artifact;{" "}
+            <code>RESUME</code> after a crash returns the next pending
+            step + every artifact produced so far. Different from
+            AGENTLOOP (budgets) — this is for orchestration. Atomic
+            counters; 671 ns/op for a full Start+Done+Resume round.
+          </>
+        ),
+        commands: [
+          { cmd: "CHAINSTATE.DEFINE chain-id step1 step2 step3 ...", desc: "Register a chain of named steps. Duplicate step names rejected. Replacing an existing chain_id is allowed." },
+          { cmd: "CHAINSTATE.START run-id chain-id", desc: "Start a new run. Replacing an existing run_id resets state." },
+          { cmd: "CHAINSTATE.DONE run-id step-name artifact", desc: "Mark step complete + store its artifact. Step-name must be the CURRENT step (out-of-order rejected). Returns [next_step, step_idx, total_steps, status]." },
+          { cmd: "CHAINSTATE.FAIL run-id step-name reason", desc: "Fail the run with a reason. Idempotent after first call." },
+          { cmd: "CHAINSTATE.RESUME run-id", desc: "Returns next step + all prior artifacts. Used by workers recovering after a crash to pick up exactly where the prior worker died." },
+          { cmd: "CHAINSTATE.ARTIFACT run-id step-name", desc: "Fetch one step's artifact directly. Returns nil if step not yet complete." },
+          { cmd: "CHAINSTATE.STATUS run-id", desc: "Run status + step counts (lighter than RESUME)." },
+          { cmd: "CHAINSTATE.RUNS chain-id [STATUS running|complete|failed]", desc: "List runs under a chain, optionally status-filtered. Sorted newest-first." },
+          { cmd: "CHAINSTATE.FORGET run-id", desc: "Drop a single run." },
+          { cmd: "CHAINSTATE.FORGET_CHAIN chain-id", desc: "Drop a chain definition + all its runs. Returns the number of runs dropped." },
+          { cmd: "CHAINSTATE.STATS", desc: "Chains / active runs / total runs / completes / fails / steps. Drives the dashboard's workflow panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Define an ingest pipeline once at app boot
+CHAINSTATE.DEFINE ingest-doc fetch parse extract embed store
+
+# Each user upload starts a run
+CHAINSTATE.START job-abc123 ingest-doc
+
+# Worker A picks up the job
+CHAINSTATE.DONE job-abc123 fetch "<10MB PDF binary>"
+CHAINSTATE.DONE job-abc123 parse "<extracted text>"
+# (worker A crashes here — power failure / OOM / etc.)
+
+# Worker B picks up the orphaned job
+CHAINSTATE.RESUME job-abc123
+# {
+#   chain_id: "ingest-doc",
+#   next_step: "extract",          ← pick up here, NOT from the start
+#   step_idx: 2, total_steps: 5,
+#   status: "running",
+#   artifacts: {
+#     fetch: "<10MB PDF binary>",
+#     parse: "<extracted text>"     ← worker A's work survived
+#   }
+# }
+
+# Worker B continues from extract
+CHAINSTATE.DONE job-abc123 extract "<entity list>"
+CHAINSTATE.DONE job-abc123 embed   "<vector ids>"
+CHAINSTATE.DONE job-abc123 store   "doc-42"
+# next_step=""  status=complete
+
+# Recovery dashboard
+CHAINSTATE.RUNS ingest-doc STATUS failed
+# (everything still pending; investigate)`,
+      },
+      {
+        id: "moe",
+        title: "Mixture-of-Experts router (capability × health)",
+        blurb: (
+          <>
+            Modern LLM apps fan out to specialized experts — math
+            expert, code expert, creative-writing expert, vision
+            expert. Routing today is usually hand-coded rules or a
+            single classifier — both fragile.{" "}
+            <code>MOE.*</code> is a smart router combining{" "}
+            <strong>capability match</strong> (cosine query→expert
+            description) × <strong>live health</strong> (RECORD-driven
+            success rate). Atomic counters → 142 ns/op RECORD;
+            100-expert × 128-dim ROUTE in 10 µs.
+          </>
+        ),
+        commands: [
+          { cmd: "MOE.EXPERT.REGISTER expert-id name description [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Register or replace an expert. Replacing preserves success-rate counters (so probation isn't reset by a description tweak)." },
+          { cmd: "MOE.ROUTE query [K n] [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Top-K experts by capability × (success_rate + 0.05). The smoothing constant prevents new experts from being permanently blacklisted by an early failure. K defaults to 1." },
+          { cmd: "MOE.RECORD expert-id 0|1 [LATENCY_MS n]", desc: "Update live health after the upstream completes. 1 on success, 0 on error/rate-limit/timeout. Atomic — sub-200ns hot path." },
+          { cmd: "MOE.EXPERTS [TAGS t1,t2,...]", desc: "Every expert with name, description, tags, call count, success rate, avg latency." },
+          { cmd: "MOE.FORGET expert-id", desc: "Drop an expert. Returns 1 if it existed." },
+          { cmd: "MOE.STATS", desc: "Total experts / routes / returns / records. Drives the dashboard's MoE-router panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register specialized experts at app boot
+MOE.EXPERT.REGISTER math-gpt4 "MathGPT-4" \\
+  "Solves math problems including calculus, linear algebra, and statistics" \\
+  TAGS math,quant
+
+MOE.EXPERT.REGISTER code-claude "ClaudeCode" \\
+  "Generates and debugs code in Python, Go, JavaScript, Rust" \\
+  TAGS code,engineering
+
+MOE.EXPERT.REGISTER creative-claude "ClaudeWriter" \\
+  "Writes stories, articles, marketing copy, and creative content" \\
+  TAGS writing
+
+# Per-request routing
+MOE.ROUTE "solve this calculus problem: integral of x^2 dx" K 1
+# [
+#   {expert_id: "math-gpt4",     score: 0.892, capability: 0.84, success_rate: 1.00, calls: 0}
+# ]
+
+# After each upstream call, record success/failure + latency
+MOE.RECORD math-gpt4 1 LATENCY_MS 420   # success in 420ms
+MOE.RECORD math-gpt4 0 LATENCY_MS 5000  # rate-limit timeout
+
+# After 100 failures on math-gpt4 (rate-limit storm):
+MOE.ROUTE "solve another calculus problem" K 2
+# [
+#   {expert_id: "code-claude",  score: 0.412, capability: 0.39, success_rate: 1.00},
+#   {expert_id: "math-gpt4",    score: 0.084, capability: 0.84, success_rate: 0.05}
+# ]
+# (code-claude now wins because math-gpt4 is in health-jail)
+
+# Tag-filtered routing (only science-tagged experts)
+MOE.ROUTE "explain general relativity" K 3 TAGS science
+
+# Dashboard
+MOE.EXPERTS
+# math-gpt4: 4820 calls, success_rate=0.91, avg=580ms
+# code-claude: 12400 calls, success_rate=0.97, avg=720ms
+# ...`,
+      },
     ],
   },
 
