@@ -458,6 +458,15 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "COALESCE.LOCK", "COALESCE.PUBLISH", "COALESCE.WAIT",
 		"COALESCE.STATUS", "COALESCE.FORGET", "COALESCE.KEYS", "COALESCE.STATS":
 		c.coalesceCmd(strings.TrimPrefix(cmd, "COALESCE."), args)
+	case "HEDGE.START", "HEDGE.PUBLISH", "HEDGE.WAIT", "HEDGE.STATUS",
+		"HEDGE.FORGET", "HEDGE.STATS":
+		c.hedgeCmd(strings.TrimPrefix(cmd, "HEDGE."), args)
+	case "VERIFY.SAMPLE", "VERIFY.CONSENSUS", "VERIFY.SAMPLES",
+		"VERIFY.FORGET", "VERIFY.STATS":
+		c.verifyCmd(strings.TrimPrefix(cmd, "VERIFY."), args)
+	case "REWRITE.SET", "REWRITE.GET", "REWRITE.SET_MULTI", "REWRITE.LIST",
+		"REWRITE.FORGET", "REWRITE.PURGE", "REWRITE.SETCAP", "REWRITE.SETCOST", "REWRITE.STATS":
+		c.rewriteCmd(strings.TrimPrefix(cmd, "REWRITE."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

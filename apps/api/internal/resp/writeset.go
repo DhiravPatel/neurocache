@@ -173,6 +173,21 @@ var writeCommands = map[string]bool{
 	// is the correct semantic. So none of COALESCE.* is in the
 	// writeset.
 
+	// Hedge primitives are also in-flight runtime state — same logic
+	// as COALESCE. Per-provider STATS counters do reset on restart;
+	// dashboards expect that.
+
+	// Verify samples are short-lived (one query worth) and not worth
+	// AOF-replaying; they're rebuilt on every Self-Consistency loop.
+	// FORGET / SAMPLE both omitted.
+
+	// Rewrite cache is durable — operator-tuned rewrites should
+	// survive restart so hit-rate doesn't crater after a deploy.
+	// SET / SET_MULTI / FORGET / PURGE / SETCAP / SETCOST are writes.
+	"REWRITE.SET": true, "REWRITE.SET_MULTI": true,
+	"REWRITE.FORGET": true, "REWRITE.PURGE": true,
+	"REWRITE.SETCAP": true, "REWRITE.SETCOST": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

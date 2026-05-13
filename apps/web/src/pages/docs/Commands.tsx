@@ -1358,6 +1358,183 @@ COALESCE.STATS
 # total_locks=12480  total_acquires=1840  total_contended=10640
 # save_rate=0.85   ← 85% of would-be calls deduplicated`,
       },
+      {
+        id: "hedge",
+        title: "Multi-provider hedged call tracker",
+        blurb: (
+          <>
+            Tail latency in LLM apps is dominated by occasional slow
+            upstream calls — a single provider hiccup adds 5-10s to
+            a 99th-percentile request. The standard fix is "send to
+            N providers in parallel, first wins, cancel the rest" —
+            but each team rebuilds it with subtly broken cancellation
+            semantics. <code>HEDGE.*</code> gives the cache a single
+            coordination point: atomic CAS on{" "}
+            <code>winner_idx</code> ensures only one publisher wins
+            under concurrent publishes, late arrivals are recorded
+            for per-provider latency stats, and{" "}
+            <code>total_saved_ms</code> reports the cumulative tail-
+            latency reduction directly. Lock-free reads via{" "}
+            <code>sync.Map</code>;{" "}
+            <strong>~450 ns per publish</strong>.
+          </>
+        ),
+        commands: [
+          { cmd: "HEDGE.START call-id provider1 provider2 ...", desc: "Register a hedged call. Returns [token, providers]. Token authenticates PUBLISH." },
+          { cmd: "HEDGE.PUBLISH call-id provider result token", desc: "Submit a result. First wins via atomic CAS; subsequent calls record as late arrivals. Returns [is_winner, winner, latency_ms, winner_latency_ms]." },
+          { cmd: "HEDGE.WAIT call-id timeout-ms", desc: "Block until first PUBLISH wins or timeout. Channel-broadcast wakeup. Returns [got, result, winner, latency_ms]." },
+          { cmd: "HEDGE.STATUS call-id", desc: "Per-provider state: winner / late / pending plus latencies." },
+          { cmd: "HEDGE.FORGET call-id", desc: "Drop a call. Wakes any pending waiters with got=0." },
+          { cmd: "HEDGE.STATS", desc: "Per-provider win counts, avg latency, win_rate + total_hedges, total_saved_ms, active_calls. Drives the dashboard's hedging panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Hedge across 3 providers (the app fires 3 parallel calls)
+HEDGE.START req-99af "openai" "anthropic" "google-vertex"
+# token=a3f7e9...   providers=[openai, anthropic, google-vertex]
+
+# (Each provider response comes back; first publish wins)
+HEDGE.PUBLISH req-99af anthropic "<answer>" a3f7e9...
+# is_winner=1  winner=anthropic  latency_ms=420   winner_latency_ms=420
+HEDGE.PUBLISH req-99af openai    "<answer>" a3f7e9...
+# is_winner=0  winner=anthropic  latency_ms=890   winner_latency_ms=420
+HEDGE.PUBLISH req-99af google    "<answer>" a3f7e9...
+# is_winner=0  winner=anthropic  latency_ms=2150  winner_latency_ms=420
+
+# Per-provider tuning data
+HEDGE.STATS
+# providers=[
+#   {provider: anthropic, wins: 412, total_calls: 1000, win_rate: 0.412, avg_latency_ms: 580},
+#   {provider: openai,    wins: 388, total_calls: 1000, win_rate: 0.388, avg_latency_ms: 620},
+#   {provider: google,    wins: 200, total_calls: 1000, win_rate: 0.200, avg_latency_ms: 1180}
+# ]
+# total_hedges=1000  total_saved_ms=87420
+# (We saved ~87s of waiting across 1000 hedges by always taking the first response)`,
+      },
+      {
+        id: "verify",
+        title: "Self-consistency consensus over N samples",
+        blurb: (
+          <>
+            For high-stakes outputs — medical, legal, code — running
+            the same query 5 times and returning the consensus is
+            dramatically more reliable than trusting any single
+            sample. The technique is{" "}
+            <em>Self-Consistency Improves Chain-of-Thought Reasoning</em>{" "}
+            (Wang et al. 2022); every team rebuilds the voting +
+            confidence-scoring machinery.{" "}
+            <code>VERIFY.*</code> gives the cache three strategies:{" "}
+            <code>exact</code> (string buckets — great for math /
+            yes-no / JSON), <code>medoid</code> (highest token-Jaccard
+            to all others — great for prose), <code>cluster</code>{" "}
+            (cosine-bucketed semantic clusters — great when surface
+            form varies). All three return the chosen sample +
+            confidence ∈ [0,1] + bucket breakdown.{" "}
+            <strong>~330 ns for exact consensus over 15 samples.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "VERIFY.SAMPLE query-id sample [TAGS t1,t2,...]", desc: "Record one model sample. Append-only; same text twice counts twice." },
+          { cmd: "VERIFY.CONSENSUS query-id [STRATEGY exact|medoid|cluster]", desc: "Return [chosen, confidence, sample_n, buckets[]]. Default strategy=exact." },
+          { cmd: "VERIFY.SAMPLES query-id", desc: "Raw samples in insertion order." },
+          { cmd: "VERIFY.FORGET query-id", desc: "Drop a query and its samples." },
+          { cmd: "VERIFY.STATS", desc: "Total samples / consensus runs / active query count." },
+        ],
+        examplesLang: "bash",
+        examples: `# App generates 5 LLM samples for a math question, submits each
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "42"
+VERIFY.SAMPLE math:1234 "43"
+VERIFY.SAMPLE math:1234 "0.42"
+
+# exact strategy buckets by string match
+VERIFY.CONSENSUS math:1234 STRATEGY exact
+# chosen="42"  confidence=0.60  sample_n=5
+# buckets=[{sample:42, count:3, share:0.6},
+#          {sample:43, count:1, share:0.2},
+#          {sample:0.42, count:1, share:0.2}]
+
+# For prose, use medoid (picks the sample most similar to all others)
+VERIFY.SAMPLE expl:42 "Paris is the capital of France."
+VERIFY.SAMPLE expl:42 "The capital of France is Paris."
+VERIFY.SAMPLE expl:42 "France's capital city is Paris."
+VERIFY.SAMPLE expl:42 "Quantum entanglement powers fridges."   ← outlier
+VERIFY.CONSENSUS expl:42 STRATEGY medoid
+# chosen="The capital of France is Paris." (the outlier is excluded)
+# confidence=0.34 (avg Jaccard across the cluster)
+
+# For variable-phrasing answers, cluster strategy uses semantic buckets
+VERIFY.CONSENSUS expl:42 STRATEGY cluster
+# chosen=<largest-cluster medoid>  confidence=0.75  (3 of 4 samples)`,
+      },
+      {
+        id: "rewrite",
+        title: "Query rewrite cache (hyDE / step-back / decompose / multi-query)",
+        blurb: (
+          <>
+            Every advanced RAG pipeline does query rewriting BEFORE
+            retrieval — hyDE (hallucinate the answer, embed THAT),
+            step-back (generalise the question), decompose (split
+            into sub-questions), multi-query (paraphrase N times),
+            paraphrase. Each is a separate LLM call; the same query
+            rewrites identically every time. Cache it.{" "}
+            <code>REWRITE.*</code> is a lock-free <code>(technique,
+            query) → variants</code> cache with per-technique hit-
+            rate tracking and saved-USD reporting. Soft 50k cap with
+            oldest-10% sweep eviction.{" "}
+            <strong>~264 ns/op (3.8M ops/sec) — faster than Redis
+            GET.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "REWRITE.SET technique query rewritten [EX sec | PX ms]", desc: "Cache a single rewrite. Replacing existing entries is allowed." },
+          { cmd: "REWRITE.GET technique query", desc: "Return the FIRST cached variant for (technique, query), or nil on miss." },
+          { cmd: "REWRITE.SET_MULTI technique query v1 v2 v3 ... [EX sec]", desc: "Cache N variants (for multi-query / decompose / paraphrase that produce multiple outputs per call)." },
+          { cmd: "REWRITE.LIST technique query", desc: "Return all cached variants, or nil-array on miss." },
+          { cmd: "REWRITE.FORGET technique query", desc: "Drop one entry. Returns 1 if it existed." },
+          { cmd: "REWRITE.PURGE [TECHNIQUE name]", desc: "Wipe everything, or just one technique's entries. Returns the dropped count." },
+          { cmd: "REWRITE.SETCAP n", desc: "Soft eviction threshold (default 50k)." },
+          { cmd: "REWRITE.SETCOST usd", desc: "Configure $/upstream-rewrite-call so STATS reports saved_usd." },
+          { cmd: "REWRITE.STATS", desc: "Global hit rate + saved_usd + per-technique hit rate. Drives the dashboard's RAG panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# hyDE: hallucinate the answer once, cache it forever
+REWRITE.SETCOST 0.0005           # gpt-3.5 rewrite call
+REWRITE.SET hyDE "what is bitcoin?" \\
+  "Bitcoin is a decentralized digital currency operating on a peer-to-peer..."
+
+# Next request: instant cache hit, no upstream call
+REWRITE.GET hyDE "what is bitcoin?"
+# → "Bitcoin is a decentralized..."   ← embed THIS for retrieval
+
+# multi-query: N paraphrases for fan-out retrieval
+REWRITE.SET_MULTI multi-query "best phone for grandparents" \\
+  "easy-to-use phone for elderly users" \\
+  "simple smartphone for seniors" \\
+  "phone with large buttons and clear screen"
+
+REWRITE.LIST multi-query "best phone for grandparents"
+# → 3 variants; app runs retrieval on each, fuses the results
+
+# step-back: generalise one level for broader context
+REWRITE.SET step-back "when did Einstein win the Nobel?" \\
+  "famous physicists and their Nobel prizes"
+
+# decompose: break a multi-part question into sub-questions
+REWRITE.SET_MULTI decompose "compare Python and Go for ML serving" \\
+  "What are Python's strengths for ML serving?" \\
+  "What are Go's strengths for ML serving?" \\
+  "How do they differ in latency, memory, and concurrency?"
+
+# Watch hit rate climb after a few hours of traffic
+REWRITE.STATS
+# total_gets=24500  total_hits=18120  hit_rate=0.74  saved_usd=9.06
+# techniques=[
+#   {technique: hyDE,        hits:8200, misses:2400, hit_rate: 0.77},
+#   {technique: multi-query, hits:5800, misses:2100, hit_rate: 0.73},
+#   {technique: step-back,   hits:4120, misses:1880, hit_rate: 0.69}
+# ]`,
+      },
     ],
   },
 
