@@ -222,6 +222,24 @@ type Engine struct {
 	// per-technique hit-rate tracking, saved_usd reporting.
 	Rewrite *llmstack.RewriteCache
 
+	// Citation extractor + validator. Parses "[N]" / "[Source-A]"
+	// markers in LLM output and resolves them against caller-
+	// supplied source passages. Catches hallucinated citation IDs +
+	// missing/unreferenced sources. Lock-free, atomic counters.
+	Citations *llmstack.CitationExtractor
+
+	// Prompt compression — composable strategies (whitespace +
+	// stopwords + truncate). Reports tokens-saved + ratio so
+	// dashboards track the cost reduction. Pure compute, no state.
+	Shrinker *llmstack.PromptShrinker
+
+	// Agent step-budget enforcer. STEP increments atomic counters
+	// and checks every cap (max_steps / max_tool_calls / max_tokens
+	// / max_time_ms); returns should_stop=true on the first
+	// breach. Prevents runaway agents from blowing through token
+	// budgets. Lock-free, sub-100ns per step.
+	AgentLoop *llmstack.AgentLoopTracker
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -381,6 +399,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Hedge = llmstack.NewHedgeTracker()
 	e.Verify = llmstack.NewVerifyManager()
 	e.Rewrite = llmstack.NewRewriteCache()
+	e.Citations = llmstack.NewCitationExtractor()
+	e.Shrinker = llmstack.NewPromptShrinker(e.Tokens)
+	e.AgentLoop = llmstack.NewAgentLoopTracker()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
