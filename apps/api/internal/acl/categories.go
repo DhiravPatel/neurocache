@@ -1160,6 +1160,38 @@ var registry = map[string]commandInfo{
 	"SESSION.CLUSTER.LIST":    {[]string{CatAI, CatRead, CatFast}},
 	"SESSION.CLUSTER.RESET":   {[]string{CatAI, CatWrite, CatFast}},
 	"SESSION.CLUSTER.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// DOC.FRESH.* — RAG-corpus freshness tracker.
+	"DOC.FRESH.REGISTER":   {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.STAMP":      {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.CHECK":      {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.INVALIDATE": {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.BULKCHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.STALE":      {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.DROP":       {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// CACHE.WARM.* — semantic cache warmer.
+	"CACHE.WARM.RECORD":   {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.PLAN":     {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.MARK":     {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.PROGRESS": {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.MINSIM":   {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// FAIRQUEUE.* — weighted-fair tenant queue.
+	"FAIRQUEUE.CONFIG":     {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.ENQUEUE":    {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.DEQUEUE":    {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.PEEK":       {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.LEN":        {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.DROPTENANT": {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.RESET":      {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.STATS":      {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

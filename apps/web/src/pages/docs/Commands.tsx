@@ -4838,6 +4838,180 @@ SESSION.CLUSTER.MEMBERS support cohort-1
 SESSION.CLUSTER.STATUS support sess-1
 # session_id=sess-1  cohort_id=cohort-1`,
       },
+      {
+        id: "doc-fresh",
+        title: "RAG-corpus freshness tracker (DOC.FRESH.*)",
+        blurb: (
+          <>
+            <code>FACT.STALE</code> marks cached <i>answers</i> stale
+            when the world changes. <code>DOC.FRESH.*</code> is the
+            corpus equivalent: indexed RAG docs have upstream sources
+            (CMS articles, scraped pages, JIRA tickets). When the
+            source changes, every retrieval that returns the stale
+            indexed copy returns wrong context. Standard fix is a
+            nightly reindex — leaves up to 24h of staleness.{" "}
+            <code>DOC.FRESH.*</code> gives apps a lightweight per-doc
+            layer so retrieval can down-rank a known-stale chunk on
+            the fly, flag the answer with a "freshness warning", or
+            skip the chunk entirely.
+          </>
+        ),
+        commands: [
+          { cmd: "DOC.FRESH.REGISTER doc-id source-url [HASH h] [TTL seconds]", desc: "Idempotent. Re-register with a new HASH acknowledges the change." },
+          { cmd: "DOC.FRESH.STAMP doc-id [HASH h]", desc: "Re-stamp on re-index. If HASH differs from registered, doc flips to stale." },
+          { cmd: "DOC.FRESH.CHECK doc-id", desc: "→ status (fresh|stale|expired|missing) / age_seconds / hash / source / reason." },
+          { cmd: "DOC.FRESH.INVALIDATE doc-id [REASON r]", desc: "Webhook-driven case: source changed, flip stale now." },
+          { cmd: "DOC.FRESH.BULKCHECK doc-id1 doc-id2 ...", desc: "Multi-doc CHECK for a whole retrieval set." },
+          { cmd: "DOC.FRESH.STALE [LIMIT n]", desc: "Known-stale doc ids, newest stale first." },
+          { cmd: "DOC.FRESH.LIST", desc: "Every registered doc id." },
+          { cmd: "DOC.FRESH.DROP doc-id|ALL", desc: "Remove tracking." },
+          { cmd: "DOC.FRESH.STATS", desc: "Docs / stale_docs / counters." },
+        ],
+        examplesLang: "bash",
+        examples: `# At index time, register the doc with its source hash
+DOC.FRESH.REGISTER kb-billing-cancel \\
+  https://docs/billing/cancel HASH sha256:abc123 TTL 86400
+
+# Every retrieval also fires CHECK on the chunk's doc
+DOC.FRESH.CHECK kb-billing-cancel
+# status=fresh  age_seconds=1240  hash=sha256:abc123
+
+# CMS webhook fires — source has been edited
+DOC.FRESH.INVALIDATE kb-billing-cancel REASON "cms_publish webhook"
+DOC.FRESH.CHECK kb-billing-cancel
+# status=stale  reason="explicitly invalidated: cms_publish webhook"
+# → retrieval down-ranks this chunk until re-index
+
+# Re-index pipeline runs, computes the new hash
+DOC.FRESH.STAMP kb-billing-cancel HASH sha256:def456
+# Hash differs from registered → still stale
+DOC.FRESH.CHECK kb-billing-cancel
+# status=stale  reason="hash mismatch with registered"
+
+# Re-register with the new hash signals "this is the truth now"
+DOC.FRESH.REGISTER kb-billing-cancel https://... HASH sha256:def456 TTL 86400
+DOC.FRESH.CHECK kb-billing-cancel
+# status=fresh
+
+# PM dashboard: what's stale right now?
+DOC.FRESH.STALE LIMIT 20`,
+      },
+      {
+        id: "cache-warm",
+        title: "Semantic cache warming (CACHE.WARM.*)",
+        blurb: (
+          <>
+            The cold-start problem: new region, new tenant, major
+            product launch — the semantic cache is empty, hit-rate is
+            0%, every request costs the full LLM. Teams with a
+            production query log have the answer in it: replay the
+            last 30 days to pre-warm before the spike. Most write
+            that replay script by hand and forget to deduplicate,
+            paying for "summarize the doc" 200 times.{" "}
+            <code>CACHE.WARM.*</code> is the warming dataset as a
+            primitive — semantic dedup (paraphrases collapse onto
+            one entry, weight summed) and per-query MARK for
+            progress tracking.
+          </>
+        ),
+        commands: [
+          { cmd: "CACHE.WARM.RECORD warm-id query [WEIGHT w]", desc: "Feed one historical query. WEIGHT defaults to 1." },
+          { cmd: "CACHE.WARM.PLAN warm-id [LIMIT n]", desc: "Deduplicated weight-sorted plan. Unwarmed entries come first." },
+          { cmd: "CACHE.WARM.MARK warm-id query", desc: "Idempotent. Marks a planned query as warmed." },
+          { cmd: "CACHE.WARM.PROGRESS warm-id", desc: "→ total / warmed / remaining / pct_complete." },
+          { cmd: "CACHE.WARM.MINSIM warm-id f", desc: "Override dedup threshold (default 0.85, lower for hashed-BoW)." },
+          { cmd: "CACHE.WARM.LIST", desc: "Every warm-id." },
+          { cmd: "CACHE.WARM.RESET warm-id|ALL", desc: "Drop a warm plan." },
+          { cmd: "CACHE.WARM.STATS", desc: "Plans / entries / counters." },
+        ],
+        examplesLang: "bash",
+        examples: `# Replay the last 30 days of logs into the warming plan
+# (apps that already aggregated their log pass the actual count)
+CACHE.WARM.RECORD eu-launch "what is the pricing model" WEIGHT 342
+CACHE.WARM.RECORD eu-launch "explain pricing tiers"     WEIGHT 281
+CACHE.WARM.RECORD eu-launch "pricing for enterprise"    WEIGHT 195
+# ... 50,000 more rows ...
+
+# Pull the deduplicated plan (paraphrases collapsed, weights summed)
+CACHE.WARM.PLAN eu-launch LIMIT 100
+# [
+#   { query: "what is the pricing model", weight: 818, warmed: 0 },
+#   { query: "how do I cancel my subscription", weight: 614, warmed: 0 },
+#   ...
+# ]
+
+# Caller fires these as LLM calls and marks each one warmed
+CACHE.WARM.MARK eu-launch "what is the pricing model"
+CACHE.WARM.MARK eu-launch "how do I cancel my subscription"
+
+# Status before the launch
+CACHE.WARM.PROGRESS eu-launch
+# total=1247  warmed=843  remaining=404  pct_complete=0.676
+# → "we'll cold-start with 68% of the cache pre-populated"`,
+      },
+      {
+        id: "fairqueue",
+        title: "Weighted-fair tenant queue (FAIRQUEUE.*)",
+        blurb: (
+          <>
+            <code>RATELIMIT</code> <i>rejects</i> over-budget requests
+            — that protects the system but burns the caller (429s,
+            retries, surfaced errors).{" "}
+            <code>FAIRQUEUE.*</code> <i>parks</i> requests by tenant
+            priority and drains them at the system's allowed rate, so
+            a free-tier burst doesn't starve a paid tenant and
+            nothing 429s that didn't have to. Stride scheduling
+            (deterministic, easy to reason about for compliance
+            reviews): each tenant gets passes proportional to weight.
+          </>
+        ),
+        commands: [
+          { cmd: "FAIRQUEUE.CONFIG queue-id [TENANT t WEIGHT n]+", desc: "Set per-tenant weights. WEIGHT=0 removes the tenant." },
+          { cmd: "FAIRQUEUE.ENQUEUE queue-id tenant request-id [PAYLOAD p]", desc: "→ overall depth at insertion (handy for '#34 in line' UX)." },
+          { cmd: "FAIRQUEUE.DEQUEUE queue-id", desc: "→ tenant / request_id / payload / waited_ms. Honours weighted-fair order." },
+          { cmd: "FAIRQUEUE.PEEK queue-id [LIMIT n]", desc: "Preview next-up without dequeuing." },
+          { cmd: "FAIRQUEUE.LEN queue-id [TENANT t]", desc: "Overall queue depth, or per-tenant depth." },
+          { cmd: "FAIRQUEUE.DROPTENANT queue-id tenant", desc: "Remove tenant + their parked requests." },
+          { cmd: "FAIRQUEUE.LIST", desc: "Every queue id." },
+          { cmd: "FAIRQUEUE.RESET queue-id|ALL", desc: "Drop a queue." },
+          { cmd: "FAIRQUEUE.STATS", desc: "Queues / parked / enqueues / dequeues." },
+        ],
+        examplesLang: "bash",
+        examples: `# Two tenants: paid gets 3× the share of free
+FAIRQUEUE.CONFIG llm-api \\
+  TENANT paid WEIGHT 3 \\
+  TENANT free WEIGHT 1
+
+# Free tier bursts (50 requests), paid trickles in (5 requests)
+FAIRQUEUE.ENQUEUE llm-api free req-f1
+FAIRQUEUE.ENQUEUE llm-api free req-f2
+# ... 48 more ...
+FAIRQUEUE.ENQUEUE llm-api paid req-p1
+# → depth returned at each enqueue for UX feedback
+
+FAIRQUEUE.LEN llm-api               # 51
+FAIRQUEUE.LEN llm-api TENANT paid   # 1
+FAIRQUEUE.LEN llm-api TENANT free   # 50
+
+# Drain — paid gets ~3× the scheduling slots
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=paid   request_id=req-p1  waited_ms=12
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=free   request_id=req-f1
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=free   request_id=req-f2
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=free   request_id=req-f3
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=paid   ... (and so on — paid:free ≈ 3:1)
+
+# Peek without dequeuing — show 'next up' UX
+FAIRQUEUE.PEEK llm-api LIMIT 5
+
+# Compliance demand: drop a banned tenant
+FAIRQUEUE.DROPTENANT llm-api free
+# → 50 requests dropped`,
+      },
     ],
   },
 

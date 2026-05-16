@@ -476,6 +476,24 @@ var writeCommands = map[string]bool{
 	// record PMs query for trend analysis. TOP/MEMBERS/STATUS are reads.
 	"SESSION.CLUSTER.OBSERVE": true, "SESSION.CLUSTER.RESET": true,
 
+	// DOC.FRESH registrations + stamps persist — they're the canonical
+	// freshness state for the RAG corpus. CHECK/BULKCHECK/STALE/LIST
+	// are reads.
+	"DOC.FRESH.REGISTER": true, "DOC.FRESH.STAMP": true,
+	"DOC.FRESH.INVALIDATE": true, "DOC.FRESH.DROP": true,
+
+	// CACHE.WARM plans persist — they're the warming dataset and the
+	// MARK progress record. PLAN/PROGRESS are reads.
+	"CACHE.WARM.RECORD": true, "CACHE.WARM.MARK": true,
+	"CACHE.WARM.MINSIM": true, "CACHE.WARM.RESET": true,
+
+	// FAIRQUEUE config + parked requests persist — the queue is the
+	// source of truth for "what's waiting." DEQUEUE is a structural
+	// mutation; PEEK/LEN/STATS are reads.
+	"FAIRQUEUE.CONFIG": true, "FAIRQUEUE.ENQUEUE": true,
+	"FAIRQUEUE.DEQUEUE": true, "FAIRQUEUE.DROPTENANT": true,
+	"FAIRQUEUE.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

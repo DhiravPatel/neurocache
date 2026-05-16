@@ -586,6 +586,25 @@ type Engine struct {
 	// about this week" with member sessions for drill-down.
 	SessionCluster *llmstack.SessionCluster
 
+	// RAG-corpus freshness tracker. FACT.STALE marks stale cached
+	// answers; DOC.FRESH marks stale indexed documents (CMS page
+	// updated, ticket reopened) so retrieval can down-rank a known-
+	// stale chunk on the fly instead of waiting for the nightly
+	// reindex.
+	DocFresh *llmstack.DocFreshTracker
+
+	// Semantic cache warmer. Replays a historical query log to
+	// pre-populate the cache before a launch/region/traffic spike
+	// so cold-start hit-rate isn't 0%. Dedupes paraphrases so apps
+	// don't pay for "summarize the doc" 200 times.
+	CacheWarm *llmstack.CacheWarmer
+
+	// Weighted-fair tenant queue. RATELIMIT *rejects* over-budget
+	// requests (burns the caller); FAIRQUEUE *parks* them by tenant
+	// priority and drains at the system's allowed rate so a free-
+	// tier burst doesn't starve a paid tenant. Stride scheduling.
+	FairQueue *llmstack.FairQueue
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -805,6 +824,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.EvalSet = llmstack.NewEvalSetStore()
 	e.AdaptLatency = llmstack.NewAdaptLatency()
 	e.SessionCluster = llmstack.NewSessionCluster()
+	e.DocFresh = llmstack.NewDocFreshTracker()
+	e.CacheWarm = llmstack.NewCacheWarmer()
+	e.FairQueue = llmstack.NewFairQueue()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

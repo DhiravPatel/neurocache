@@ -1166,6 +1166,56 @@ SESSION.CLUSTER.TOP support LIMIT 10 WINDOW 604800
 # [{cohort_id:"cohort-1", sample:"how do I cancel mid-cycle",
 #   member_sessions:142, observations:312}, ...]
 SESSION.CLUSTER.MEMBERS support cohort-1   # PM drills into transcripts
+
+# RAG-corpus freshness tracker — FACT.STALE marks cached answers
+# stale; DOC.FRESH marks indexed RAG documents stale (CMS update,
+# ticket reopened) so retrieval can down-rank known-stale chunks
+# on the fly instead of waiting for the nightly reindex.
+DOC.FRESH.REGISTER kb-billing-cancel \
+  https://docs/billing/cancel HASH sha256:abc123 TTL 86400
+DOC.FRESH.CHECK kb-billing-cancel
+# status=fresh  age_seconds=1240
+DOC.FRESH.INVALIDATE kb-billing-cancel REASON "cms_publish webhook"
+DOC.FRESH.CHECK kb-billing-cancel
+# status=stale  reason="explicitly invalidated: cms_publish webhook"
+# → retrieval down-ranks this chunk until re-index
+DOC.FRESH.STAMP kb-billing-cancel HASH sha256:def456
+# still stale until REGISTER updates the truth
+DOC.FRESH.STALE LIMIT 20      # PM dashboard view
+
+# Semantic cache warming from query logs — the cold-start fix.
+# Replays the last 30 days of queries to pre-populate the cache
+# before a launch/region/traffic spike. Dedupes paraphrases so apps
+# don't pay for "summarize the doc" 200 times.
+CACHE.WARM.RECORD eu-launch "what is the pricing model" WEIGHT 342
+CACHE.WARM.RECORD eu-launch "explain pricing tiers" WEIGHT 281
+CACHE.WARM.RECORD eu-launch "pricing for enterprise" WEIGHT 195
+# ... 50,000 more rows ...
+CACHE.WARM.PLAN eu-launch LIMIT 100
+# [{query:"what is the pricing model", weight:818, warmed:0}, ...]
+# (paraphrases collapsed; weights summed)
+CACHE.WARM.MARK eu-launch "what is the pricing model"
+CACHE.WARM.PROGRESS eu-launch
+# total=1247  warmed=843  remaining=404  pct_complete=0.676
+# → "we'll cold-start with 68% of the cache pre-populated"
+
+# Weighted-fair tenant queue — RATELIMIT rejects (burns the
+# caller); FAIRQUEUE parks by tenant priority and drains at the
+# allowed rate so free-tier bursts don't starve paid tenants.
+# Stride scheduling for deterministic, audit-friendly fairness.
+FAIRQUEUE.CONFIG llm-api \
+  TENANT paid WEIGHT 3 \
+  TENANT free WEIGHT 1
+FAIRQUEUE.ENQUEUE llm-api free req-f1
+FAIRQUEUE.ENQUEUE llm-api paid req-p1
+# ... 50 more free, 5 more paid ...
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=paid  request_id=req-p1  waited_ms=12   # served first
+FAIRQUEUE.DEQUEUE llm-api
+# tenant=free  request_id=req-f1
+# (paid:free observed ≈ 3:1 over the drain)
+FAIRQUEUE.LEN llm-api TENANT free   # 50
+FAIRQUEUE.DROPTENANT llm-api free   # compliance kick → 50 dropped
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
