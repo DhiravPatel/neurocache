@@ -4509,6 +4509,169 @@ STREAM.WATCH.STATUS gen-9f3a
 # last_verdict=stop  last_reason="cycle: token repeated 8 times"
 # stopped_by_watch=1`,
       },
+      {
+        id: "plan-validate",
+        title: "Multi-step agent plan validator (PLAN.VALIDATE.*)",
+        blurb: (
+          <>
+            <code>CONTRACT</code> validates one LLM call's I/O shape.
+            It does nothing about the <i>plan</i> the agent produces
+            — a 12-step DAG of LLM + tool calls where step 9 takes
+            the output of step 4. Plans go wrong in five mechanical
+            ways: cycle, unknown-dep, unknown-output, unreachable,
+            duplicate-id. <code>PLAN.VALIDATE.*</code> catches all
+            five deterministically (Kahn's algorithm + dep walk —
+            no LLM, no embedding) before the executor burns 30 tool
+            calls finding out the hard way.
+          </>
+        ),
+        commands: [
+          { cmd: "PLAN.VALIDATE.NEW plan-id", desc: "Create an empty plan." },
+          { cmd: "PLAN.VALIDATE.ADDSTEP plan-id step-id [DEPS d1,d2,...] [INPUTS k=v,...] [OUTPUTS o1,o2,...]", desc: "Register a step. Inputs of the form 'step:<id>.<field>' create implicit deps." },
+          { cmd: "PLAN.VALIDATE.CHECK plan-id [STRICT 0|1]", desc: "→ valid / issues / n_steps / n_cycles. STRICT raises unreachable warnings to errors." },
+          { cmd: "PLAN.VALIDATE.STATUS plan-id", desc: "Parsed plan structure." },
+          { cmd: "PLAN.VALIDATE.LIST", desc: "Every plan id." },
+          { cmd: "PLAN.VALIDATE.DROP plan-id|ALL", desc: "Remove a plan." },
+          { cmd: "PLAN.VALIDATE.STATS", desc: "Plans / total checks." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register a 3-step plan
+PLAN.VALIDATE.NEW summarize-pipeline
+PLAN.VALIDATE.ADDSTEP summarize-pipeline fetch OUTPUTS doc
+PLAN.VALIDATE.ADDSTEP summarize-pipeline summarize \\
+  INPUTS  text=step:fetch.doc \\
+  OUTPUTS summary
+PLAN.VALIDATE.ADDSTEP summarize-pipeline post \\
+  INPUTS body=step:summarize.summary
+
+# Gate before executing — deterministic, no LLM
+PLAN.VALIDATE.CHECK summarize-pipeline
+# valid=1  n_steps=3  n_cycles=0  issues=[]
+
+# Add a broken step — typo in the dep
+PLAN.VALIDATE.ADDSTEP summarize-pipeline post \\
+  INPUTS body=step:summarrize.summary    # ← typo
+PLAN.VALIDATE.CHECK summarize-pipeline
+# valid=0  issues=[
+#   {level:"error", code:"unknown-dep", step_id:"post",
+#    message:"input 'body' references unknown step: summarrize"}
+# ]
+
+# Cycle detection
+PLAN.VALIDATE.NEW broken
+PLAN.VALIDATE.ADDSTEP broken a DEPS b OUTPUTS x
+PLAN.VALIDATE.ADDSTEP broken b DEPS a OUTPUTS y
+PLAN.VALIDATE.CHECK broken
+# valid=0  n_cycles=2
+# issues=[{code:"cycle", message:"plan has 2 unresolved step(s) in a dependency cycle"}]`,
+      },
+      {
+        id: "vec-audit",
+        title: "Vector-store poison detector (VEC.AUDIT.*)",
+        blurb: (
+          <>
+            <code>CONTEXT.SCAN</code> catches malicious instructions
+            inside retrieved <i>text</i>. <code>VEC.AUDIT.*</code>
+            catches the more sophisticated case: a vector
+            <i>engineered</i> to sit near the index centroid so it
+            scores high on almost every retrieval and silently
+            inserts the attacker's content into the LLM's context.
+            Two complementary signals: <b>centroid distance</b>
+            (sitting too close = suspicious) and{" "}
+            <b>query affinity</b> (high mean cosine to many recent
+            queries = poison). INJECT guards text; nothing else
+            guards the vector store itself.
+          </>
+        ),
+        commands: [
+          { cmd: "VEC.AUDIT.BASELINE index-id v1 v2 ...", desc: "Seed normal samples (≥5 vectors, comma-separated floats). Computes centroid + 5th/95th-percentile distance shell." },
+          { cmd: "VEC.AUDIT.ADDQUERY index-id v", desc: "Record one recent query (rolling cap, default 500)." },
+          { cmd: "VEC.AUDIT.CHECK index-id v", desc: "→ verdict (stable|warning|poison|no_baseline) / anomaly_score / centroid_distance / top_query_affinity / reason." },
+          { cmd: "VEC.AUDIT.STATUS index-id", desc: "Baseline size / healthy distance band / query buffer size." },
+          { cmd: "VEC.AUDIT.LIST", desc: "Every index id known." },
+          { cmd: "VEC.AUDIT.SETCAP n", desc: "Recent-query buffer cap." },
+          { cmd: "VEC.AUDIT.RESET index-id|ALL", desc: "Drop baseline + queries." },
+          { cmd: "VEC.AUDIT.STATS", desc: "Indexes / checks / poisons detected / queries." },
+        ],
+        examplesLang: "bash",
+        examples: `# Seed baseline from 50 known-good embedding samples
+VEC.AUDIT.BASELINE docs \\
+  0.12,0.45,-0.31,... \\
+  0.08,0.51,-0.27,... \\
+  ... (50 vectors total)
+
+# Feed recent query vectors as users search
+VEC.AUDIT.ADDQUERY docs 0.31,0.19,0.06,...
+VEC.AUDIT.ADDQUERY docs 0.27,0.22,0.04,...
+
+# Audit every incoming insert before it lands in the index
+VEC.AUDIT.CHECK docs 0.11,0.44,-0.30,...
+# verdict=stable  anomaly_score=0.05  centroid_distance=0.92
+# top_query_affinity=0.31
+
+# Adversarial vector engineered to match every query
+VEC.AUDIT.CHECK docs 0.01,0.01,0.01,0.01,...   # near centroid
+# verdict=poison  anomaly_score=0.90
+# centroid_distance=0.02   ← suspiciously close
+# top_query_affinity=0.89  ← matches recent queries too well
+# reason="vector sits suspiciously close to index centroid |
+#         high mean cosine to top recent queries"
+# → orchestrator rejects the insert, quarantines the source`,
+      },
+      {
+        id: "extract-trace",
+        title: "Field-level extraction provenance (EXTRACT.TRACE.*)",
+        blurb: (
+          <>
+            Pipelines that pull structured fields out of unstructured
+            documents — legal (parties + amounts from a contract),
+            medical (diagnosis + medication from a discharge summary),
+            finance (line items from an invoice) — are{" "}
+            <i>required</i> to show their work in any audited setting.
+            Every team rolls this glue by hand and gets it wrong
+            somewhere; usually the LLM hallucinates a value that
+            isn't anywhere in the source.{" "}
+            <code>EXTRACT.TRACE.*</code> makes provenance first-class:
+            every field carries its substantiating span; VERIFY
+            checks that the span actually contains the claimed value
+            (with numeric normalisation and case-insensitive
+            matching), catching hallucinations deterministically.
+          </>
+        ),
+        commands: [
+          { cmd: "EXTRACT.TRACE.NEW extract-id source-text", desc: "Bind an extraction to a source document." },
+          { cmd: "EXTRACT.TRACE.SET extract-id field VALUE v SPAN start end [CONFIDENCE c]", desc: "Record one field with its substantiating byte-offset span." },
+          { cmd: "EXTRACT.TRACE.GET extract-id field", desc: "→ value / span_start / span_end / source_span / confidence." },
+          { cmd: "EXTRACT.TRACE.ALL extract-id", desc: "Every field in insertion order." },
+          { cmd: "EXTRACT.TRACE.VERIFY extract-id", desc: "→ valid / issues / n_fields. Codes: hallucination | bad-span." },
+          { cmd: "EXTRACT.TRACE.LIST", desc: "Every extract id." },
+          { cmd: "EXTRACT.TRACE.DROP extract-id|ALL", desc: "Remove an extraction record." },
+          { cmd: "EXTRACT.TRACE.STATS", desc: "Extracts / new / sets / verifies." },
+        ],
+        examplesLang: "bash",
+        examples: `# Bind extraction to the source document
+EXTRACT.TRACE.NEW invoice-447 "Invoice total: $42,000.00 USD"
+
+# LLM extracts the amount with a substantiating span
+EXTRACT.TRACE.SET invoice-447 amount \\
+  VALUE 42000 \\
+  SPAN  15 25 \\
+  CONFIDENCE 0.95
+
+EXTRACT.TRACE.GET invoice-447 amount
+# value=42000  span_start=15  span_end=25
+# source_span="$42,000.00"  confidence=0.95
+
+# Verify catches LLM hallucinations
+EXTRACT.TRACE.NEW invoice-448 "Invoice total: $42,000.00 USD"
+EXTRACT.TRACE.SET invoice-448 amount VALUE 99999 SPAN 15 25 CONFIDENCE 0.7
+# (LLM claimed $99,999 but pointed at the real $42,000 span)
+EXTRACT.TRACE.VERIFY invoice-448
+# valid=0  n_fields=1
+# issues=[{field:"amount", code:"hallucination",
+#         message:"value '99999' not found in span '$42,000.00'"}]
+# → orchestrator routes to human review`,
+      },
     ],
   },
 

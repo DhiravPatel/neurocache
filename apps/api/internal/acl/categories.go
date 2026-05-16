@@ -1102,6 +1102,35 @@ var registry = map[string]commandInfo{
 	"STREAM.WATCH.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
 	"STREAM.WATCH.RESET":    {[]string{CatAI, CatWrite, CatFast}},
 	"STREAM.WATCH.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// PLAN.VALIDATE.* — multi-step agent plan validator.
+	"PLAN.VALIDATE.NEW":     {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.ADDSTEP": {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.DROP":    {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// VEC.AUDIT.* — RAG index poisoning detector.
+	"VEC.AUDIT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.ADDQUERY": {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.SETCAP":   {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// EXTRACT.TRACE.* — field-level extraction provenance.
+	"EXTRACT.TRACE.NEW":    {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.ALL":    {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.VERIFY": {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.DROP":   {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

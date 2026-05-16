@@ -552,6 +552,23 @@ type Engine struct {
 	// cancel the upstream stream on stop to save output tokens.
 	StreamWatch *llmstack.StreamWatcher
 
+	// Multi-step agent plan validator. CONTRACT validates one call;
+	// PLAN.VALIDATE.* validates the *plan* (cycles, unsatisfied deps,
+	// unreachable steps) before the executor burns 30 tool calls.
+	PlanValidate *llmstack.PlanValidator
+
+	// Vector-store poison detector. CONTEXT.SCAN guards retrieved
+	// text; VEC.AUDIT guards the index itself — flags vectors that
+	// sit suspiciously close to the centroid or score high against
+	// many recent queries (the classic RAG-poisoning attack).
+	VecAudit *llmstack.VectorAudit
+
+	// Field-level extraction provenance. Required for any audited
+	// extraction pipeline (legal, medical, finance): which source
+	// span substantiates each extracted field. VERIFY catches LLM
+	// hallucinations where the value isn't anywhere in the source.
+	ExtractTrace *llmstack.ExtractTraceStore
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -765,6 +782,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Escalate = llmstack.NewEscalationLadder()
 	e.Forecast = llmstack.NewCostForecast()
 	e.StreamWatch = llmstack.NewStreamWatcher()
+	e.PlanValidate = llmstack.NewPlanValidator()
+	e.VecAudit = llmstack.NewVectorAudit()
+	e.ExtractTrace = llmstack.NewExtractTraceStore()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

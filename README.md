@@ -1084,6 +1084,47 @@ STREAM.WATCH.TOKEN gen-9f3a "the"   # x8 in a row
 # → orchestrator cancels the upstream LLM stream
 STREAM.WATCH.STATUS gen-9f3a
 # length=58  unique_ratio=0.38  stopped_by_watch=1
+
+# Multi-step agent plan validator — CONTRACT validates one call;
+# PLAN.VALIDATE catches cycles, unknown deps, unknown output
+# fields, and unreachable steps before the executor burns 30 tool
+# calls finding out. Deterministic graph analysis, no LLM.
+PLAN.VALIDATE.NEW summarize-pipeline
+PLAN.VALIDATE.ADDSTEP summarize-pipeline fetch OUTPUTS doc
+PLAN.VALIDATE.ADDSTEP summarize-pipeline summarize \
+  INPUTS text=step:fetch.doc OUTPUTS summary
+PLAN.VALIDATE.ADDSTEP summarize-pipeline post \
+  INPUTS body=step:summarrize.summary    # ← typo
+PLAN.VALIDATE.CHECK summarize-pipeline
+# valid=0  issues=[{code:"unknown-dep", step_id:"post",
+#   message:"input 'body' references unknown step: summarrize"}]
+
+# RAG index poisoning detector — CONTEXT.SCAN guards retrieved
+# text; VEC.AUDIT guards the vector store itself. Flags vectors
+# engineered to sit near the centroid (match everything) or score
+# high against many recent queries.
+VEC.AUDIT.BASELINE docs <50 known-good vectors>
+VEC.AUDIT.ADDQUERY docs 0.31,0.19,0.06,...
+VEC.AUDIT.CHECK docs 0.01,0.01,0.01,...   # near centroid
+# verdict=poison  anomaly_score=0.90
+# centroid_distance=0.02  top_query_affinity=0.89
+# reason="vector sits suspiciously close to index centroid |
+#         high mean cosine to top recent queries"
+
+# Field-level extraction provenance — required for audited
+# extraction pipelines (legal/medical/finance). VERIFY catches
+# LLM hallucinations where the value isn't in the source span.
+EXTRACT.TRACE.NEW invoice-447 "Invoice total: $42,000.00 USD"
+EXTRACT.TRACE.SET invoice-447 amount \
+  VALUE 42000 SPAN 15 25 CONFIDENCE 0.95
+EXTRACT.TRACE.VERIFY invoice-447
+# valid=1  n_fields=1   (numeric normalisation handles "$42,000.00")
+
+# Catches the hallucination case
+EXTRACT.TRACE.SET invoice-447 fake_amount VALUE 99999 SPAN 15 25 CONFIDENCE 0.7
+EXTRACT.TRACE.VERIFY invoice-447
+# valid=0  issues=[{field:"fake_amount", code:"hallucination",
+#   message:"value '99999' not found in span '$42,000.00'"}]
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

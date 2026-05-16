@@ -446,6 +446,21 @@ var writeCommands = map[string]bool{
 	// so operator-issued wipes survive.
 	"STREAM.WATCH.RESET": true,
 
+	// PLAN.VALIDATE plans + steps persist — agent runs reference them
+	// across retries and across nodes. CHECK is a pure read.
+	"PLAN.VALIDATE.NEW": true, "PLAN.VALIDATE.ADDSTEP": true,
+	"PLAN.VALIDATE.DROP": true,
+
+	// VEC.AUDIT baselines + recent queries persist — they're the
+	// reference distribution for poisoning detection.
+	"VEC.AUDIT.BASELINE": true, "VEC.AUDIT.ADDQUERY": true,
+	"VEC.AUDIT.RESET": true, "VEC.AUDIT.SETCAP": true,
+
+	// EXTRACT.TRACE records persist — audited extraction pipelines
+	// reference them for compliance review weeks later.
+	"EXTRACT.TRACE.NEW": true, "EXTRACT.TRACE.SET": true,
+	"EXTRACT.TRACE.DROP": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
