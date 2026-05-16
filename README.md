@@ -836,6 +836,47 @@ EMB.MIGRATE.COMPARE docs-v2 OLD <q-old> NEW <q-new> K 10
 # overlap_at_k=8  jaccard_at_k=0.67  (8/10 docs in both top-K)
 # Once verified across many test queries:
 EMB.MIGRATE.CUTOVER docs-v2     # atomic swap
+
+# Conversation forking — CONV.* is one linear history per session,
+# fine for chat; CONV.FORK.* is a first-class DAG so agents can
+# explore what-if branches off any prior step without copy-paste
+# plumbing. Every fork records its parent + the index it diverged at.
+CONV.FORK.SEED plan-root
+CONV.FORK.APPEND plan-root user      "Plan a 3-day Rome trip"
+CONV.FORK.APPEND plan-root assistant "Day 1: ..."
+# Two planners diverge from turn 2
+CONV.FORK.CREATE plan-root planner-A AT 2
+CONV.FORK.CREATE plan-root planner-B AT 2
+CONV.FORK.APPEND planner-A user "Optimize for museums"
+CONV.FORK.APPEND planner-B user "Optimize for food"
+CONV.FORK.TREE plan-root        # full subtree
+CONV.FORK.DELETE planner-B      # drop the losing branch
+
+# Semantic version diff — byte-diff says "changed"; SEMDIFF tells
+# you whether the change meaningfully shifted meaning. Named
+# versions cache embeddings so COMPARE is ~100 ns.
+SEMDIFF.CHECK "Summarize the document briefly." \
+              "Summarize the document briefly with citations."
+# cosine=0.91  verdict=equivalent
+SEMDIFF.PUT summarizer-prompt v1 "Summarize the document briefly."
+SEMDIFF.PUT summarizer-prompt v2 "Summarize the document with citations."
+SEMDIFF.PUT summarizer-prompt v3 "Write a recipe for chocolate cake."
+SEMDIFF.COMPARE summarizer-prompt v2 v3
+# cosine=0.18  verdict=divergent   # someone broke the prompt!
+SEMDIFF.HISTORY summarizer-prompt  # drift per consecutive version
+
+# Semantic rate limiting — classical N/min misses the same
+# expensive question paraphrased 8 ways. RATELIMIT.SEM denies
+# similar-embedding bursts (default: max 5 cosine≥0.85 per 60s).
+RATELIMIT.SEM.CONFIG free-tier LIMIT 3 THRESHOLD 0.85 WINDOW 60
+RATELIMIT.SEM.CHECK free-tier "summarize this document carefully"
+# allow=1  similar_count=0
+RATELIMIT.SEM.CHECK free-tier "please summarize the document"
+RATELIMIT.SEM.CHECK free-tier "give me a summary of this doc"
+RATELIMIT.SEM.CHECK free-tier "summarize the doc briefly"
+# allow=0  reason=rate_limit_exceeded  similar_count=3  top_cosine=0.91
+RATELIMIT.SEM.CHECK free-tier "translate French to English"
+# allow=1  similar_count=0   # different intent → bypasses bucket
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

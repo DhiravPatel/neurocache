@@ -3546,6 +3546,156 @@ EMB.MIGRATE.CUTOVER docs-v2
 # Old vectors can now be dropped at the app's discretion
 EMB.MIGRATE.ABORT docs-v2     # (or keep around for rollback)`,
       },
+      {
+        id: "conv-fork",
+        title: "Conversation forking (CONV.FORK.*)",
+        blurb: (
+          <>
+            <code>CONV.*</code> gives you one linear history per session
+            — fine for chat. The moment you want to explore <i>what-if</i>
+            paths ("retry the agent from step 7 with a different system
+            prompt", "A/B two tool choices from the same prefix", "let
+            three planners diverge from a shared planning prefix"), you
+            need a tree, not a list.{" "}
+            <code>CONV.FORK.*</code> is a first-class fork DAG: every
+            branch records its parent + the index it diverged at; turns
+            copy on fork (cheap — strings are immutable Go-side). Apps
+            can prune dead branches with one <code>DELETE</code>.
+          </>
+        ),
+        commands: [
+          { cmd: "CONV.FORK.SEED root-id", desc: "Create a new empty root branch." },
+          { cmd: "CONV.FORK.CREATE parent-id fork-id [AT n]", desc: "Fork at turn index n (or copy all turns if omitted). Fork-id must be unique." },
+          { cmd: "CONV.FORK.APPEND conv-id role content", desc: "Append a turn to one branch independently of siblings." },
+          { cmd: "CONV.FORK.GET conv-id", desc: "Return every turn on the branch." },
+          { cmd: "CONV.FORK.LIST parent-id", desc: "Direct children of a branch (sorted)." },
+          { cmd: "CONV.FORK.TREE root-id", desc: "Full descendant tree as a flat depth-first list." },
+          { cmd: "CONV.FORK.DELETE conv-id", desc: "Delete the branch AND every descendant. Returns drop count." },
+          { cmd: "CONV.FORK.STATS", desc: "Branches / roots / seeds / forks / appends / deletes." },
+        ],
+        examplesLang: "bash",
+        examples: `# Seed a planning conversation that two planners will fork from
+CONV.FORK.SEED plan-root
+CONV.FORK.APPEND plan-root user      "Plan a 3-day Rome trip on a budget"
+CONV.FORK.APPEND plan-root assistant "Day 1: ..."
+
+# Two planners diverge from turn 2 (after the planner replied)
+CONV.FORK.CREATE plan-root planner-A AT 2
+CONV.FORK.CREATE plan-root planner-B AT 2
+
+# Each planner runs independently
+CONV.FORK.APPEND planner-A user "Optimize for museums"
+CONV.FORK.APPEND planner-B user "Optimize for food"
+
+# See the tree
+CONV.FORK.TREE plan-root
+# plan-root (turns=2) → [planner-A, planner-B]
+#   planner-A (forked_at=2, turns=3)
+#   planner-B (forked_at=2, turns=3)
+
+# Kill the losing branch
+CONV.FORK.DELETE planner-B
+# → 1   (drops planner-B subtree)`,
+      },
+      {
+        id: "semdiff",
+        title: "Semantic version diff (SEMDIFF.*)",
+        blurb: (
+          <>
+            Byte-diff says "changed". <code>SEMDIFF.*</code> tells you
+            whether the change <i>meaningfully shifted meaning</i> — the
+            version-control problem for prompts and RAG documents. A
+            one-word polish and a complete rewrite both look "modified"
+            to <code>diff</code>. <code>SEMDIFF.CHECK</code> returns a
+            four-tier verdict (identical / equivalent / related /
+            divergent) in embedding space; named versions get cached
+            vectors so <code>COMPARE</code> is a single dot product.
+          </>
+        ),
+        commands: [
+          { cmd: "SEMDIFF.CHECK text-a text-b", desc: "One-shot diff → cosine + verdict (identical / equivalent / related / divergent)." },
+          { cmd: "SEMDIFF.PUT name version text", desc: "Store a labelled version of the prompt / document." },
+          { cmd: "SEMDIFF.GET name [VERSION v]", desc: "Retrieve a stored version's text (latest if omitted)." },
+          { cmd: "SEMDIFF.COMPARE name v1 v2", desc: "Diff two stored versions of the same name. ~100 ns (vectors already cached)." },
+          { cmd: "SEMDIFF.HISTORY name", desc: "Version list with vs-prev cosine per row — see drift over time." },
+          { cmd: "SEMDIFF.LATEST name", desc: "Latest version label + text." },
+          { cmd: "SEMDIFF.NAMES", desc: "Every tracked name, sorted." },
+          { cmd: "SEMDIFF.DELETE name", desc: "Drop every version under name." },
+          { cmd: "SEMDIFF.STATS", desc: "Names / total versions / checks / puts / compares." },
+        ],
+        examplesLang: "bash",
+        examples: `# One-shot: did the new prompt change meaning?
+SEMDIFF.CHECK \\
+  "Summarize the document carefully." \\
+  "Summarize the document carefully, with citations."
+# cosine=0.91  verdict=equivalent  identical=0  equivalent=1
+
+# Track prompt versions over time
+SEMDIFF.PUT summarizer-prompt v1 "Summarize the document briefly."
+SEMDIFF.PUT summarizer-prompt v2 "Summarize the document briefly with citations."
+SEMDIFF.PUT summarizer-prompt v3 "Write a recipe for chocolate cake."
+
+# How much did v2 → v3 shift?
+SEMDIFF.COMPARE summarizer-prompt v2 v3
+# cosine=0.18  verdict=divergent
+# → CI gate: block ship, surface to prompt-review queue
+
+# History shows drift between consecutive versions
+SEMDIFF.HISTORY summarizer-prompt
+# v1  vs_prev=0.00
+# v2  vs_prev=0.94   (small refinement)
+# v3  vs_prev=0.18   (someone broke the prompt!)`,
+      },
+      {
+        id: "ratelimit-sem",
+        title: "Semantic rate limiting (RATELIMIT.SEM.*)",
+        blurb: (
+          <>
+            Classical rate limits (<code>N/min/tenant</code>) miss the
+            actual abuse pattern: <i>the same expensive question
+            paraphrased 8 ways</i>. Per-key idempotency caches help
+            when the question is repeated <i>exactly</i> — a determined
+            caller defeats them with a comma.{" "}
+            <code>RATELIMIT.SEM.*</code> rate-limits in embedding space:
+            "if there are already MAX similar requests (cosine ≥
+            THRESHOLD) in the last WINDOW from this tenant, deny."
+            Defaults: max=5, threshold=0.85, window=60s — tunable per
+            tenant.
+          </>
+        ),
+        commands: [
+          { cmd: "RATELIMIT.SEM.CHECK tenant text", desc: "Check + record on allow → allow / reason / similar_count / top_cosine." },
+          { cmd: "RATELIMIT.SEM.PEEK tenant text", desc: "Same as CHECK, but never records (dry-run gate decisions)." },
+          { cmd: "RATELIMIT.SEM.CONFIG tenant [LIMIT n] [THRESHOLD f] [WINDOW seconds]", desc: "Per-tenant tunables. Zero values keep current." },
+          { cmd: "RATELIMIT.SEM.STATUS tenant", desc: "Bucket size / limit / threshold / window." },
+          { cmd: "RATELIMIT.SEM.RESET tenant", desc: "Drop the in-window bucket (config preserved)." },
+          { cmd: "RATELIMIT.SEM.RECENT tenant", desc: "Recent in-window requests as {ts, text} rows." },
+          { cmd: "RATELIMIT.SEM.LIST", desc: "Every tenant id known to the limiter." },
+          { cmd: "RATELIMIT.SEM.STATS", desc: "Tenants / checks / allowed / denied / peeks." },
+        ],
+        examplesLang: "bash",
+        examples: `# Tighten the free tier: max 3 similar requests per 60s
+RATELIMIT.SEM.CONFIG free-tier LIMIT 3 THRESHOLD 0.85 WINDOW 60
+
+# First 3 paraphrases pass — bucket fills up
+RATELIMIT.SEM.CHECK free-tier "summarize this document carefully"
+# allow=1  reason=ok  similar_count=0
+RATELIMIT.SEM.CHECK free-tier "please summarize the document"
+# allow=1  reason=ok  similar_count=1
+RATELIMIT.SEM.CHECK free-tier "give me a summary of this doc"
+# allow=1  reason=ok  similar_count=2
+
+# 4th paraphrase blocked
+RATELIMIT.SEM.CHECK free-tier "summarize the doc briefly"
+# allow=0  reason=rate_limit_exceeded  similar_count=3  top_cosine=0.91
+
+# Different intent — bypasses the bucket
+RATELIMIT.SEM.CHECK free-tier "translate French to English"
+# allow=1  reason=ok  similar_count=0
+
+# Dry-run check before committing the call
+RATELIMIT.SEM.PEEK free-tier "would this paraphrase be blocked?"`,
+      },
     ],
   },
 

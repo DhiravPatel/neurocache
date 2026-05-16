@@ -919,6 +919,37 @@ var registry = map[string]commandInfo{
 	"EMB.MIGRATE.ABORT":   {[]string{CatAI, CatWrite, CatFast}},
 	"EMB.MIGRATE.LIST":    {[]string{CatAI, CatRead, CatFast}},
 	"EMB.MIGRATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CONV.FORK.* — branched conversation tree for agent what-if runs.
+	"CONV.FORK.SEED":   {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.CREATE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.APPEND": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.TREE":   {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.DELETE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// SEMDIFF.* — semantic version diff for prompts/RAG docs.
+	"SEMDIFF.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.PUT":     {[]string{CatAI, CatWrite, CatFast}},
+	"SEMDIFF.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.COMPARE": {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.HISTORY": {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.LATEST":  {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.DELETE":  {[]string{CatAI, CatWrite, CatFast}},
+	"SEMDIFF.NAMES":   {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// RATELIMIT.SEM.* — semantic rate limiter.
+	"RATELIMIT.SEM.CHECK":  {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.PEEK":   {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.RECENT": {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

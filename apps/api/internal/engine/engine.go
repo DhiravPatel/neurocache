@@ -445,6 +445,21 @@ type Engine struct {
 	// COMPARE recall on a held-out set, then atomically CUTOVER.
 	EmbMigrate *llmstack.EmbMigrator
 
+	// Conversation forking. CONV.* gives you one linear history per
+	// session; CONV.FORK.* gives you a full DAG so agents can explore
+	// what-if branches off any prior step without copy-paste plumbing.
+	ConvFork *llmstack.ConvForkManager
+
+	// Semantic version diff for prompts/RAG documents. Byte-diff says
+	// "changed"; SEMDIFF.* tells you whether the change meaningfully
+	// shifted meaning. Stores named versions for regression review.
+	SemDiff *llmstack.SemDiffStore
+
+	// Semantic rate-limiting. Classical N/min misses the same expensive
+	// question paraphrased 8 ways; RATELIMIT.SEM.* denies similar-
+	// embedding bursts inside a per-tenant window.
+	SemRate *llmstack.SemRateLimiter
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -640,6 +655,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Goal = llmstack.NewGoalTracker()
 	e.Ledger = llmstack.NewCostLedger()
 	e.EmbMigrate = llmstack.NewEmbMigrator()
+	e.ConvFork = llmstack.NewConvForkManager()
+	e.SemDiff = llmstack.NewSemDiffStore()
+	e.SemRate = llmstack.NewSemRateLimiter()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

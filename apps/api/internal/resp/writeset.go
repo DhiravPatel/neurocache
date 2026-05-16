@@ -346,6 +346,22 @@ var writeCommands = map[string]bool{
 	"EMB.MIGRATE.START": true, "EMB.MIGRATE.WRITE": true,
 	"EMB.MIGRATE.CUTOVER": true, "EMB.MIGRATE.ABORT": true,
 
+	// CONV.FORK tree is durable. Agent exploration runs cost real
+	// LLM money; the fork graph should survive crash so callers can
+	// resume mid-explore.
+	"CONV.FORK.SEED": true, "CONV.FORK.CREATE": true,
+	"CONV.FORK.APPEND": true, "CONV.FORK.DELETE": true,
+
+	// SEMDIFF named versions are durable — they're the prompt-history
+	// version-control store. CHECK / COMPARE / GET / HISTORY are reads.
+	"SEMDIFF.PUT": true, "SEMDIFF.DELETE": true,
+
+	// RATELIMIT.SEM CONFIG + RESET are durable; CHECK records into the
+	// in-memory bucket but the bucket itself is rebuilt on restart
+	// (rate-limit windows are seconds-to-minutes, not days), so the
+	// per-tenant config is what we have to persist.
+	"RATELIMIT.SEM.CONFIG": true, "RATELIMIT.SEM.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
