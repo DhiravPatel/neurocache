@@ -461,6 +461,21 @@ var writeCommands = map[string]bool{
 	"EXTRACT.TRACE.NEW": true, "EXTRACT.TRACE.SET": true,
 	"EXTRACT.TRACE.DROP": true,
 
+	// EVALSET cases + frozen versions + run scores persist — this is
+	// the regression-test record of truth. DIFF is pure read.
+	"EVALSET.CREATE": true, "EVALSET.ADDCASE": true,
+	"EVALSET.FREEZE": true, "EVALSET.RECORD": true,
+	"EVALSET.DROP": true,
+
+	// ADAPT.LATENCY configs persist — latency samples are operational
+	// (in-memory window only). PICK is a read.
+	"ADAPT.LATENCY.CONFIG": true, "ADAPT.LATENCY.OBSERVE": true,
+	"ADAPT.LATENCY.RESET": true,
+
+	// SESSION.CLUSTER observations persist — they're the historical
+	// record PMs query for trend analysis. TOP/MEMBERS/STATUS are reads.
+	"SESSION.CLUSTER.OBSERVE": true, "SESSION.CLUSTER.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

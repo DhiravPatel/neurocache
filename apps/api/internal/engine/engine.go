@@ -569,6 +569,23 @@ type Engine struct {
 	// hallucinations where the value isn't anywhere in the source.
 	ExtractTrace *llmstack.ExtractTraceStore
 
+	// Versioned golden-set + regression diff. JUDGE runs cases live;
+	// EVALSET.FREEZE pins them so the only variable in a v1 → v2 DIFF
+	// is the model. The CI gate every team rebuilds.
+	EvalSet *llmstack.EvalSetStore
+
+	// Live latency-driven model downgrader. CASCADE picks by input
+	// difficulty; ADAPT.LATENCY downgrades to a faster model when
+	// the expensive tier's p99 breaches the SLO — the lever to pull
+	// during a traffic spike.
+	AdaptLatency *llmstack.AdaptLatency
+
+	// Real-time semantic user cohort analytics. PROMPT.GROUPS clusters
+	// by lexical fingerprint; SESSION.CLUSTER groups requests by
+	// meaning so PMs can see "the top 10 things users are asking
+	// about this week" with member sessions for drill-down.
+	SessionCluster *llmstack.SessionCluster
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -785,6 +802,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.PlanValidate = llmstack.NewPlanValidator()
 	e.VecAudit = llmstack.NewVectorAudit()
 	e.ExtractTrace = llmstack.NewExtractTraceStore()
+	e.EvalSet = llmstack.NewEvalSetStore()
+	e.AdaptLatency = llmstack.NewAdaptLatency()
+	e.SessionCluster = llmstack.NewSessionCluster()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

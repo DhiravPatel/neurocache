@@ -1131,6 +1131,35 @@ var registry = map[string]commandInfo{
 	"EXTRACT.TRACE.LIST":   {[]string{CatAI, CatRead, CatFast}},
 	"EXTRACT.TRACE.DROP":   {[]string{CatAI, CatWrite, CatFast}},
 	"EXTRACT.TRACE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// EVALSET.* — versioned golden set + regression diff.
+	"EVALSET.CREATE":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.ADDCASE": {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.FREEZE":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.DIFF":    {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.DROP":    {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// ADAPT.LATENCY.* — live latency-driven model downgrader.
+	"ADAPT.LATENCY.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.PICK":    {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// SESSION.CLUSTER.* — semantic user cohort analytics.
+	"SESSION.CLUSTER.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"SESSION.CLUSTER.TOP":     {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.MEMBERS": {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"SESSION.CLUSTER.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

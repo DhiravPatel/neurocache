@@ -4672,6 +4672,172 @@ EXTRACT.TRACE.VERIFY invoice-448
 #         message:"value '99999' not found in span '$42,000.00'"}]
 # → orchestrator routes to human review`,
       },
+      {
+        id: "evalset",
+        title: "Versioned golden-set + regression diff (EVALSET.*)",
+        blurb: (
+          <>
+            JUDGE runs cases live against one model. <code>EVALSET.*</code>{" "}
+            is the CI gate: <code>FREEZE</code> a snapshot of cases
+            (immutable from then on), <code>RECORD</code> a model's
+            per-case scores, <code>DIFF</code> two model runs over the{" "}
+            <i>same frozen version</i> to surface exactly which cases
+            regressed vs improved. Teams that run evals against a
+            "current set of cases" with no version pin silently change
+            the cases between runs and lose the ability to attribute
+            regressions to the model change vs the eval change.
+            FREEZE pins them so the only variable is the model.
+          </>
+        ),
+        commands: [
+          { cmd: "EVALSET.CREATE eval-id", desc: "Open a new eval set in draft mode." },
+          { cmd: "EVALSET.ADDCASE eval-id case-id input [EXPECTED v]", desc: "Add a case to the draft. Re-add overwrites; freezing snapshots the draft." },
+          { cmd: "EVALSET.FREEZE eval-id version-tag", desc: "Snapshot draft as immutable version. Cases added after FREEZE belong to the next version." },
+          { cmd: "EVALSET.RECORD eval-id version case-id model-tag SCORE q [OUTPUT out]", desc: "Score one case under one model. q ∈ [0,1]." },
+          { cmd: "EVALSET.DIFF eval-id version model-a model-b", desc: "→ regressions / improvements / new_failures / newly_passing / delta_mean." },
+          { cmd: "EVALSET.STATUS eval-id", desc: "Per-version case count + models run." },
+          { cmd: "EVALSET.LIST", desc: "Every eval id." },
+          { cmd: "EVALSET.DROP eval-id|ALL", desc: "Remove an eval set." },
+          { cmd: "EVALSET.STATS", desc: "Sets / adds / freezes / records / diffs." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build up a draft set of 200 golden cases
+EVALSET.CREATE summarizer
+EVALSET.ADDCASE summarizer c1 "Summarize this 5-page doc..." EXPECTED "..."
+EVALSET.ADDCASE summarizer c2 "..." EXPECTED "..."
+# ... add 198 more ...
+
+# Freeze v1 — cases are now immutable for this version
+EVALSET.FREEZE summarizer v1
+
+# Run baseline model and record per-case scores
+EVALSET.RECORD summarizer v1 c1 gpt-4 SCORE 0.92 OUTPUT "..."
+EVALSET.RECORD summarizer v1 c2 gpt-4 SCORE 0.78
+# ... 198 more ...
+
+# Try the new model — same frozen cases, same eval, only model differs
+EVALSET.RECORD summarizer v1 c1 gpt-4o SCORE 0.95
+EVALSET.RECORD summarizer v1 c2 gpt-4o SCORE 0.45    # ← regressed badly
+# ... 198 more ...
+
+# Regression diff — the CI gate
+EVALSET.DIFF summarizer v1 gpt-4 gpt-4o
+# total_a=200  total_b=200  delta_mean=+0.04
+# regressions=[
+#   { case_id: "c2", score_a: 0.78, score_b: 0.45, delta: -0.33 },
+#   ...
+# ]
+# improvements=[ {case_id:"c1", delta:+0.03}, ... ]
+# new_failures=["c2"]    ← passed in v1, fails now
+# newly_passing=["c47"]  ← failed in v1, passes now
+# → CI gate: 1 new_failure → ship blocked, surface to reviewer`,
+      },
+      {
+        id: "adapt-latency",
+        title: "Latency-driven model downgrader (ADAPT.LATENCY.*)",
+        blurb: (
+          <>
+            <code>CASCADE</code> picks a model tier by{" "}
+            <i>input difficulty</i> — small for easy, big for hard.
+            It is blind to what's happening upstream right now.
+            During a traffic spike the expensive tier's p99 climbs
+            past the SLO and CASCADE keeps routing to it.{" "}
+            <code>ADAPT.LATENCY.*</code> is the SLO lever:{" "}
+            <code>PICK</code> returns the most expensive model whose
+            current p99 still fits the target. When the expensive
+            tier breaches, PICK silently falls back to the
+            next-cheaper option until p99 recovers — a circuit
+            breaker as a primitive.
+          </>
+        ),
+        commands: [
+          { cmd: "ADAPT.LATENCY.CONFIG policy-id [TARGETS model:cost,...] [WINDOW seconds] [MIN_SAMPLES n]", desc: "Defaults: 60s window, 20 min samples. TARGETS sort by cost desc." },
+          { cmd: "ADAPT.LATENCY.OBSERVE policy-id model latency_ms", desc: "Record one latency tick (rolling per-model window)." },
+          { cmd: "ADAPT.LATENCY.PICK policy-id TARGET_P99_MS n", desc: "→ model / p99_ms / samples / reason / demoted. Optimistic on insufficient samples; cheapest-fallback when all tiers breach." },
+          { cmd: "ADAPT.LATENCY.STATUS policy-id", desc: "Per-model samples / p50 / p95 / p99." },
+          { cmd: "ADAPT.LATENCY.LIST", desc: "Active policies." },
+          { cmd: "ADAPT.LATENCY.RESET policy-id|ALL", desc: "Drop policy state." },
+          { cmd: "ADAPT.LATENCY.STATS", desc: "Policies / observes / picks / demotes." },
+        ],
+        examplesLang: "bash",
+        examples: `# Configure cascade: expensive (cost=10) → mid (5) → cheap (1)
+ADAPT.LATENCY.CONFIG support \\
+  TARGETS expensive:10,mid:5,cheap:1 \\
+  WINDOW 60 MIN_SAMPLES 20
+
+# Every actual LLM call records its latency
+ADAPT.LATENCY.OBSERVE support expensive 450
+ADAPT.LATENCY.OBSERVE support mid 200
+ADAPT.LATENCY.OBSERVE support cheap 50
+
+# Pick the right model under a 500ms p99 SLO
+ADAPT.LATENCY.PICK support TARGET_P99_MS 500
+# model=expensive  p99_ms=480  demoted=0
+# reason="p99 within target"
+
+# Traffic spike — expensive p99 climbs to 900ms
+ADAPT.LATENCY.OBSERVE support expensive 920
+ADAPT.LATENCY.OBSERVE support expensive 880
+# ... 20 more breaches ...
+ADAPT.LATENCY.PICK support TARGET_P99_MS 500
+# model=mid  p99_ms=210  demoted=1
+# reason="p99 within target"   ← automatic downgrade
+
+ADAPT.LATENCY.STATUS support
+# expensive:  samples=120  p50=510  p95=850  p99=920
+# mid:        samples=80   p50=180  p95=210  p99=240
+# cheap:      samples=200  p50=45   p95=70   p99=85`,
+      },
+      {
+        id: "session-cluster",
+        title: "Semantic user cohort analytics (SESSION.CLUSTER.*)",
+        blurb: (
+          <>
+            <code>PROMPT.GROUPS</code> clusters by lexical fingerprint
+            (good for cache-key normalisation; bad at "the user
+            community asked the same question in 40 phrasings").{" "}
+            <code>RAG.GAP</code> clusters <i>low-score</i> queries.
+            Neither is the product-analytics surface PMs want: "what
+            are the top 10 things users are asking about this week,
+            ranked by volume, with member sessions for drill-down?"
+            <code>SESSION.CLUSTER.*</code> is that view, in embedding
+            space, real-time — sessions move between cohorts as their
+            requests shift.
+          </>
+        ),
+        commands: [
+          { cmd: "SESSION.CLUSTER.OBSERVE cluster-id session-id request [MIN_SIM f]", desc: "Auto-cohort. MIN_SIM defaults 0.50 (hashed-BoW)." },
+          { cmd: "SESSION.CLUSTER.TOP cluster-id [LIMIT n] [WINDOW seconds]", desc: "Top cohorts sorted by member-session count desc." },
+          { cmd: "SESSION.CLUSTER.MEMBERS cluster-id cohort-id", desc: "Sessions in that cohort (for PM drill-down)." },
+          { cmd: "SESSION.CLUSTER.STATUS cluster-id session-id", desc: "Current cohort id for a session." },
+          { cmd: "SESSION.CLUSTER.LIST", desc: "Every cluster_id." },
+          { cmd: "SESSION.CLUSTER.RESET cluster-id|ALL", desc: "Drop cluster state." },
+          { cmd: "SESSION.CLUSTER.STATS", desc: "Clusters / total cohorts / observes." },
+        ],
+        examplesLang: "bash",
+        examples: `# Every user request lands in a cohort (or creates a new one)
+SESSION.CLUSTER.OBSERVE support sess-1 "how do I cancel mid-cycle"
+SESSION.CLUSTER.OBSERVE support sess-2 "cancel subscription billing"
+SESSION.CLUSTER.OBSERVE support sess-3 "weather forecast api"
+SESSION.CLUSTER.OBSERVE support sess-4 "subscription cancel refund"
+
+# PM dashboard: top themes this week
+SESSION.CLUSTER.TOP support LIMIT 10 WINDOW 604800
+# [
+#   { cohort_id: "cohort-1", sample_query: "how do I cancel mid-cycle",
+#     member_sessions: 142, observations: 312, age_seconds: 86400 },
+#   { cohort_id: "cohort-2", sample_query: "weather forecast api",
+#     member_sessions: 87, observations: 195 },
+# ]
+
+# Drill into the top cohort
+SESSION.CLUSTER.MEMBERS support cohort-1
+# ["sess-1", "sess-2", "sess-4", ...]   → PM pulls transcripts
+
+# Which cohort is this user currently in?
+SESSION.CLUSTER.STATUS support sess-1
+# session_id=sess-1  cohort_id=cohort-1`,
+      },
     ],
   },
 

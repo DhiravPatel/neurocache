@@ -1125,6 +1125,47 @@ EXTRACT.TRACE.SET invoice-447 fake_amount VALUE 99999 SPAN 15 25 CONFIDENCE 0.7
 EXTRACT.TRACE.VERIFY invoice-447
 # valid=0  issues=[{field:"fake_amount", code:"hallucination",
 #   message:"value '99999' not found in span '$42,000.00'"}]
+
+# Versioned golden set + regression diff — JUDGE runs cases live;
+# EVALSET.FREEZE pins them so the only variable in a v1→v2 DIFF
+# is the model. The CI gate every team rebuilds.
+EVALSET.CREATE summarizer
+EVALSET.ADDCASE summarizer c1 "Summarize this..." EXPECTED "..."
+EVALSET.ADDCASE summarizer c2 "..." EXPECTED "..."
+EVALSET.FREEZE summarizer v1     # cases immutable from now
+EVALSET.RECORD summarizer v1 c1 gpt-4 SCORE 0.92
+EVALSET.RECORD summarizer v1 c2 gpt-4 SCORE 0.78
+EVALSET.RECORD summarizer v1 c1 gpt-4o SCORE 0.95
+EVALSET.RECORD summarizer v1 c2 gpt-4o SCORE 0.45   # regressed
+EVALSET.DIFF summarizer v1 gpt-4 gpt-4o
+# delta_mean=+0.04
+# regressions=[{case_id:"c2", score_a:0.78, score_b:0.45, delta:-0.33}]
+# new_failures=["c2"]    ← passed in v1, fails now
+# → CI gate: 1 new_failure → ship blocked
+
+# Live latency-driven model downgrader — CASCADE picks by input
+# difficulty, blind to upstream pressure. ADAPT.LATENCY picks the
+# most expensive model whose p99 still fits the SLO; downgrades
+# automatically when the expensive tier breaches under load.
+ADAPT.LATENCY.CONFIG support \
+  TARGETS expensive:10,mid:5,cheap:1 WINDOW 60 MIN_SAMPLES 20
+ADAPT.LATENCY.OBSERVE support expensive 450
+ADAPT.LATENCY.PICK support TARGET_P99_MS 500
+# model=expensive  p99_ms=480  demoted=0
+# (later, traffic spike — expensive p99 climbs to 900ms)
+ADAPT.LATENCY.PICK support TARGET_P99_MS 500
+# model=mid  p99_ms=210  demoted=1   ← automatic SLO-preserving downgrade
+
+# Real-time semantic user cohort analytics — PROMPT.GROUPS clusters
+# by lexical fingerprint; SESSION.CLUSTER groups requests by
+# meaning so PMs can see "top 10 things users want this week".
+SESSION.CLUSTER.OBSERVE support sess-1 "how do I cancel mid-cycle"
+SESSION.CLUSTER.OBSERVE support sess-2 "cancel subscription billing"
+SESSION.CLUSTER.OBSERVE support sess-3 "weather forecast api"
+SESSION.CLUSTER.TOP support LIMIT 10 WINDOW 604800
+# [{cohort_id:"cohort-1", sample:"how do I cancel mid-cycle",
+#   member_sessions:142, observations:312}, ...]
+SESSION.CLUSTER.MEMBERS support cohort-1   # PM drills into transcripts
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
