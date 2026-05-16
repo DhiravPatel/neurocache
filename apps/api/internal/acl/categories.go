@@ -805,6 +805,32 @@ var registry = map[string]commandInfo{
 	"HASH.LSH.LEN":       {[]string{CatAI, CatRead, CatFast}},
 	"HASH.LSH.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
 	"HASH.LSH.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// NLI.* — entailment cache for hallucination detection.
+	"NLI.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"NLI.CHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"NLI.MGET":   {[]string{CatAI, CatRead, CatFast}},
+	"NLI.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// CASCADE.* — cost-tier model fallback ladder with learning.
+	"CASCADE.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.PICK":   {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.ALL":    {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// MASK.* — fill-in-the-middle prompt templates.
+	"MASK.REGISTER":   {[]string{CatAI, CatWrite, CatFast}},
+	"MASK.BUILD":      {[]string{CatAI, CatRead, CatFast}},
+	"MASK.UNREGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"MASK.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"MASK.STATS":      {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

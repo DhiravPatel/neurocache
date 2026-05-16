@@ -2847,6 +2847,179 @@ HASH.LSH.STATS
 # products: rows=10000  occupied_signatures=8240  avg_rows_per_bucket=1.21
 # (good: vectors are well-distributed across buckets)`,
       },
+      {
+        id: "nli",
+        title: "Natural-Language-Inference cache",
+        blurb: (
+          <>
+            Different from <code>GROUND.*</code> (lexical Jaccard)
+            and <code>VERIFY.*</code> (consistency across samples):{" "}
+            <code>NLI.*</code> caches the explicit logical-
+            relationship verdict between a premise and a hypothesis
+            — <strong>entails / contradicts / neutral</strong>.
+            Crucial for claim-level hallucination detection: "does
+            this generated claim logically follow from the source?"
+            Apps compute via their own NLI model (HuggingFace
+            roberta-nli, structured-output LLM) and cache here. 164
+            ns/op GET — bulk MGET amortises across N hypotheses.
+          </>
+        ),
+        commands: [
+          { cmd: "NLI.SET premise hypothesis relation [SCORE n] [EX sec | PX ms]", desc: "Cache an entailment verdict. Relation = entails | contradicts | neutral. Optional 0..1 confidence score." },
+          { cmd: "NLI.GET premise hypothesis", desc: "Returns [relation, score, cached=1] or nil-array on miss." },
+          { cmd: "NLI.CHECK premise hypothesis [DEFAULT relation]", desc: "Returns cached verdict if present, else the default. Useful for gracefully degrading missing-cache cases to 'neutral' (= don't gate on this claim)." },
+          { cmd: "NLI.MGET premise hypothesis1 hypothesis2 ...", desc: "Bulk fetch — one premise vs N hypotheses in a single round trip." },
+          { cmd: "NLI.FORGET premise hypothesis", desc: "Drop one entry." },
+          { cmd: "NLI.PURGE", desc: "Wipe the cache. Returns dropped count." },
+          { cmd: "NLI.STATS", desc: "Global hit rate + per-relation hit breakdown (entails / contradicts / neutral)." },
+        ],
+        examplesLang: "bash",
+        examples: `# After running the model's claim-level NLI grading
+NLI.SET "The Eiffel Tower is in Paris" \\
+        "The Eiffel Tower is located in France's capital" \\
+        entails SCORE 0.94 EX 86400
+
+NLI.SET "The Eiffel Tower is in Paris" \\
+        "The Eiffel Tower is in Berlin" \\
+        contradicts SCORE 0.99 EX 86400
+
+# Next time the model emits a similar claim, skip the upstream NLI call
+NLI.GET "The Eiffel Tower is in Paris" \\
+        "The Eiffel Tower is located in France's capital"
+# relation=entails  score=0.94  cached=1
+
+# Bulk hallucination check: one source vs N model-emitted claims
+NLI.MGET "<retrieved source paragraph>" \\
+         "Claim 1 from the model" \\
+         "Claim 2 from the model" \\
+         "Claim 3 from the model"
+# → array of {hypothesis, relation, score, cached}
+# App fans out only the uncached claims to its NLI model, then
+# NLI.SET them so the next request hits the cache
+
+# Gracefully degrade missing entries
+NLI.CHECK "premise" "hypothesis" DEFAULT neutral
+# → relation=neutral cached=0  (app treats as 'don't gate, pass through')`,
+      },
+      {
+        id: "cascade",
+        title: "Cost-tier model fallback ladder with learning",
+        blurb: (
+          <>
+            Standard practice: try the cheap model first; on quality-
+            fail (judge below threshold, grounding fails, structured
+            output invalid), retry with the expensive model. Apps
+            reinvent this in every project but never cache the{" "}
+            <strong>learning</strong> — they pay for the cheap-model
+            failure round-trip on every identical request.{" "}
+            <code>CASCADE.*</code> memoises which tier each input
+            ultimately needed. Subsequent identical inputs skip
+            the cheap tier entirely. 194 ns/op PICK.
+          </>
+        ),
+        commands: [
+          { cmd: "CASCADE.CONFIG cascade-id tier1 tier2 tier3 ...", desc: "Configure an ordered tier ladder (cheapest → most-expensive)." },
+          { cmd: "CASCADE.PICK cascade-id input", desc: "Returns [tier_idx, tier, learned] — the tier to try. Learned=1 means the cache previously learned this input needs THIS tier (skip cheaper ones)." },
+          { cmd: "CASCADE.RECORD cascade-id input tier-used 0|1", desc: "On success at tier-N, cache 'next time use tier-N.' On failure at the LAST tier, FORGET (likely transient — let the next identical input retry from the top)." },
+          { cmd: "CASCADE.STATUS cascade-id input", desc: "Read the learned tier without recording a pick. tier_idx=-1 means no cached opinion yet." },
+          { cmd: "CASCADE.FORGET cascade-id input", desc: "Drop the learned mapping for one input." },
+          { cmd: "CASCADE.PURGE [CASCADE id]", desc: "Drop one cascade or all." },
+          { cmd: "CASCADE.ALL", desc: "Every cascade with per-tier win/fail/win-rate." },
+          { cmd: "CASCADE.STATS", desc: "Total picks / records / learned-picks (the cost-savings metric)." },
+        ],
+        examplesLang: "bash",
+        examples: `# Configure a 3-tier ladder
+CASCADE.CONFIG models gpt-3.5 gpt-4 gpt-4-turbo
+
+# First request: cache has no opinion → returns cheapest
+CASCADE.PICK models "complex multi-step reasoning question"
+# tier_idx=0  tier=gpt-3.5  learned=0
+
+# (App calls gpt-3.5, judge rejects the output)
+# (App retries with gpt-4, judge accepts)
+CASCADE.RECORD models "complex multi-step reasoning question" 1 1
+
+# Next identical request: cache learned gpt-4 is needed → skip 3.5
+CASCADE.PICK models "complex multi-step reasoning question"
+# tier_idx=1  tier=gpt-4  learned=1
+# (saves one round-trip per repeat — at scale, real $)
+
+# Simple request → still goes to 3.5 (cache has no learned override)
+CASCADE.PICK models "what's 2 + 2"
+# tier_idx=0  tier=gpt-3.5  learned=0
+
+# Last-tier fail → cache forgets (likely transient)
+CASCADE.RECORD models "weird query" 2 0
+# (next identical request retries from gpt-3.5)
+
+# Per-tier success dashboard
+CASCADE.ALL
+# models: gpt-3.5 wins=8200 fails=1840 win_rate=0.82
+#         gpt-4   wins=1620 fails=220  win_rate=0.88
+#         gpt-4-turbo wins=180 fails=40 win_rate=0.82
+# learned_count=4820   ← inputs the cache has an opinion on`,
+      },
+      {
+        id: "mask",
+        title: "Fill-in-the-middle prompt builder",
+        blurb: (
+          <>
+            FIM prompts have three pieces (prefix, hole, suffix) but{" "}
+            <strong>every model expects them in a different shape</strong>:
+            StarCoder uses <code>&lt;fim_prefix&gt;</code>{" "}
+            sentinels, DeepSeek uses{" "}
+            <code>{`<｜fim▁begin｜>`}</code>, CodeLlama
+            uses <code>&lt;PRE&gt;...&lt;MID&gt;</code>. Apps
+            hand-roll these formatters with subtle bugs.{" "}
+            <code>MASK.*</code> registers each template once;{" "}
+            <code>BUILD</code> assembles correctly every time.
+            614 ns/op. Pre-loaded formats: starcoder, codellama,
+            deepseek, mask_token, chat_explain.
+          </>
+        ),
+        commands: [
+          { cmd: "MASK.REGISTER format-id template", desc: "Register or replace a template. Must contain {PREFIX} and {SUFFIX} placeholders; {MASK} optional." },
+          { cmd: "MASK.BUILD format-id prefix suffix [MASK_VAL m]", desc: "Substitute placeholders. Returns the assembled prompt. MASK_VAL defaults to empty (used by sentinel-based formats); non-empty for explicit-mask formats." },
+          { cmd: "MASK.UNREGISTER format-id", desc: "Drop a format. Returns 1 if it existed (works on pre-loaded built-ins too)." },
+          { cmd: "MASK.LIST", desc: "Every registered format with its template." },
+          { cmd: "MASK.STATS", desc: "Format count + total builds + total registers." },
+        ],
+        examplesLang: "bash",
+        examples: `# Built-in formats ready to use
+MASK.BUILD starcoder "def fibonacci(n):" "    return result"
+# → "<fim_prefix>def fibonacci(n):<fim_suffix>    return result<fim_middle>"
+
+MASK.BUILD deepseek "def fibonacci(n):" "    return result"
+# → "<｜fim▁begin｜>def fibonacci(n):<｜fim▁hole｜>    return result<｜fim▁end｜>"
+
+MASK.BUILD mask_token "Hello " " World" MASK_VAL "<FILL>"
+# → "Hello <FILL> World"
+
+# Register a custom chat-style format
+MASK.REGISTER chat_review 'Review this code completion suggestion:
+
+BEFORE:
+{PREFIX}
+
+[MISSING CODE GOES HERE]
+
+AFTER:
+{SUFFIX}
+
+Suggest the missing code only.'
+
+MASK.BUILD chat_review "def fibonacci(n):" "    return result"
+# → assembled chat prompt with explicit instructions
+
+# Image inpainting models often want a specific token format
+MASK.REGISTER inpainting "<image>{PREFIX}<mask>{SUFFIX}</image>"
+MASK.BUILD inpainting "<base64-pre>" "<base64-post>"
+
+# List all formats
+MASK.LIST
+# starcoder, codellama, deepseek, mask_token, chat_explain,
+# chat_review, inpainting`,
+      },
     ],
   },
 

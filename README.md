@@ -707,6 +707,31 @@ HASH.LSH.CREATE products 768 BITS 16
 HASH.LSH.SET products sku-1234 0.12,0.45,-0.31,...
 HASH.LSH.NEIGHBORS products <query-vec> K 10
 # → top-10 near-duplicates by cosine, sub-100 µs at 100k+ rows
+
+# Natural-Language-Inference cache for claim-level hallucination
+# detection — entails / contradicts / neutral verdicts cached
+# per (premise, hypothesis) pair. ~164 ns/op GET.
+NLI.SET "<source paragraph>" "<model claim>" entails SCORE 0.94 EX 86400
+NLI.MGET "<source>" "<claim1>" "<claim2>" "<claim3>"
+# → bulk verdicts; app fans out only the uncached claims to its NLI model
+
+# Cost-tier model fallback ladder WITH LEARNING — memoises which
+# tier each input ultimately needed. Identical inputs skip the
+# cheap tier next time. ~194 ns/op PICK.
+CASCADE.CONFIG models gpt-3.5 gpt-4 gpt-4-turbo
+CASCADE.PICK models "complex multi-step reasoning"
+# tier_idx=0 tier=gpt-3.5 learned=0  (first time — try cheap)
+CASCADE.RECORD models "complex multi-step reasoning" 1 1   # gpt-4 won
+CASCADE.PICK models "complex multi-step reasoning"
+# tier_idx=1 tier=gpt-4 learned=1   (next time — skip gpt-3.5)
+
+# Fill-in-the-middle prompt builder — every model expects a
+# different FIM shape (StarCoder / DeepSeek / CodeLlama / chat).
+# Register once, BUILD assembles correctly every time.
+MASK.BUILD starcoder "def fibonacci(n):" "    return result"
+# → "<fim_prefix>def fibonacci(n):<fim_suffix>    return result<fim_middle>"
+MASK.BUILD deepseek "def fibonacci(n):" "    return result"
+# → "<｜fim▁begin｜>def fibonacci(n):<｜fim▁hole｜>...<｜fim▁end｜>"
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
