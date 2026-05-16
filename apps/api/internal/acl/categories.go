@@ -1073,6 +1073,35 @@ var registry = map[string]commandInfo{
 	"MEMORY.CONFLICT.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
 	"MEMORY.CONFLICT.KEYS":    {[]string{CatAI, CatRead, CatFast}},
 	"MEMORY.CONFLICT.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// ESCALATE.* — composed escalation ladder.
+	"ESCALATE.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.POLICY": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// FORECAST.* — cost burn-rate forecasting.
+	"FORECAST.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.PROJECT": {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.ALERT":   {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.ALERTS":  {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.TENANTS": {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// STREAM.WATCH.* — streaming generation degeneration detector.
+	"STREAM.WATCH.OPEN":     {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.TOKEN":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.WATCH.CLOSE":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.WATCH.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.STATS":    {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

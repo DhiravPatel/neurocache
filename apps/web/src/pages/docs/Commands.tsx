@@ -4342,6 +4342,173 @@ MEMORY.CONFLICT.CHECK user:dhirav "user does not approve the migration plan"
 # Resolve: newer wins, drop the old fact
 MEMORY.CONFLICT.RESOLVE user:dhirav c-deadbeef KEEP newer`,
       },
+      {
+        id: "escalate",
+        title: "Composed escalation ladder (ESCALATE.*)",
+        blurb: (
+          <>
+            <code>CONFIDENCE</code>, <code>NOVELTY</code>,{" "}
+            <code>CASCADE</code>, <code>CACHE.LAYERS</code>: every
+            instrument, no conductor. Production teams write the
+            dispatcher by hand — a Python rules engine or a CEL/expr
+            DSL that says "if cache_score &gt;= 0.9 serve_cache; elif
+            novelty &lt; 0.4 and confidence &gt;= 0.7 cheap_model;
+            elif novelty &gt; 0.85 or confidence &lt; 0.3 human;
+            else expensive."{" "}
+            <code>ESCALATE.*</code> ships that engine as a first-class
+            primitive: a named policy with per-tier expressions
+            evaluated in priority order (cache → cheap → expensive →
+            human). <code>DECIDE</code> returns the winning tier plus
+            the clause that fired — observability of <i>why</i> for
+            free.
+          </>
+        ),
+        commands: [
+          { cmd: "ESCALATE.CONFIG policy-id [CACHE_IF expr] [CHEAP_IF expr] [EXPENSIVE_IF expr] [HUMAN_IF expr]", desc: "Expression grammar: name OP value [AND|OR name OP value …]. OP ∈ {>= <= > < ==}." },
+          { cmd: "ESCALATE.DECIDE policy-id [signal=value ...]", desc: "→ tier / reason / signals. First matching tier wins; default is 'expensive'." },
+          { cmd: "ESCALATE.RECORD policy-id tier outcome [QUALITY q]", desc: "Close the loop: log what tier was served and how it went." },
+          { cmd: "ESCALATE.REPORT policy-id", desc: "Per-tier counts / mean quality / win-lose breakdown." },
+          { cmd: "ESCALATE.POLICY policy-id", desc: "Current per-tier expressions." },
+          { cmd: "ESCALATE.LIST", desc: "Active policies." },
+          { cmd: "ESCALATE.RESET policy-id|ALL", desc: "Drop a policy." },
+          { cmd: "ESCALATE.STATS", desc: "Policies / total decisions / total records." },
+        ],
+        examplesLang: "bash",
+        examples: `# One policy, all four tiers gated
+ESCALATE.CONFIG support \\
+  CACHE_IF     "cache_score >= 0.90" \\
+  CHEAP_IF     "novelty < 0.4 AND confidence >= 0.7" \\
+  EXPENSIVE_IF "novelty < 0.8 AND confidence >= 0.5" \\
+  HUMAN_IF     "novelty > 0.85 OR confidence < 0.3"
+
+# Per request: feed the signals you already have from other commands
+ESCALATE.DECIDE support \\
+  cache_score=0.41 \\
+  novelty=0.91 \\
+  confidence=0.4
+# tier=human
+# reason="matched: novelty=0.91 > 0.85"
+# signals={cache_score:0.41, novelty:0.91, confidence:0.4}
+
+# Close the loop after the tier ran
+ESCALATE.RECORD support human resolved QUALITY 0.95
+
+# Operational view
+ESCALATE.REPORT support
+# cache:     count=842   mean_quality=0.96  win=820  lose=4
+# cheap:     count=1421  mean_quality=0.81  win=1287 lose=89
+# expensive: count=512   mean_quality=0.88  win=478  lose=21
+# human:     count=68    mean_quality=0.95  win=66   lose=0`,
+      },
+      {
+        id: "forecast",
+        title: "Cost burn-rate forecasting (FORECAST.*)",
+        blurb: (
+          <>
+            <code>GUARD</code> enforces the cap (rejects when over).{" "}
+            <code>LEDGER</code> reports the past (who spent what).{" "}
+            <code>FORECAST.*</code> projects forward — "at this rate
+            you breach the monthly cap on the 19th." Teams want the
+            alert <i>before</i> the wall, not at it. Linear regression
+            over recent spend ticks; surfaces{" "}
+            <code>breach_eta_unix</code> and{" "}
+            <code>headroom_days</code> so the orchestrator can
+            downgrade tiers or negotiate budget before the GUARD starts
+            rejecting traffic.
+          </>
+        ),
+        commands: [
+          { cmd: "FORECAST.OBSERVE tenant spend-usd", desc: "Record one spend delta (engine timestamps it)." },
+          { cmd: "FORECAST.PROJECT tenant WINDOW seconds CAP usd", desc: "→ spent / samples / rate_usd_per_day / projected_end / verdict (ok|warning|breach) / breach_eta_unix / headroom_days." },
+          { cmd: "FORECAST.ALERT tenant AT fraction", desc: "Idempotent threshold (e.g., 0.80 fires when projected to hit 80% of cap)." },
+          { cmd: "FORECAST.ALERTS tenant", desc: "Active thresholds + last-fired timestamps." },
+          { cmd: "FORECAST.TENANTS", desc: "Every tenant known." },
+          { cmd: "FORECAST.SETCAP n", desc: "Per-tenant tick buffer cap (default 100k; oldest 10% drops on overflow)." },
+          { cmd: "FORECAST.RESET tenant|ALL", desc: "Drop ticks + alerts." },
+          { cmd: "FORECAST.STATS", desc: "Tenants / ticks / counters." },
+        ],
+        examplesLang: "bash",
+        examples: `# Every chargeable LLM call also flows into the forecaster
+FORECAST.OBSERVE tenant:acme 0.42
+FORECAST.OBSERVE tenant:acme 0.31
+FORECAST.OBSERVE tenant:acme 0.28
+# ... 9 days into the month ...
+
+# Project against the monthly cap
+FORECAST.PROJECT tenant:acme WINDOW 2592000 CAP 5000
+# spent=2840  samples=14380  rate_usd_per_day=190
+# projected_end=5700  verdict=breach
+# breach_eta_unix=1715347200   ← 2026-05-19T00:00Z
+# headroom_days=3.0
+
+# Wire an alert at 80% of cap
+FORECAST.ALERT tenant:acme AT 0.80
+FORECAST.ALERT tenant:acme AT 0.95   # second threshold
+FORECAST.ALERTS tenant:acme
+# [{fraction:0.80, last_fired_unix:0}, {fraction:0.95, last_fired_unix:0}]
+
+# Orchestrator reads PROJECT every minute; on breach verdict it
+# downgrades the tenant from ESCALATE.* expensive tier to cheap`,
+      },
+      {
+        id: "stream-watch",
+        title: "Streaming generation watcher (STREAM.WATCH.*)",
+        blurb: (
+          <>
+            LLMs go off the rails in three recognisable ways: cycle
+            (same token repeats — "the the the the …"), n-gram loop
+            (3-token pattern repeats — "X Y Z X Y Z X Y Z"), and
+            diversity collapse (unique-token ratio drops below a
+            floor). <code>STREAM.PARSE</code> extracts fields from a
+            <i> finished </i> stream; <code>STREAM.WATCH.*</code> runs{" "}
+            <i>during</i> generation so the orchestrator can early-stop
+            the upstream call and save the output tokens. Once a
+            session flips to <code>stop</code>, subsequent tokens stay
+            stopped — idempotent shutdown so concurrent token feeders
+            converge.
+          </>
+        ),
+        commands: [
+          { cmd: "STREAM.WATCH.OPEN session-id [MAX_LEN n] [CYCLE_THRESHOLD n] [NGRAM n] [NGRAM_REPEAT_THRESHOLD n] [DIVERSITY_FLOOR f] [MIN_TOKENS n]", desc: "Defaults: 2000 / 8 / 3 / 4 / 0.10 / 40. MIN_TOKENS gates signals so early repetition is normal." },
+          { cmd: "STREAM.WATCH.TOKEN session-id token", desc: "→ verdict (ok|warning|stop) / reason / length / repeat_count / unique_ratio." },
+          { cmd: "STREAM.WATCH.STATUS session-id", desc: "Full per-session snapshot." },
+          { cmd: "STREAM.WATCH.CLOSE session-id [REASON r]", desc: "Mark done; session retained for STATUS lookup." },
+          { cmd: "STREAM.WATCH.SESSIONS", desc: "Every session id." },
+          { cmd: "STREAM.WATCH.RESET session-id|ALL", desc: "Drop session(s)." },
+          { cmd: "STREAM.WATCH.STATS", desc: "Sessions / tokens / stops / warns." },
+        ],
+        examplesLang: "bash",
+        examples: `# Set up watcher when streaming starts
+STREAM.WATCH.OPEN gen-9f3a MIN_TOKENS 40 CYCLE_THRESHOLD 8
+
+# Feed each token as the upstream LLM emits it
+STREAM.WATCH.TOKEN gen-9f3a "The"
+# verdict=ok  length=1  unique_ratio=1.0
+STREAM.WATCH.TOKEN gen-9f3a "report"
+# verdict=ok  length=2
+# ... 50 tokens later ...
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+# verdict=warning  reason="cycle building: token repeated 4 times"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+STREAM.WATCH.TOKEN gen-9f3a "the"
+# verdict=stop  reason="cycle: token repeated 8 times"
+# → orchestrator cancels the upstream stream
+
+# N-gram loop catch (3-gram repeats 4 times)
+STREAM.WATCH.OPEN gen-rambling MIN_TOKENS 10
+# ... tokens X Y Z X Y Z X Y Z X Y Z ...
+# verdict=stop  reason="n-gram loop: 'X Y Z' repeated 4 times"
+
+STREAM.WATCH.STATUS gen-9f3a
+# length=58  unique_tokens=22  unique_ratio=0.38
+# last_verdict=stop  last_reason="cycle: token repeated 8 times"
+# stopped_by_watch=1`,
+      },
     ],
   },
 

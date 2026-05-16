@@ -533,6 +533,25 @@ type Engine struct {
 	// doesn't rot silently.
 	MemConflicts *llmstack.MemoryConflicts
 
+	// Composed escalation ladder. Takes a request + signals and
+	// returns the tier (cache / cheap / expensive / human) by
+	// composing CONFIDENCE, NOVELTY, CASCADE-style gates that
+	// production teams write by hand. One conductor for instruments
+	// the stack already owns.
+	Escalate *llmstack.EscalationLadder
+
+	// Cost burn-rate forecaster. GUARD enforces caps, LEDGER reports
+	// the past, FORECAST projects forward — "at this rate you breach
+	// the monthly cap on the 19th" — so the orchestrator can act
+	// before the wall, not at it.
+	Forecast *llmstack.CostForecast
+
+	// Streaming generation degeneration detector. Feeds tokens as
+	// they arrive; flips ok → warning → stop when the model loops
+	// (cycle), rambles (n-gram repeat), or collapses diversity. Apps
+	// cancel the upstream stream on stop to save output tokens.
+	StreamWatch *llmstack.StreamWatcher
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -743,6 +762,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.ShadowEval = llmstack.NewShadowEval()
 	e.Batch = llmstack.NewBatchAccumulator()
 	e.MemConflicts = llmstack.NewMemoryConflicts()
+	e.Escalate = llmstack.NewEscalationLadder()
+	e.Forecast = llmstack.NewCostForecast()
+	e.StreamWatch = llmstack.NewStreamWatcher()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

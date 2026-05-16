@@ -176,7 +176,10 @@ func (j *Jury) Verdict(questionID string) (JuryVerdict, error) {
 	}
 	if len(tied) > 1 {
 		sort.Strings(tied)
-		out.TieBroken = bestCand != tied[0]
+		// A tie was broken — set the flag regardless of which candidate
+		// happened to land in bestCand first during the (unordered)
+		// map iteration above.
+		out.TieBroken = true
 		bestCand = tied[0]
 		bestScore = scores[bestCand]
 	}

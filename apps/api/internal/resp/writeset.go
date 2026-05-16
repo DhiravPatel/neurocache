@@ -430,6 +430,22 @@ var writeCommands = map[string]bool{
 	"MEMORY.CONFLICT.ADD": true, "MEMORY.CONFLICT.RESOLVE": true,
 	"MEMORY.CONFLICT.PURGE": true,
 
+	// ESCALATE policy expressions + per-tier outcome telemetry persist;
+	// DECIDE is a pure read of those rules.
+	"ESCALATE.CONFIG": true, "ESCALATE.RECORD": true,
+	"ESCALATE.RESET": true,
+
+	// FORECAST spend ticks + alert thresholds persist — the projection
+	// is meaningless without continuity across restarts.
+	"FORECAST.OBSERVE": true, "FORECAST.ALERT": true,
+	"FORECAST.RESET": true, "FORECAST.SETCAP": true,
+
+	// STREAM.WATCH sessions are short-lived (the duration of one
+	// streaming response) so OPEN/CLOSE state is operational rather
+	// than durable. RESET is the only structural mutation we persist
+	// so operator-issued wipes survive.
+	"STREAM.WATCH.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

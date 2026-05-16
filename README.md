@@ -1039,6 +1039,51 @@ MEMORY.CONFLICT.ADD user:dhirav "user approves the migration plan"
 MEMORY.CONFLICT.CHECK user:dhirav "user does not approve the migration plan"
 # conflict=1  reason="negation differential"
 MEMORY.CONFLICT.RESOLVE user:dhirav c-deadbeef KEEP newer
+
+# Composed escalation ladder — CONFIDENCE/NOVELTY/CASCADE/CACHE.LAYERS
+# are the instruments; ESCALATE is the conductor. One DECIDE call
+# returns the tier (cache/cheap/expensive/human) by evaluating
+# tier expressions in priority order. Returns the matching clause
+# as `reason` so observability of WHY is automatic.
+ESCALATE.CONFIG support \
+  CACHE_IF     "cache_score >= 0.90" \
+  CHEAP_IF     "novelty < 0.4 AND confidence >= 0.7" \
+  EXPENSIVE_IF "novelty < 0.8 AND confidence >= 0.5" \
+  HUMAN_IF     "novelty > 0.85 OR confidence < 0.3"
+ESCALATE.DECIDE support cache_score=0.41 novelty=0.91 confidence=0.4
+# tier=human  reason="matched: novelty=0.91 > 0.85"
+ESCALATE.RECORD support human resolved QUALITY 0.95
+ESCALATE.REPORT support
+# cache:     count=842  mean_quality=0.96  win=820  lose=4
+# cheap:     count=1421 mean_quality=0.81  win=1287 lose=89
+# expensive: count=512  mean_quality=0.88  win=478  lose=21
+# human:     count=68   mean_quality=0.95  win=66   lose=0
+
+# Cost burn-rate forecasting — GUARD enforces caps, LEDGER reports
+# the past, FORECAST projects forward. Teams want the alert BEFORE
+# the wall, not at it.
+FORECAST.OBSERVE tenant:acme 0.42
+FORECAST.OBSERVE tenant:acme 0.31
+# ... 9 days into the month ...
+FORECAST.PROJECT tenant:acme WINDOW 2592000 CAP 5000
+# spent=2840  rate_usd_per_day=190  projected_end=5700
+# verdict=breach  breach_eta_unix=1715347200   (~2026-05-19)
+# headroom_days=3.0
+FORECAST.ALERT tenant:acme AT 0.80
+# orchestrator now downgrades ESCALATE tier from expensive→cheap
+
+# Streaming generation degeneration detector — STREAM.PARSE is
+# post-hoc; STREAM.WATCH runs DURING generation so the orchestrator
+# can early-stop the upstream call and save output tokens.
+STREAM.WATCH.OPEN gen-9f3a MIN_TOKENS 40 CYCLE_THRESHOLD 8
+STREAM.WATCH.TOKEN gen-9f3a "The"
+STREAM.WATCH.TOKEN gen-9f3a "report"
+# ... 50 tokens of normal generation ...
+STREAM.WATCH.TOKEN gen-9f3a "the"   # x8 in a row
+# verdict=stop  reason="cycle: token repeated 8 times"
+# → orchestrator cancels the upstream LLM stream
+STREAM.WATCH.STATUS gen-9f3a
+# length=58  unique_ratio=0.38  stopped_by_watch=1
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
