@@ -562,6 +562,17 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"BANDIT.ARMS", "BANDIT.RESET", "BANDIT.FORGET", "BANDIT.LIST",
 		"BANDIT.GLOBAL_STATS":
 		c.banditCmd(strings.TrimPrefix(cmd, "BANDIT."), args)
+	case "POLICY.SEM.DEFINE", "POLICY.SEM.ADD", "POLICY.SEM.REMOVE",
+		"POLICY.SEM.CHECK", "POLICY.SEM.LIST", "POLICY.SEM.FORGET",
+		"POLICY.SEM.STATS":
+		c.policySemCmd(strings.TrimPrefix(cmd, "POLICY.SEM."), args)
+	case "NOVELTY.BASELINE", "NOVELTY.ADD", "NOVELTY.SCORE",
+		"NOVELTY.SET_THRESHOLDS", "NOVELTY.SIZE", "NOVELTY.FORGET",
+		"NOVELTY.DETECTORS", "NOVELTY.STATS":
+		c.noveltyCmd(strings.TrimPrefix(cmd, "NOVELTY."), args)
+	case "LOCK.SEM.ACQUIRE", "LOCK.SEM.RELEASE", "LOCK.SEM.STATUS",
+		"LOCK.SEM.FORGET", "LOCK.SEM.FORGET_NAMESPACE", "LOCK.SEM.STATS":
+		c.locksemCmd(strings.TrimPrefix(cmd, "LOCK.SEM."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

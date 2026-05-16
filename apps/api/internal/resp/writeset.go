@@ -318,6 +318,19 @@ var writeCommands = map[string]bool{
 	"BANDIT.CREATE": true, "BANDIT.RECORD": true,
 	"BANDIT.RESET": true, "BANDIT.FORGET": true,
 
+	// POLICY.SEM seed banks are durable — operator-curated examples
+	// are the whole maintenance burden.
+	"POLICY.SEM.DEFINE": true, "POLICY.SEM.ADD": true,
+	"POLICY.SEM.REMOVE": true, "POLICY.SEM.FORGET": true,
+
+	// NOVELTY baselines are durable; SCORE is pure compute.
+	"NOVELTY.BASELINE": true, "NOVELTY.ADD": true,
+	"NOVELTY.SET_THRESHOLDS": true, "NOVELTY.FORGET": true,
+
+	// LOCK.SEM state is entirely in-flight runtime — held locks
+	// shouldn't survive restart (workers would all reawake from
+	// crashed state holding stale locks). None in writeset.
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

@@ -407,6 +407,26 @@ type Engine struct {
 	// Lock-free posterior updates via atomic float CAS.
 	Bandit *llmstack.BanditRouter
 
+	// Semantic firewall by example. INJECT.* is regex;
+	// POLICY.SEM.* is nearest-neighbour in embedding space.
+	// Define by paste, not by regex authoring. New attack
+	// phrasings → POLICY.SEM.ADD a seed; future paraphrases
+	// catch automatically. (Namespaced under POLICY.SEM to
+	// distinguish from POLICY.SET / POLICY.ALLOW aiops RBAC.)
+	PolicySem *llmstack.PolicyClassifier
+
+	// Per-query out-of-distribution gate. Different from DRIFT.*
+	// (aggregate). Apps use NOVELTY.SCORE per request: if novel,
+	// skip cache + force human review. Pairs with SEMNEG / CACHE
+	// .LAYERS as a front gate.
+	Novelty *llmstack.NoveltyDetector
+
+	// Semantic dedup-locks. LOCK dedupes by key; LOCK.SEM dedupes
+	// by MEANING — prevents semantically equivalent work running
+	// concurrently. Different shape than COALESCE (reject vs
+	// wait-and-share).
+	SemLocks *llmstack.SemLocks
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -596,6 +616,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Facts = llmstack.NewFactRegistry()
 	e.Invalidator = llmstack.NewSemanticInvalidator()
 	e.Bandit = llmstack.NewBanditRouter()
+	e.PolicySem = llmstack.NewPolicyClassifier()
+	e.Novelty = llmstack.NewNoveltyDetector()
+	e.SemLocks = llmstack.NewSemLocks()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

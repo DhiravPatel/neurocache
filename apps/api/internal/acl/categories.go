@@ -862,6 +862,33 @@ var registry = map[string]commandInfo{
 	"BANDIT.FORGET":       {[]string{CatAI, CatWrite, CatFast}},
 	"BANDIT.LIST":         {[]string{CatAI, CatRead, CatFast}},
 	"BANDIT.GLOBAL_STATS": {[]string{CatAI, CatRead, CatFast}},
+
+	// POLICY.SEM.* — semantic firewall by example.
+	"POLICY.SEM.DEFINE": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.CHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"POLICY.SEM.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"POLICY.SEM.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// NOVELTY.* — per-query out-of-distribution gate.
+	"NOVELTY.BASELINE":       {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.ADD":            {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.SCORE":          {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.SET_THRESHOLDS": {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.SIZE":           {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.FORGET":         {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.DETECTORS":      {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// LOCK.SEM.* — semantic dedup-locks.
+	"LOCK.SEM.ACQUIRE":          {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.RELEASE":          {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.STATUS":           {[]string{CatAI, CatRead, CatFast}},
+	"LOCK.SEM.FORGET":           {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.FORGET_NAMESPACE": {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.STATS":            {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
