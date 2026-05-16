@@ -255,6 +255,14 @@ var writeCommands = map[string]bool{
 	// WATERMARK custom patterns are durable; SCORE is pure compute.
 	"WATERMARK.PATTERN.ADD": true, "WATERMARK.PATTERN.REMOVE": true,
 
+	// Matryoshka + quantized embedding matrices are durable —
+	// operators stored curated vectors that took real compute to
+	// generate. TOPK/LEN/COSINE are reads.
+	"MATRYOSHKA.SET": true, "MATRYOSHKA.DEL": true, "MATRYOSHKA.FORGET": true,
+	"VEC.QUANT.SET": true, "VEC.QUANT.DEL": true, "VEC.QUANT.FORGET": true,
+
+	// EMBED.POOL.* is entirely pure compute — never in the writeset.
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

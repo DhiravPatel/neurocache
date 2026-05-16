@@ -516,6 +516,15 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "WATERMARK.SCORE", "WATERMARK.PATTERN.ADD",
 		"WATERMARK.PATTERN.REMOVE", "WATERMARK.PATTERN.LIST", "WATERMARK.STATS":
 		c.watermarkCmd(strings.TrimPrefix(cmd, "WATERMARK."), args)
+	case "MATRYOSHKA.SET", "MATRYOSHKA.DEL", "MATRYOSHKA.TOPK",
+		"MATRYOSHKA.LEN", "MATRYOSHKA.FORGET", "MATRYOSHKA.STATS":
+		c.matryoshkaCmd(strings.TrimPrefix(cmd, "MATRYOSHKA."), args)
+	case "VEC.QUANT.SET", "VEC.QUANT.DEL", "VEC.QUANT.TOPK",
+		"VEC.QUANT.COSINE", "VEC.QUANT.LEN", "VEC.QUANT.FORGET", "VEC.QUANT.STATS":
+		c.vecQuantCmd(strings.TrimPrefix(cmd, "VEC.QUANT."), args)
+	case "EMBED.POOL.MEAN", "EMBED.POOL.MAX", "EMBED.POOL.WEIGHTED",
+		"EMBED.POOL.NORM_SUM", "EMBED.POOL.STATS":
+		c.embedPoolCmd(strings.TrimPrefix(cmd, "EMBED.POOL."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

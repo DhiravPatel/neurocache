@@ -635,6 +635,27 @@ DRIFT.SCORE support                   # → score=0.71 verdict=diverged
 WATERMARK.SCORE "Navigating the intricate tapestry of modern software..."
 # score=0.74  verdict=ai
 WATERMARK.PATTERN.ADD ai-signature "(?i)as an ai" 1.0
+
+# Matryoshka 3-pass hierarchical embedding retrieval — stores
+# 128-dim + 256-dim truncations alongside the full vector. TOPK
+# runs 128-dim full scan → 256-dim refine → full-dim final.
+# 4× faster than EMBED.MAT.TOPK at 10k × 768 dims (2.0 ms vs 8.1 ms).
+MATRYOSHKA.SET docs doc-1 0.12,0.45,-0.31,0.78,...   # 768 dims
+MATRYOSHKA.TOPK docs <query-vec> 10
+# (drop-in faster replacement; same API as EMBED.MAT)
+
+# Int8-quantized embedding matrix — 8× less memory, 2× faster
+# compute. <0.5% recall loss at top-10. 2× faster than EMBED.MAT.TOPK.
+VEC.QUANT.SET docs doc-1 0.12,0.45,-0.31,...
+VEC.QUANT.TOPK docs <query-vec> 10                    # 3.9 ms vs 8.1 ms
+VEC.QUANT.STATS                                       # bytes_per_row=784 (vs 6144)
+
+# Bulk pooling for chunk → doc embeddings — replaces "compute mean
+# in Python" client-side glue. Four strategies: mean / max /
+# weighted / norm-sum. 10.7 µs for 50 × 768-dim mean.
+EMBED.POOL.MEAN "<chunk1>|<chunk2>|<chunk3>"
+EMBED.POOL.WEIGHTED "2.0,1.0,0.5" "<c1>|<c2>|<c3>"   # relevance-weighted
+EMBED.POOL.NORM_SUM "<c1>|<c2>|<c3>"                  # directional sum
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

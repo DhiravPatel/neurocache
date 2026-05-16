@@ -730,6 +730,30 @@ var registry = map[string]commandInfo{
 	"WATERMARK.PATTERN.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
 	"WATERMARK.PATTERN.LIST":   {[]string{CatAI, CatRead, CatFast}},
 	"WATERMARK.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// MATRYOSHKA.* — hierarchical 3-pass embedding retrieval.
+	"MATRYOSHKA.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"MATRYOSHKA.DEL":    {[]string{CatAI, CatWrite, CatFast}},
+	"MATRYOSHKA.TOPK":   {[]string{CatAI, CatRead, CatFast}},
+	"MATRYOSHKA.LEN":    {[]string{CatAI, CatRead, CatFast}},
+	"MATRYOSHKA.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"MATRYOSHKA.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// VEC.QUANT.* — int8-quantized embedding matrix.
+	"VEC.QUANT.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.QUANT.DEL":    {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.QUANT.TOPK":   {[]string{CatAI, CatRead, CatFast}},
+	"VEC.QUANT.COSINE": {[]string{CatAI, CatRead, CatFast}},
+	"VEC.QUANT.LEN":    {[]string{CatAI, CatRead, CatFast}},
+	"VEC.QUANT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.QUANT.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// EMBED.POOL.* — stateless bulk pooling ops.
+	"EMBED.POOL.MEAN":     {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.POOL.MAX":      {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.POOL.WEIGHTED": {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.POOL.NORM_SUM": {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.POOL.STATS":    {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

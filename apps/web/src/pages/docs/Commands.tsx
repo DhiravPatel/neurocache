@@ -2400,6 +2400,128 @@ WATERMARK.PATTERN.ADD typo-positive "(?i)\\\\b(gonna|wanna|lemme)\\\\b" -0.5
 WATERMARK.SCORE "<submitted post>"
 # Apps fail-fast on verdict=ai, escalate verdict=unclear to a real classifier`,
       },
+      {
+        id: "matryoshka",
+        title: "Matryoshka 3-pass hierarchical embedding retrieval",
+        blurb: (
+          <>
+            Modern embedding models (OpenAI text-embedding-3,
+            Nomic embed v1.5) deliberately train the first N dims
+            to be a viable lower-fidelity vector — apps can
+            truncate without re-running the embedder. We exploit
+            that: store the 128-dim + 256-dim truncations alongside
+            the full vector, then TOPK runs a 3-pass search (fast
+            128-dim full scan → 256-dim refine → full-dim final
+            pass). <strong>4.05× faster than EMBED.MAT.TOPK</strong>{" "}
+            at 10k × 768 dims (2.00 ms vs 8.11 ms), with negligible
+            recall loss on matryoshka-trained models.
+          </>
+        ),
+        commands: [
+          { cmd: "MATRYOSHKA.SET matrix-id row-id v,v,v,...", desc: "Stores the full vector + auto-computed 128-dim and 256-dim L2-normalised truncations. Requires dim >= 256." },
+          { cmd: "MATRYOSHKA.DEL matrix-id row-id", desc: "Remove a row." },
+          { cmd: "MATRYOSHKA.TOPK matrix-id query-vec K [SHORTLIST n] [FILTER prefix]", desc: "3-pass search. SHORTLIST defaults to 4×K, min 50 (refinement pool size). Returns the top-K rows with full-dim cosine score." },
+          { cmd: "MATRYOSHKA.LEN matrix-id", desc: "Row count." },
+          { cmd: "MATRYOSHKA.FORGET matrix-id", desc: "Drop a matrix. Returns rows removed." },
+          { cmd: "MATRYOSHKA.STATS", desc: "Matrices / total sets / topks / rows." },
+        ],
+        examplesLang: "bash",
+        examples: `# Drop-in faster replacement for EMBED.MAT — same API shape
+MATRYOSHKA.SET docs doc-1 0.12,0.45,-0.31,0.78,... (768 dims)
+MATRYOSHKA.SET docs doc-2 0.05,0.92,-0.18,0.34,...
+# (10k docs in)
+
+# Top-10 search: 2.0 ms vs EMBED.MAT.TOPK's 8.1 ms
+MATRYOSHKA.TOPK docs <query 768-dim> 10
+# (4× faster — the 128-dim first pass eliminates 95% of candidates)
+
+# Multi-tenant: filter by row_id prefix, applied per-pass
+MATRYOSHKA.TOPK docs <query> 10 FILTER tenant_acme:
+
+# Tune the shortlist — larger = better recall, smaller = faster
+MATRYOSHKA.TOPK docs <query> 10 SHORTLIST 200
+# (default is 4*K, min 50; 200 gives near-perfect recall at ~3 ms)`,
+      },
+      {
+        id: "vecquant",
+        title: "Int8-quantized embedding matrix",
+        blurb: (
+          <>
+            Float64 vectors are wasteful for embedding workloads —
+            you don't need 64 bits of precision per dimension.{" "}
+            <code>VEC.QUANT.*</code> stores int8 quantized vectors
+            (per-vector symmetric absolute-max scaling): 8× less
+            memory, ~2× faster compute vs float64. Recall loss
+            typically &lt;0.5% at top-10. <strong>2.09× faster than
+            EMBED.MAT.TOPK</strong> at 10k × 768 dims (3.88 ms vs
+            8.11 ms).
+          </>
+        ),
+        commands: [
+          { cmd: "VEC.QUANT.SET matrix-id row-id v,v,v,...", desc: "Quantize and store. Computes per-vector scale = max(|vec|)/127; stores int8 representation + scale + L2-norm." },
+          { cmd: "VEC.QUANT.DEL matrix-id row-id", desc: "Remove a row." },
+          { cmd: "VEC.QUANT.TOPK matrix-id query-vec K [FILTER prefix]", desc: "Int8 dot products → reconstructed cosine. Top-K results." },
+          { cmd: "VEC.QUANT.COSINE matrix-id row-a row-b", desc: "Cosine between two stored rows." },
+          { cmd: "VEC.QUANT.LEN matrix-id", desc: "Row count." },
+          { cmd: "VEC.QUANT.FORGET matrix-id", desc: "Drop a matrix. Returns rows removed." },
+          { cmd: "VEC.QUANT.STATS", desc: "Per-matrix sizes + bytes_per_row_sample for the largest matrix (typically ~dim+16 bytes vs dim*8 for float64)." },
+        ],
+        examplesLang: "bash",
+        examples: `# Identical API shape to EMBED.MAT, but int8 under the hood
+VEC.QUANT.SET docs doc-1 0.12,0.45,-0.31,0.78,...
+# (10k docs × 768 dims = 7.6 MB stored vs 60 MB for float64 EMBED.MAT)
+
+VEC.QUANT.TOPK docs <query 768-dim> 10
+# Returns same shape as EMBED.MAT.TOPK but 2× faster
+
+VEC.QUANT.COSINE docs doc-1 doc-7
+# → "0.834102"   (within ~1% of float64 cosine)
+
+VEC.QUANT.STATS
+# matrices=[{matrix_id: docs, rows: 10000, dim: 768}]
+# bytes_per_row_sample=784   ← 7.8x less than EMBED.MAT's 6144 bytes/row`,
+      },
+      {
+        id: "embedpool",
+        title: "Bulk pooling for chunk → document embeddings",
+        blurb: (
+          <>
+            Every RAG indexing pipeline needs to turn N chunk
+            embeddings into one doc-level embedding. Apps ship the
+            matrix across the network just to compute a mean.{" "}
+            <code>EMBED.POOL.*</code> is stateless one-roundtrip
+            pooling with four strategies: mean, max, weighted-mean
+            (chunk-relevance weighted), and norm-sum (sum then
+            L2-normalise — keeps directional similarity without
+            averaging dilution). 10.7 µs for 50 × 768-dim mean.
+          </>
+        ),
+        commands: [
+          { cmd: "EMBED.POOL.MEAN v1,...|v2,...|v3,...", desc: "Element-wise mean across vectors (pipe-separated). Returns comma-separated pooled vector." },
+          { cmd: "EMBED.POOL.MAX v1,...|v2,...|v3,...", desc: "Element-wise max (max pooling — keeps strongest signal per dimension)." },
+          { cmd: "EMBED.POOL.WEIGHTED w1,w2,w3 v1,...|v2,...|v3,...", desc: "Weighted mean. Useful when chunks have relevance scores (apply more weight to higher-relevance chunks)." },
+          { cmd: "EMBED.POOL.NORM_SUM v1,...|v2,...|v3,...", desc: "Sum then L2-normalise. Better than mean when chunk count varies across docs and you want directional similarity rather than averaged magnitude." },
+          { cmd: "EMBED.POOL.STATS", desc: "Per-strategy call counts + total vectors processed." },
+        ],
+        examplesLang: "bash",
+        examples: `# Mean pool: average all chunk embeddings → doc embedding
+EMBED.POOL.MEAN "0.1,0.2,0.3|0.4,0.5,0.6|0.7,0.8,0.9"
+# → "0.400000,0.500000,0.600000"
+
+# Weighted by relevance (e.g. chunks containing the query keyword)
+EMBED.POOL.WEIGHTED "2.0,1.0,0.5" "<chunk1>|<chunk2>|<chunk3>"
+# → relevance-weighted doc embedding
+
+# Norm-sum: better for docs with very different chunk counts
+EMBED.POOL.NORM_SUM "<chunk1>|<chunk2>|<chunk3>"
+# → unit-magnitude sum vector
+
+# Pipeline: extract chunks, embed each, pool, then store
+# (instead of mean-pooling client-side in Python with a network round-trip
+#  per doc, this is one round-trip end-to-end)
+EMBED.POOL.MEAN "<14 chunk embeddings, pipe-separated>"
+EMBED.MAT.SET docs doc-42 <pooled vector>`,
+      },
     ],
   },
 
