@@ -831,6 +831,37 @@ var registry = map[string]commandInfo{
 	"MASK.UNREGISTER": {[]string{CatAI, CatWrite, CatFast}},
 	"MASK.LIST":       {[]string{CatAI, CatRead, CatFast}},
 	"MASK.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// FACT.* — versioned fact registry + stamp tracking.
+	"FACT.SET":        {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.BUMP":       {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.GET":        {[]string{CatAI, CatRead, CatFast}},
+	"FACT.STAMP":      {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.STALE":      {[]string{CatAI, CatRead, CatFast}},
+	"FACT.STALE_KEYS": {[]string{CatAI, CatRead, CatFast}},
+	"FACT.UNSTAMP":    {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"FACT.FORGET":     {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// CACHE.INVALIDATE.* — semantic cache invalidation scan.
+	"CACHE.INVALIDATE.TRACK":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.INVALIDATE.UNTRACK":  {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.INVALIDATE.SEMANTIC": {[]string{CatAI, CatRead, CatSlow}},
+	"CACHE.INVALIDATE.STATS":    {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.INVALIDATE.PURGE":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.STALE.LIST":          {[]string{CatAI, CatRead, CatFast}},
+
+	// BANDIT.* — adaptive multi-armed bandit router.
+	"BANDIT.CREATE":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.PICK":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.RECORD":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.STATS":        {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.ARMS":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.RESET":        {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.FORGET":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.LIST":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.GLOBAL_STATS": {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

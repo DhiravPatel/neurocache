@@ -732,6 +732,40 @@ MASK.BUILD starcoder "def fibonacci(n):" "    return result"
 # → "<fim_prefix>def fibonacci(n):<fim_suffix>    return result<fim_middle>"
 MASK.BUILD deepseek "def fibonacci(n):" "    return result"
 # → "<｜fim▁begin｜>def fibonacci(n):<｜fim▁hole｜>...<｜fim▁end｜>"
+
+# Versioned fact registry + stamp tracking — closes the load-bearing
+# gap every semantic cache has: when the underlying fact changes,
+# stamped answers self-invalidate. ~70 ns/op STALE — #2 fastest
+# command in the stack.
+FACT.SET refund-policy "30-day window"
+SEMANTIC_SET "how do refunds work" "Our policy is..."
+FACT.STAMP "how do refunds work" refund-policy
+# (later — policy changes)
+FACT.BUMP refund-policy "14-day window"   # → version=2
+FACT.STALE "how do refunds work"          # → 1 (stamped at v1, fact is v2)
+# App treats stale=miss, regenerates, re-stamps
+
+# Semantic cache invalidation — the "this fact changed → kill
+# everything semantically downstream of it" scan no other cache
+# product ships. Apps TRACK entries, operator runs SEMANTIC scan.
+CACHE.INVALIDATE.TRACK semantic "how do refunds work" \
+  "policy on returning products and getting your money back"
+CACHE.INVALIDATE.TRACK semantic "how fast is shipping" \
+  "delivery time for orders"
+CACHE.INVALIDATE.SEMANTIC "refund policy" THRESHOLD 0.30
+# → hits for refund-related entries; shipping entry untouched
+# App evicts each returned key (DEL list) in a single round-trip.
+
+# Adaptive multi-armed bandit router — Thompson sampling /
+# UCB1. Converges traffic onto whichever arm is actually winning
+# — no manual PROMOTE step like CANARY. Lock-free posterior
+# updates. ~304 ns/op RECORD.
+BANDIT.CREATE checkout-summary ARMS promptA promptB promptC STRATEGY thompson
+BANDIT.PICK checkout-summary              # sampled from Beta posterior
+BANDIT.RECORD checkout-summary promptB 0.91
+# After 500 records, traffic auto-shifts to whatever wins:
+BANDIT.STATS checkout-summary
+# arms=[..., {arm: promptB, posterior_mean: 0.91, share: 0.76}, ...]
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

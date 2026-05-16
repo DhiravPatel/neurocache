@@ -3020,6 +3020,196 @@ MASK.LIST
 # starcoder, codellama, deepseek, mask_token, chat_explain,
 # chat_review, inpainting`,
       },
+      {
+        id: "fact",
+        title: "Versioned fact registry + stamp tracking",
+        blurb: (
+          <>
+            Closes the load-bearing gap every semantic cache has:
+            the day you update the refund policy from "30 days" to
+            "14 days", every cached answer derived from the old
+            policy keeps serving stale "30 days" answers forever.{" "}
+            <code>FACT.*</code> versions facts; cached entries get{" "}
+            <code>STAMP</code>'d with the fact-version they were
+            derived under; <code>STALE</code> returns true once the
+            fact's version drifts past the stamp.{" "}
+            <strong>70 ns/op STALE check — 14.3M ops/sec, the #2
+            fastest command in NeuroCache.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "FACT.SET fact-id content", desc: "Create a fact at v1, or replace the content of an existing fact at its current version (does NOT bump — use BUMP when the MEANING changed)." },
+          { cmd: "FACT.BUMP fact-id new-content", desc: "Atomic version++ + content swap. This is what invalidates every stamped cache entry derived from this fact." },
+          { cmd: "FACT.GET fact-id", desc: "Returns [version, content, updated_at]." },
+          { cmd: "FACT.STAMP cache-key fact-id [fact-id ...]", desc: "Mark a cache entry as derived from these facts at their current versions. Multi-fact stamps supported (any one drifted → stale)." },
+          { cmd: "FACT.STALE cache-key", desc: "Hot path. 1 if any stamped fact's version drifted, else 0. Apps treat stale=miss and regenerate." },
+          { cmd: "FACT.STALE_KEYS [LIMIT n]", desc: "Every stamped cache key currently carrying a stale stamp. For sweep-and-evict scripts." },
+          { cmd: "FACT.UNSTAMP cache-key", desc: "Drop the stamp (e.g. after evicting the cache entry)." },
+          { cmd: "FACT.LIST", desc: "Every registered fact with version + updated_at." },
+          { cmd: "FACT.FORGET fact-id", desc: "Unregister. Stamped keys now report stale (the stamp can't be validated)." },
+          { cmd: "FACT.STATS", desc: "Total sets / bumps / stamps / checks / stale-detected." },
+        ],
+        examplesLang: "bash",
+        examples: `# Operator registers facts at app boot
+FACT.SET refund-policy "30-day window, no restocking fee"
+FACT.SET pricing-table "Pro: $20/mo, Enterprise: $200/mo"
+
+# App caches an LLM-generated answer
+SEMANTIC_SET "how do refunds work" "Our refund policy is..."
+# Then stamps it with the fact-version it was derived under
+FACT.STAMP "how do refunds work" refund-policy
+
+# Days later — operator bumps the policy
+FACT.BUMP refund-policy "14-day window, 20% restocking fee on returns"
+# → 2   (new version)
+
+# Next read goes through stale check
+FACT.STALE "how do refunds work"
+# → 1   (stamped at v1, fact is now v2)
+
+# App treats stale = miss → regenerates the answer + re-stamps
+SEMANTIC_SET "how do refunds work" "<regenerated with new policy>"
+FACT.STAMP "how do refunds work" refund-policy
+
+# Sweep job: evict everything carrying old stamps
+FACT.STALE_KEYS LIMIT 1000
+# → ["how do refunds work", "what's your return policy", ...]
+
+# Multi-fact dependency: one answer depends on TWO facts
+SEMANTIC_SET "what tier should I pick if I refund often" "..."
+FACT.STAMP "what tier should I pick if I refund often" refund-policy pricing-table
+# Bumping EITHER fact stales this answer`,
+      },
+      {
+        id: "cache-invalidate",
+        title: "Semantic cache invalidation",
+        blurb: (
+          <>
+            The other half of the invalidation story.{" "}
+            <code>FACT.*</code> is version-tagged; this scans the
+            tracked entries for matches above a similarity
+            threshold and returns the keys to evict. Apps TRACK
+            cache entries with their semantic content; an operator
+            runs{" "}
+            <code>{`CACHE.INVALIDATE.SEMANTIC "refund policy" THRESHOLD 0.80`}</code>{" "}
+            and gets back every cache key whose semantic content
+            looks like it might be affected. The "<em>this fact
+            changed → kill everything semantically downstream of it
+            across all cache layers</em>" primitive nobody else
+            ships.
+          </>
+        ),
+        commands: [
+          { cmd: "CACHE.INVALIDATE.TRACK layer key text [EMBED v,v,...]", desc: "Register a cache entry with its semantic content. Layer is a free-form tag (semantic / llm / op / rerank / etc.) so SEMANTIC scans can be scoped." },
+          { cmd: "CACHE.INVALIDATE.UNTRACK layer key", desc: "Drop a registration (e.g. after the app evicted the key)." },
+          { cmd: "CACHE.INVALIDATE.SEMANTIC query [THRESHOLD 0.80] [LAYERS l1,l2,...] [EMBED v,v,...]", desc: "Scan tracked entries; return every key whose semantic content matches above threshold. App is responsible for the actual eviction (single round-trip: SEMANTIC → DEL list)." },
+          { cmd: "CACHE.STALE.LIST [LAYER l] [LIMIT n]", desc: "Every tracked entry. Pair with FACT.STALE_KEYS for the full stale-detection picture." },
+          { cmd: "CACHE.INVALIDATE.PURGE layer", desc: "Wipe a whole layer's tracked entries." },
+          { cmd: "CACHE.INVALIDATE.STATS", desc: "Layers / total tracked / scans / invalidations." },
+        ],
+        examplesLang: "bash",
+        examples: `# Apps register cache entries with their semantic content
+SEMANTIC_SET "how do refunds work" "Our policy is..."
+CACHE.INVALIDATE.TRACK semantic "how do refunds work" \\
+  "policy on returning products and getting your money back"
+
+CACHE.INVALIDATE.TRACK semantic "what's your return policy" \\
+  "policy on returning products and getting your money back"
+
+CACHE.INVALIDATE.TRACK semantic "how fast is shipping" \\
+  "delivery time for orders"
+
+# Operator: "we just changed the refund policy — kill anything
+# semantically downstream of it"
+CACHE.INVALIDATE.SEMANTIC "refund policy" THRESHOLD 0.30
+# total=2  per_layer={semantic:2}
+# hits=[
+#   {layer:semantic, key:"how do refunds work", score:0.71},
+#   {layer:semantic, key:"what's your return policy", score:0.68}
+# ]
+# (shipping entry NOT touched — semantically unrelated)
+
+# App evicts each returned key (single round-trip in a pipeline)
+# DEL "how do refunds work"
+# DEL "what's your return policy"
+
+# Multi-layer scan (operator wants to invalidate across semantic +
+# llm-response + op-cache layers in one call)
+CACHE.INVALIDATE.SEMANTIC "pricing change" \\
+  THRESHOLD 0.75 LAYERS semantic,llm,op
+
+# Audit view: what's currently tracked
+CACHE.STALE.LIST LAYER semantic LIMIT 100`,
+      },
+      {
+        id: "bandit",
+        title: "Adaptive multi-armed bandit router (Thompson sampling / UCB)",
+        blurb: (
+          <>
+            <code>CANARY.*</code> is a fixed split with manual
+            promote. <code>MOE</code> / <code>CASCADE</code> route
+            on static capability + health. None of them LEARN from
+            the live traffic. <code>BANDIT.*</code> converges
+            traffic onto whatever arm is actually winning — no
+            manual <code>PROMOTE</code> step, no operator
+            intervention. Two strategies:{" "}
+            <strong>thompson</strong> (Beta(α, β) posterior
+            sampling — handles exploration vs exploitation
+            optimally) and <strong>ucb</strong> (UCB1 —
+            deterministic, reproducible for CI). Lock-free atomic-
+            float CAS on the posterior updates. ~304 ns/op RECORD,
+            ~7.7 µs Thompson PICK for 3 arms.
+          </>
+        ),
+        commands: [
+          { cmd: "BANDIT.CREATE bandit-id ARMS arm1 arm2 arm3 ... [STRATEGY thompson|ucb]", desc: "Register a bandit. Each arm starts with Beta(1, 1) — uniform prior, all arms equally likely to be best. Default strategy = thompson." },
+          { cmd: "BANDIT.PICK bandit-id [SEED n]", desc: "Returns [arm, sampled_score, total_pulls]. Thompson: sample from each arm's posterior, pick the max. UCB: deterministic argmax(mean + sqrt(2 ln total / pulls)). SEED is for reproducibility." },
+          { cmd: "BANDIT.RECORD bandit-id arm score", desc: "Bayesian update: alpha += score, beta += (1-score). Score in [0,1] — 0/1 for hard outcomes, fractional for partial-credit graders." },
+          { cmd: "BANDIT.STATS bandit-id", desc: "Per-arm posterior (alpha/beta/mean) + traffic share + pulls. Drives the dashboard's bandit panel." },
+          { cmd: "BANDIT.ARMS bandit-id", desc: "Just the arm list." },
+          { cmd: "BANDIT.RESET bandit-id", desc: "Wipe posteriors but keep arm definitions." },
+          { cmd: "BANDIT.FORGET bandit-id", desc: "Drop a bandit entirely." },
+          { cmd: "BANDIT.LIST", desc: "Every registered bandit id." },
+          { cmd: "BANDIT.GLOBAL_STATS", desc: "Registry-wide totals." },
+        ],
+        examplesLang: "bash",
+        examples: `# A/B/C test for the checkout summary prompt — adaptive
+BANDIT.CREATE checkout-summary \\
+  ARMS promptA promptB promptC \\
+  STRATEGY thompson
+
+# Each request picks an arm (sampled from posterior)
+BANDIT.PICK checkout-summary
+# arm=promptB  sampled_score=0.62  total_pulls=0   (early: random)
+
+# (App uses the picked prompt, scores the result 0..1)
+BANDIT.RECORD checkout-summary promptB 0.91
+
+# After 500 records, traffic concentrates on whatever's winning
+BANDIT.STATS checkout-summary
+# arms=[
+#   {arm: promptA, posterior_mean: 0.62, pulls: 80,  share: 0.16},
+#   {arm: promptB, posterior_mean: 0.91, pulls: 380, share: 0.76}, ← winning
+#   {arm: promptC, posterior_mean: 0.68, pulls: 40,  share: 0.08}
+# ]
+# total_pulls=500
+# (no manual PROMOTE needed — traffic shifted automatically)
+
+# Same shape works for model selection, temperature tuning,
+# retrieval strategy, system-prompt variants — anything with a
+# feedback signal in [0, 1].
+BANDIT.CREATE model-pick ARMS gpt-4o claude-sonnet gpt-3.5-turbo
+BANDIT.PICK model-pick                     # adaptive model choice
+BANDIT.RECORD model-pick gpt-4o 1.0        # success
+BANDIT.RECORD model-pick gpt-3.5-turbo 0.0 # judge rejected
+
+# UCB strategy for reproducible CI / debugging
+BANDIT.CREATE retrieval-strat \\
+  ARMS bm25 vector hybrid \\
+  STRATEGY ucb
+BANDIT.PICK retrieval-strat SEED 42        # deterministic
+BANDIT.RECORD retrieval-strat hybrid 0.88`,
+      },
     ],
   },
 

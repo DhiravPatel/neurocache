@@ -551,6 +551,17 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.cascadeCmd(strings.TrimPrefix(cmd, "CASCADE."), args)
 	case "MASK.REGISTER", "MASK.BUILD", "MASK.UNREGISTER", "MASK.LIST", "MASK.STATS":
 		c.maskCmd(strings.TrimPrefix(cmd, "MASK."), args)
+	case "FACT.SET", "FACT.BUMP", "FACT.GET", "FACT.STAMP", "FACT.STALE",
+		"FACT.STALE_KEYS", "FACT.UNSTAMP", "FACT.LIST", "FACT.FORGET", "FACT.STATS":
+		c.factCmd(strings.TrimPrefix(cmd, "FACT."), args)
+	case "CACHE.INVALIDATE.TRACK", "CACHE.INVALIDATE.UNTRACK",
+		"CACHE.INVALIDATE.SEMANTIC", "CACHE.INVALIDATE.STATS",
+		"CACHE.INVALIDATE.PURGE", "CACHE.STALE.LIST":
+		c.cacheInvalidateCmd(strings.TrimPrefix(cmd, "CACHE."), args)
+	case "BANDIT.CREATE", "BANDIT.PICK", "BANDIT.RECORD", "BANDIT.STATS",
+		"BANDIT.ARMS", "BANDIT.RESET", "BANDIT.FORGET", "BANDIT.LIST",
+		"BANDIT.GLOBAL_STATS":
+		c.banditCmd(strings.TrimPrefix(cmd, "BANDIT."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

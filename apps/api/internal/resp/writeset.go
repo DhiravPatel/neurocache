@@ -300,6 +300,24 @@ var writeCommands = map[string]bool{
 	// MASK templates are durable; BUILD is pure compute.
 	"MASK.REGISTER": true, "MASK.UNREGISTER": true,
 
+	// FACT registry + stamps are durable — the entire point is
+	// surviving restart so cached entries can be invalidated when
+	// the underlying fact changes.
+	"FACT.SET": true, "FACT.BUMP": true, "FACT.STAMP": true,
+	"FACT.UNSTAMP": true, "FACT.FORGET": true,
+
+	// CACHE.INVALIDATE tracked entries are durable — apps stamp
+	// real cache keys; losing the stamps would orphan the
+	// invalidation story.
+	"CACHE.INVALIDATE.TRACK": true, "CACHE.INVALIDATE.UNTRACK": true,
+	"CACHE.INVALIDATE.PURGE": true,
+
+	// BANDIT posteriors are durable — losing the learned alpha/beta
+	// across restart would force the bandit back to uniform-prior
+	// exploration, wasting the accumulated traffic data.
+	"BANDIT.CREATE": true, "BANDIT.RECORD": true,
+	"BANDIT.RESET": true, "BANDIT.FORGET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

@@ -387,6 +387,26 @@ type Engine struct {
 	// the template once; BUILD assembles correctly every time.
 	Mask *llmstack.MaskTemplates
 
+	// Versioned-fact registry. Apps SET a fact at v1, BUMP when it
+	// changes; cached entries can be STAMPed with the fact-version
+	// they were derived under, and STALE returns true once the
+	// fact version advances. Pairs with CACHE.INVALIDATE for the
+	// full "this fact changed → kill the cached answers" story.
+	Facts *llmstack.FactRegistry
+
+	// Semantic cache invalidator. Apps TRACK cache entries with
+	// their semantic content; SEMANTIC scans the tracked set for
+	// matches above a threshold and returns the keys to evict.
+	// Closes the "no semantic invalidation" gap that's a
+	// credibility blocker for production semantic caches.
+	Invalidator *llmstack.SemanticInvalidator
+
+	// Adaptive multi-armed bandit router. Thompson-sampling /
+	// UCB1 strategies. Converges traffic onto whichever arm is
+	// actually winning — no manual PROMOTE step like CANARY.
+	// Lock-free posterior updates via atomic float CAS.
+	Bandit *llmstack.BanditRouter
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -573,6 +593,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.NLI = llmstack.NewNLICache()
 	e.Cascade = llmstack.NewCascadeRouter()
 	e.Mask = llmstack.NewMaskTemplates()
+	e.Facts = llmstack.NewFactRegistry()
+	e.Invalidator = llmstack.NewSemanticInvalidator()
+	e.Bandit = llmstack.NewBanditRouter()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
