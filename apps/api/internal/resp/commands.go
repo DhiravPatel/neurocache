@@ -573,6 +573,16 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "LOCK.SEM.ACQUIRE", "LOCK.SEM.RELEASE", "LOCK.SEM.STATUS",
 		"LOCK.SEM.FORGET", "LOCK.SEM.FORGET_NAMESPACE", "LOCK.SEM.STATS":
 		c.locksemCmd(strings.TrimPrefix(cmd, "LOCK.SEM."), args)
+	case "GOAL.SET", "GOAL.PROGRESS", "GOAL.CHECK", "GOAL.STATUS",
+		"GOAL.HISTORY", "GOAL.FORGET", "GOAL.SESSIONS", "GOAL.STATS":
+		c.goalCmd(strings.TrimPrefix(cmd, "GOAL."), args)
+	case "LEDGER.RECORD", "LEDGER.REPORT", "LEDGER.TOP", "LEDGER.SPEND",
+		"LEDGER.EXPORT", "LEDGER.PURGE", "LEDGER.SETCAP", "LEDGER.STATS":
+		c.ledgerCmd(strings.TrimPrefix(cmd, "LEDGER."), args)
+	case "EMB.MIGRATE.START", "EMB.MIGRATE.WRITE", "EMB.MIGRATE.STATUS",
+		"EMB.MIGRATE.COMPARE", "EMB.MIGRATE.CUTOVER", "EMB.MIGRATE.ABORT",
+		"EMB.MIGRATE.LIST", "EMB.MIGRATE.STATS":
+		c.embMigrateCmd(strings.TrimPrefix(cmd, "EMB.MIGRATE."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

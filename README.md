@@ -797,6 +797,45 @@ LOCK.SEM.ACQUIRE agents "summarize document twelve please"
 # acquired=0  similar_text="summarize document twelve"  similar_score=0.91
 # (paraphrased work rejected — caller skips, doesn't queue, doesn't fight)
 LOCK.SEM.RELEASE agents a3f7...
+
+# Agent objective + stagnation tracker — AGENTLOOP counts steps;
+# GOAL tracks semantic progress AND semantic stagnation. Catches
+# the loop that's under budget but spinning. ~415 ns/op PROGRESS.
+GOAL.SET sess-1234 "book a flight NYC to SF under \$400 next Friday"
+GOAL.PROGRESS sess-1234 "searched flights, found \$380 option on United"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.CHECK sess-1234
+# progress=0.62  stagnation=1  stalled_steps=4  hint=loop
+# (App terminates the agent — under budget but spinning)
+
+# Cost attribution + chargeback ledger — GUARD enforces caps;
+# LEDGER answers "which feature / tenant / model spent the money?"
+# ~182 ns/op RECORD.
+LEDGER.RECORD tenant:acme feature:summarizer gpt-4o 0.012 \
+  TOKENS_IN 1200 TOKENS_OUT 300
+LEDGER.REPORT BY feature WINDOW 86400
+# [{feature:rag-pipeline, total_cost_usd: 18.42, calls: 84, avg: 0.22}, ...]
+LEDGER.EXPORT TENANT tenant:acme WINDOW 2592000 FORMAT csv
+# → ts,tenant,feature,model,cost_usd,tokens_in,tokens_out
+# Drop straight into Stripe / Chargify
+
+# Embedding-model dual-index migration — the day you upgrade
+# MiniLM → BGE, every cached vector and RAG index goes
+# incompatible. EMB.MIGRATE lets apps dual-write, COMPARE recall,
+# then atomically CUTOVER. Genuinely novel.
+EMB.MIGRATE.START docs-v2 FROM minilm-l6 TO bge-small
+# Apps write BOTH vectors as they cache:
+EMB.MIGRATE.WRITE docs-v2 doc-1 \
+  OLD 0.12,0.45,-0.31,... \
+  NEW 0.08,0.51,-0.27,...
+# Verify recall on a held-out test set:
+EMB.MIGRATE.COMPARE docs-v2 OLD <q-old> NEW <q-new> K 10
+# overlap_at_k=8  jaccard_at_k=0.67  (8/10 docs in both top-K)
+# Once verified across many test queries:
+EMB.MIGRATE.CUTOVER docs-v2     # atomic swap
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

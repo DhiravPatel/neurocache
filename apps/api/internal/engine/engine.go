@@ -427,6 +427,24 @@ type Engine struct {
 	// wait-and-share).
 	SemLocks *llmstack.SemLocks
 
+	// Agent objective + stagnation tracker. AGENTLOOP counts
+	// steps/tokens — useful for budgets but blind to "agent is
+	// looping." GOAL tracks semantic progress + recent-update
+	// diversity → catches stalls AND completions early.
+	Goal *llmstack.GoalTracker
+
+	// Double-entry cost attribution ledger. GUARD enforces caps;
+	// LEDGER answers "which feature / tenant / model spent the
+	// money?" Per-call record + REPORT by any dimension + window.
+	// Export CSV/JSON straight into billing.
+	Ledger *llmstack.CostLedger
+
+	// Embedding-model migration. The day you upgrade MiniLM → BGE,
+	// every cached vector and RAG index goes incompatible.
+	// EMB.MIGRATE.* lets apps dual-write during the transition,
+	// COMPARE recall on a held-out set, then atomically CUTOVER.
+	EmbMigrate *llmstack.EmbMigrator
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -619,6 +637,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.PolicySem = llmstack.NewPolicyClassifier()
 	e.Novelty = llmstack.NewNoveltyDetector()
 	e.SemLocks = llmstack.NewSemLocks()
+	e.Goal = llmstack.NewGoalTracker()
+	e.Ledger = llmstack.NewCostLedger()
+	e.EmbMigrate = llmstack.NewEmbMigrator()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

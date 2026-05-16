@@ -331,6 +331,21 @@ var writeCommands = map[string]bool{
 	// shouldn't survive restart (workers would all reawake from
 	// crashed state holding stale locks). None in writeset.
 
+	// GOAL sessions are durable — agent objectives + progress
+	// history shouldn't vanish on restart (otherwise recovery
+	// loses the "is the agent looping" signal exactly when it's
+	// most needed).
+	"GOAL.SET": true, "GOAL.PROGRESS": true, "GOAL.FORGET": true,
+
+	// LEDGER is durable — it's the billing record. Apps will
+	// chargeback against this; losing records is unacceptable.
+	"LEDGER.RECORD": true, "LEDGER.PURGE": true, "LEDGER.SETCAP": true,
+
+	// EMB.MIGRATE state is durable — dual-write progress survives
+	// restart so a long-running migration can resume.
+	"EMB.MIGRATE.START": true, "EMB.MIGRATE.WRITE": true,
+	"EMB.MIGRATE.CUTOVER": true, "EMB.MIGRATE.ABORT": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

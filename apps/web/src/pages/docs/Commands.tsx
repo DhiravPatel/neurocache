@@ -3373,6 +3373,179 @@ LOCK.SEM.FORGET agents "summarize document twelve"
 LOCK.SEM.STATS
 # acquires=8420  acquired=6100  rejected=2320  releases=5900  expiries=200`,
       },
+      {
+        id: "goal",
+        title: "Agent objective + stagnation tracking",
+        blurb: (
+          <>
+            <code>AGENTLOOP.*</code> counts steps / tool_calls /
+            tokens — useful for budget caps but blind to "the agent
+            is making 30 tool calls and getting nowhere."{" "}
+            <code>GOAL.*</code> tracks{" "}
+            <strong>semantic progress</strong> (cosine between
+            current state and goal) AND <strong>semantic
+            stagnation</strong> (recent updates look identical to
+            each other). Catches the loop that's under budget but
+            spinning. ~415 ns/op PROGRESS, ~563 ns CHECK over 20
+            updates.
+          </>
+        ),
+        commands: [
+          { cmd: "GOAL.SET session-id goal-text", desc: "Register (or replace) the goal for a session." },
+          { cmd: "GOAL.PROGRESS session-id update-text", desc: "Append one progress observation. Capped at 200 per session." },
+          { cmd: "GOAL.CHECK session-id", desc: "Returns [progress, stagnation, stalled_steps, hint, total_updates]. Hint: progress | stalled | loop | complete | unset." },
+          { cmd: "GOAL.STATUS session-id", desc: "Full snapshot: goal, started_at, total_updates, latest_update, progress, hint." },
+          { cmd: "GOAL.HISTORY session-id [LIMIT n]", desc: "Recent updates, newest last." },
+          { cmd: "GOAL.SESSIONS", desc: "Every active session id." },
+          { cmd: "GOAL.FORGET session-id", desc: "Drop a session entirely." },
+          { cmd: "GOAL.STATS", desc: "Total sets / progresses / checks / loops_detected." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register the goal at the start of an agent run
+GOAL.SET sess-1234 "book a flight NYC to SF under \\$400 next Friday"
+
+# Each step the agent takes, record what it just did
+GOAL.PROGRESS sess-1234 "searched flights, found \\$380 option on United"
+GOAL.PROGRESS sess-1234 "checked seats — 12C is available"
+
+# After many steps, see if the agent is making progress
+GOAL.CHECK sess-1234
+# progress=0.71  stagnation=0  stalled_steps=0  hint=progress  total_updates=2
+
+# Later — the agent gets stuck repeating itself
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.PROGRESS sess-1234 "searched flights again same query"
+GOAL.CHECK sess-1234
+# progress=0.62  stagnation=1  stalled_steps=4  hint=loop
+# (App: terminate the agent — it's in a loop, under budget but spinning)
+
+# When agent finishes (progress ≥ 0.80)
+GOAL.PROGRESS sess-1234 "booked flight NYC to SF under \\$400 next Friday — done"
+GOAL.CHECK sess-1234
+# progress=0.92  hint=complete   (early-terminate cleanly)`,
+      },
+      {
+        id: "ledger",
+        title: "Cost attribution + chargeback ledger",
+        blurb: (
+          <>
+            <code>GUARD.*</code> enforces caps. <code>LEDGER.*</code>{" "}
+            answers <strong>"which feature / tenant / model spent
+            the money?"</strong> Per-call append-only record;
+            REPORT aggregates over any dimension + time window.
+            Export CSV / JSON straight into billing. ~182 ns/op
+            RECORD on the hot path; 127 µs REPORT over 10k records.
+          </>
+        ),
+        commands: [
+          { cmd: "LEDGER.RECORD tenant feature model cost-usd [TOKENS_IN n] [TOKENS_OUT n]", desc: "Append one chargeable LLM call." },
+          { cmd: "LEDGER.REPORT BY tenant|feature|model|day [TENANT t] [FEATURE f] [MODEL m] [WINDOW seconds]", desc: "Aggregate spend by dimension; returns [key, total_cost_usd, calls, tokens_in, tokens_out, avg_cost_per_call] rows, sorted by spend desc." },
+          { cmd: "LEDGER.TOP dimension [WINDOW seconds] [LIMIT n]", desc: "Top-N spenders in that dimension. Convenience wrapper over REPORT." },
+          { cmd: "LEDGER.SPEND tenant [FEATURE f] [MODEL m] [WINDOW seconds]", desc: "Single totalised spend for a tenant + optional filter." },
+          { cmd: "LEDGER.EXPORT [TENANT t] [FEATURE f] [MODEL m] [WINDOW seconds] [FORMAT csv|json]", desc: "Flat per-call records. Default CSV with header. Drop straight into Stripe / Chargify / your billing pipeline." },
+          { cmd: "LEDGER.PURGE [TENANT t] [OLDER_THAN seconds]", desc: "Drop records older than N seconds (or by tenant). Apps run nightly to keep the ledger bounded." },
+          { cmd: "LEDGER.SETCAP n", desc: "Soft eviction cap (default 5M records). On overflow, oldest 10% is dropped." },
+          { cmd: "LEDGER.STATS", desc: "Records / tenants / total spend USD across all time." },
+        ],
+        examplesLang: "bash",
+        examples: `# Every chargeable LLM call records
+LEDGER.RECORD tenant:acme feature:summarizer gpt-4o 0.012 \\
+  TOKENS_IN 1200 TOKENS_OUT 300
+
+LEDGER.RECORD tenant:globex feature:rag-pipeline claude-sonnet 0.034 \\
+  TOKENS_IN 8400 TOKENS_OUT 1200
+
+LEDGER.RECORD tenant:acme feature:tagger gpt-3.5-turbo 0.001 \\
+  TOKENS_IN 200 TOKENS_OUT 50
+
+# Per-tenant spend in the last day
+LEDGER.SPEND tenant:acme WINDOW 86400
+# tenant=tenant:acme  total_cost_usd=24.51  calls=420
+# tokens_in=480000  tokens_out=120000
+
+# Which feature is the most expensive?
+LEDGER.REPORT BY feature WINDOW 86400
+# [
+#   {key: feature:rag-pipeline, total_cost_usd: 18.42, calls: 84,  avg: 0.22},
+#   {key: feature:summarizer,   total_cost_usd: 4.20,  calls: 350, avg: 0.012},
+#   {key: feature:tagger,       total_cost_usd: 1.89,  calls: 4200, avg: 0.000}
+# ]
+
+# Top 5 most expensive models this week
+LEDGER.TOP model WINDOW 604800 LIMIT 5
+
+# Daily spend breakdown for billing rollup
+LEDGER.REPORT BY day WINDOW 604800
+
+# Export for the billing system
+LEDGER.EXPORT TENANT tenant:acme WINDOW 2592000 FORMAT csv
+# ts,tenant,feature,model,cost_usd,tokens_in,tokens_out
+# 1715600000,tenant:acme,summarizer,gpt-4o,0.012000,1200,300
+# ...
+
+# Nightly purge — keep 90 days
+LEDGER.PURGE OLDER_THAN 7776000`,
+      },
+      {
+        id: "emb-migrate",
+        title: "Embedding-model dual-index migration",
+        blurb: (
+          <>
+            Almost nobody talks about this and it's brutal: the day
+            you upgrade MiniLM → BGE, every cached vector and every
+            RAG index becomes incompatible — and you can't
+            atomically reindex a live system.{" "}
+            <code>EMB.MIGRATE.*</code> lets apps dual-write to both
+            models during the migration window,{" "}
+            <code>COMPARE</code> recall on a held-out test set,
+            then atomically <code>CUTOVER</code> once verified.
+            Genuinely novel — no other cache product ships this.
+          </>
+        ),
+        commands: [
+          { cmd: "EMB.MIGRATE.START migration-id FROM old-model TO new-model", desc: "Begin the shadow phase. Apps now dual-write." },
+          { cmd: "EMB.MIGRATE.WRITE migration-id row-id OLD v,v,v NEW v,v,v", desc: "Record both vectors for one row. Different dims allowed (different models → different dims)." },
+          { cmd: "EMB.MIGRATE.STATUS migration-id", desc: "Reindexed count / dims / cutover state." },
+          { cmd: "EMB.MIGRATE.COMPARE migration-id OLD v,v NEW v,v [K n]", desc: "Side-by-side top-K query under both models. Returns overlap_at_k + jaccard. Apps run on a held-out test set to verify recall before cutover." },
+          { cmd: "EMB.MIGRATE.CUTOVER migration-id", desc: "Atomic swap: new model is now live. Idempotent." },
+          { cmd: "EMB.MIGRATE.ABORT migration-id", desc: "Drop the migration, keep old vectors." },
+          { cmd: "EMB.MIGRATE.LIST", desc: "Every active migration." },
+          { cmd: "EMB.MIGRATE.STATS", desc: "Starts / writes / compares / cutovers / aborts." },
+        ],
+        examplesLang: "bash",
+        examples: `# Begin shadow migration: MiniLM-L6 (384-dim) → BGE-small (512-dim)
+EMB.MIGRATE.START docs-v2 FROM minilm-l6 TO bge-small
+# OK
+
+# Every time the app caches a new doc, write both vectors
+EMB.MIGRATE.WRITE docs-v2 doc-1 \\
+  OLD 0.12,0.45,-0.31,... \\        # 384-dim
+  NEW 0.08,0.51,-0.27,...           # 512-dim
+
+# Check progress
+EMB.MIGRATE.STATUS docs-v2
+# rows_written=8420  old_dim=384  new_dim=512  cut_over=0
+
+# Compare on a held-out query — does the new model recall the same docs?
+EMB.MIGRATE.COMPARE docs-v2 \\
+  OLD 0.11,0.44,... \\     # query under old model
+  NEW 0.07,0.50,... \\     # same query under new model
+  K 10
+# old_topk=[{doc-1, 0.91}, {doc-7, 0.84}, ...]
+# new_topk=[{doc-1, 0.93}, {doc-7, 0.86}, ...]
+# overlap_at_k=8   jaccard_at_k=0.67
+# (8 out of 10 docs appear in both top-K — strong recall match)
+
+# After verifying on 1000 test queries that jaccard > 0.7,
+# atomically swap to the new model
+EMB.MIGRATE.CUTOVER docs-v2
+# → 1
+
+# Old vectors can now be dropped at the app's discretion
+EMB.MIGRATE.ABORT docs-v2     # (or keep around for rollback)`,
+      },
     ],
   },
 

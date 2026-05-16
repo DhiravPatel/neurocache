@@ -889,6 +889,36 @@ var registry = map[string]commandInfo{
 	"LOCK.SEM.FORGET":           {[]string{CatAI, CatWrite, CatFast}},
 	"LOCK.SEM.FORGET_NAMESPACE": {[]string{CatAI, CatWrite, CatFast}},
 	"LOCK.SEM.STATS":            {[]string{CatAI, CatRead, CatFast}},
+
+	// GOAL.* — agent objective + stagnation tracking.
+	"GOAL.SET":      {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.PROGRESS": {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.HISTORY":  {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// LEDGER.* — cost attribution / chargeback.
+	"LEDGER.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.TOP":    {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.SPEND":  {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.EXPORT": {[]string{CatAI, CatRead, CatSlow}},
+	"LEDGER.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.SETCAP": {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// EMB.MIGRATE.* — embedding-model dual-index migration.
+	"EMB.MIGRATE.START":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.WRITE":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"EMB.MIGRATE.COMPARE": {[]string{CatAI, CatRead, CatSlow}},
+	"EMB.MIGRATE.CUTOVER": {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.ABORT":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"EMB.MIGRATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
