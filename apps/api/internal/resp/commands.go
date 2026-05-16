@@ -619,6 +619,18 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "JURY.SUBMIT", "JURY.VOTE", "JURY.VERDICT", "JURY.STATUS",
 		"JURY.LIST", "JURY.RESET", "JURY.STATS":
 		c.juryCmd(strings.TrimPrefix(cmd, "JURY."), args)
+	case "CONTEXT.SCAN", "CONTEXT.SCAN.BULK", "CONTEXT.SCAN.SANITIZE",
+		"CONTEXT.SCAN.RULES", "CONTEXT.SCAN.WHITELIST",
+		"CONTEXT.SCAN.RECENT", "CONTEXT.SCAN.RESET", "CONTEXT.SCAN.STATS":
+		c.contextScanCmd(strings.TrimPrefix(cmd, "CONTEXT."), args)
+	case "RAG.GAP.OBSERVE", "RAG.GAP.REPORT", "RAG.GAP.QUERIES",
+		"RAG.GAP.RESOLVE", "RAG.GAP.INDEXES", "RAG.GAP.RESET",
+		"RAG.GAP.SETCAP", "RAG.GAP.STATS":
+		c.ragGapCmd(strings.TrimPrefix(cmd, "RAG.GAP."), args)
+	case "REPLAY.RECORD", "REPLAY.OPEN", "REPLAY.NEXT", "REPLAY.CLOSE",
+		"REPLAY.DIFF", "REPLAY.GET", "REPLAY.EXPORT", "REPLAY.SESSIONS",
+		"REPLAY.RESET", "REPLAY.STATS":
+		c.replayCmd(strings.TrimPrefix(cmd, "REPLAY."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

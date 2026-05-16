@@ -396,6 +396,22 @@ var writeCommands = map[string]bool{
 	// STATUS / LIST / STATS are reads.
 	"JURY.SUBMIT": true, "JURY.VOTE": true, "JURY.RESET": true,
 
+	// CONTEXT.SCAN whitelist persists (operator-curated). SCAN itself
+	// is a pure read of incoming text; the recent-buffer is operational
+	// telemetry that can rebuild on restart.
+	"CONTEXT.SCAN.WHITELIST": true, "CONTEXT.SCAN.RESET": true,
+
+	// RAG.GAP observations + resolved set must survive restart — they
+	// ARE the content-team ship-list. REPORT/QUERIES/INDEXES/STATS
+	// are reads.
+	"RAG.GAP.OBSERVE": true, "RAG.GAP.RESOLVE": true,
+	"RAG.GAP.RESET": true, "RAG.GAP.SETCAP": true,
+
+	// REPLAY traces are durable by design — bug reports reference them
+	// for days/weeks. OPEN/CLOSE/NEXT mutate cursor state (in-memory
+	// only); the underlying trace is what persists.
+	"REPLAY.RECORD": true, "REPLAY.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

@@ -1011,6 +1011,38 @@ var registry = map[string]commandInfo{
 	"JURY.LIST":    {[]string{CatAI, CatRead, CatFast}},
 	"JURY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
 	"JURY.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CONTEXT.SCAN.* — indirect-injection scanner for retrieved data.
+	"CONTEXT.SCAN":           {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.BULK":      {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.SANITIZE":  {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.RULES":     {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.WHITELIST": {[]string{CatAI, CatWrite, CatFast}},
+	"CONTEXT.SCAN.RECENT":    {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONTEXT.SCAN.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// RAG.GAP.* — coverage-gap detection.
+	"RAG.GAP.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.REPORT":  {[]string{CatAI, CatRead, CatSlow}},
+	"RAG.GAP.QUERIES": {[]string{CatAI, CatRead, CatFast}},
+	"RAG.GAP.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.INDEXES": {[]string{CatAI, CatRead, CatFast}},
+	"RAG.GAP.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// REPLAY.* — deterministic agent record/replay.
+	"REPLAY.RECORD":   {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.OPEN":     {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.NEXT":     {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.CLOSE":    {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.DIFF":     {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.GET":      {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.EXPORT":   {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.STATS":    {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

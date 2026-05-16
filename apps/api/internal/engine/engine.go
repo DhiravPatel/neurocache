@@ -494,6 +494,24 @@ type Engine struct {
 	// collapse onto the same SUBMIT / VOTE / VERDICT operations.
 	Jury *llmstack.Jury
 
+	// Indirect-injection scanner for retrieved content. INJECT guards
+	// the front door (user input); CONTEXT.SCAN guards the back door
+	// where 90% of real agent-stack exploits now come from — malicious
+	// instructions inside RAG hits, tool responses, scraped pages.
+	ContextScan *llmstack.ContextScanner
+
+	// RAG coverage-gap detector. Records (query, best_score) per
+	// retrieval; REPORT clusters low-score queries into a ship-list
+	// for the content team. Turns the vector index into product
+	// analytics.
+	RAGGap *llmstack.RAGGap
+
+	// Deterministic agent record/replay. Captures every step's
+	// input + output keyed by (session, step, kind); REPLAY.NEXT
+	// feeds recorded outputs back so non-deterministic agent runs
+	// are reproducible for debugging.
+	Replay *llmstack.ReplayStore
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -698,6 +716,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.SpecDec = llmstack.NewSpecDecCache()
 	e.PrefetchPredict = llmstack.NewPrefetchPredictor()
 	e.Jury = llmstack.NewJury()
+	e.ContextScan = llmstack.NewContextScanner()
+	e.RAGGap = llmstack.NewRAGGap()
+	e.Replay = llmstack.NewReplayStore()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
