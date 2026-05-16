@@ -2232,6 +2232,174 @@ MOE.EXPERTS
 # code-claude: 12400 calls, success_rate=0.97, avg=720ms
 # ...`,
       },
+      {
+        id: "confidence",
+        title: "Confidence calibration (reliability bins + ECE)",
+        blurb: (
+          <>
+            Raw LLM confidences are uncalibrated — "model says 0.8"
+            rarely means 80% accurate. Apps gate on raw confidence
+            and ship wrong answers as "high-confidence" responses,
+            with the ops team finding out via Twitter.{" "}
+            <code>CONFIDENCE.*</code> records (predicted, actual)
+            pairs in a rolling 10k-sample buffer per model, exposes
+            a reliability curve + Expected Calibration Error, and a{" "}
+            <code>CALIBRATE</code> hot path that maps a raw 0.8 to
+            the empirical hit-rate the cache has measured. Apps
+            gate on the calibrated value.{" "}
+            <strong>88 ns/op RECORD — 11.3M ops/sec, parallel-safe.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "CONFIDENCE.RECORD model-id predicted actual", desc: "Record one pair. Predicted in [0,1]; actual typically 0/1 but [0,1] accepted (partial-credit graders). Lock-free atomic ring buffer." },
+          { cmd: "CONFIDENCE.CURVE model-id [BINS n]", desc: "Reliability bins (calibration-plot data). Each bin reports predicted_avg, actual_rate, count, gap_abs. BINS defaults to 10." },
+          { cmd: "CONFIDENCE.ECE model-id [BINS n]", desc: "Expected Calibration Error — sample-weighted average |predicted_avg - actual_rate|. Lower is better; >0.05 is poor calibration." },
+          { cmd: "CONFIDENCE.CALIBRATE model-id raw-conf [BINS n]", desc: "Production hot path. Returns the empirical hit-rate for the bin containing raw-conf. Falls back to raw if the bin has <10 samples (better than making up numbers from sparse data)." },
+          { cmd: "CONFIDENCE.RESET model-id", desc: "Wipe the per-model sample buffer." },
+          { cmd: "CONFIDENCE.MODELS", desc: "Every tracked model id with sample count + buffer cap." },
+          { cmd: "CONFIDENCE.STATS", desc: "Models / total records / curves / calibrates. Drives the dashboard's calibration panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Every time the app verifies an LLM output, record the pair
+CONFIDENCE.RECORD gpt-4 0.85 1   # model said 0.85 confidence, output was correct
+CONFIDENCE.RECORD gpt-4 0.85 0   # model said 0.85, but output was wrong
+CONFIDENCE.RECORD gpt-4 0.30 0   # model said 0.30, correctly low
+
+# Inspect calibration over a thousand+ samples
+CONFIDENCE.CURVE gpt-4 BINS 10
+# bin[8] (0.80-0.90): predicted_avg=0.85  actual_rate=0.45   count=240  gap=0.40
+# (severe miscalibration — model is overconfident!)
+
+CONFIDENCE.ECE gpt-4
+# ece=0.32   samples=2480     ← seriously miscalibrated
+
+# Production hot path: map raw confidence to true hit-rate
+CONFIDENCE.CALIBRATE gpt-4 0.85
+# → "0.450000"
+# (App gates on calibrated 0.45 — not the raw 0.85 — for routing
+#  decisions. Drops the no-review threshold from 0.85 to 0.95.)
+
+# Per-model comparison
+CONFIDENCE.MODELS
+# gpt-4: 2480 samples
+# claude: 1900 samples
+# llama: 540 samples`,
+      },
+      {
+        id: "drift",
+        title: "Input distribution drift detection",
+        blurb: (
+          <>
+            Prompt streams silently shift — new product launches,
+            new user cohort onboards, viral topic appears — and
+            downstream pipelines start producing weird outputs.
+            Standard monitoring (latency, error-rate) catches NONE
+            of this. <code>DRIFT.*</code> watches a per-tracker
+            rolling window of text observations against a baseline
+            n-gram bag and reports{" "}
+            <code>1 - Jaccard(baseline, recent)</code> as a drift
+            score, plus a verdict (
+            <code>stable</code> / <code>drifting</code> /{" "}
+            <code>diverged</code>). Cached score recomputed every
+            50 observations on the hot path.
+          </>
+        ),
+        commands: [
+          { cmd: "DRIFT.BASELINE tracker-id [WINDOW n] sample1 sample2 ...", desc: "(Re-)build the baseline n-gram bag from sample texts. WINDOW sets the rolling-observation window size (default 1000)." },
+          { cmd: "DRIFT.OBSERVE tracker-id text", desc: "Record a new observation. Returns current score + samples + verdict. Hot path: ~4.5 µs." },
+          { cmd: "DRIFT.SCORE tracker-id", desc: "Force a recompute (vs. the cached score) and return the current snapshot." },
+          { cmd: "DRIFT.RESET tracker-id", desc: "Wipe the rolling window — baseline preserved." },
+          { cmd: "DRIFT.FORGET tracker-id", desc: "Drop the tracker entirely." },
+          { cmd: "DRIFT.TRACKERS", desc: "Every tracker with baseline size, sample count, current score + verdict." },
+          { cmd: "DRIFT.STATS", desc: "Trackers / baselines / observes / scores. Drives the dashboard's distribution-drift panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Seed the baseline from a sample week of typical support tickets
+DRIFT.BASELINE support WINDOW 500 \\
+  "customer cannot log in via Safari" \\
+  "user reporting checkout button broken" \\
+  "refund not received yet, order ABC123" \\
+  "shipping delay on order XYZ456" \\
+  "password reset email not arriving"
+# (... 50-100 representative samples ...)
+
+# Every incoming ticket observes
+DRIFT.OBSERVE support "Safari login broken for premium tier users"
+# samples=1  score=0.32  verdict=stable
+
+# Hours later, a viral data-loss bug hits the support channel
+DRIFT.OBSERVE support "lost all my saved drafts after the update"
+DRIFT.OBSERVE support "drafts disappeared, recovery options gone"
+DRIFT.OBSERVE support "I lost three months of saved drafts overnight"
+# ...
+DRIFT.SCORE support
+# samples=240  score=0.71  verdict=diverged
+# (Page on-call: input distribution is no longer typical support traffic)
+
+# Recovery: drop the rolling window to start fresh after deploying a fix
+DRIFT.RESET support
+
+# Dashboard
+DRIFT.TRACKERS
+# support: 240 samples, score=0.71, verdict=diverged
+# checkout: 1000 samples, score=0.18, verdict=stable
+# ...`,
+      },
+      {
+        id: "watermark",
+        title: "AI-generated text detector (statistical fingerprints)",
+        blurb: (
+          <>
+            Trust & safety, content moderation, plagiarism systems,
+            and AI-assistance-disclosure compliance all need to ask
+            "was this AI-generated?" — but apps either ship to a
+            slow remote classifier or roll their own brittle keyword
+            list. <code>WATERMARK.*</code> is a fast pre-filter
+            scoring against six signals (
+            <strong>AI vocabulary</strong> like "delve" / "tapestry"
+            / "intricate", <strong>em-dash density</strong>,{" "}
+            <strong>bullet-list density</strong>,{" "}
+            <strong>paragraph-length uniformity</strong>,{" "}
+            <strong>modifier density</strong>, plus{" "}
+            <strong>custom regex patterns</strong> apps add at
+            runtime). Returns a 0..1 score + verdict.{" "}
+            <strong>2.6 µs/op</strong> for triage at firehose scale.
+          </>
+        ),
+        commands: [
+          { cmd: "WATERMARK.SCORE text", desc: "Return [score, verdict, words, signals[]]. Verdict: human (<0.30) / unclear (0.30-0.55) / ai (>=0.55). Signals breakdown shows each contributor." },
+          { cmd: "WATERMARK.PATTERN.ADD name regex weight", desc: "Register a custom detection regex. Positive weight = adds AI signal; negative weight subtracts (e.g. \"typo patterns subtract AI signal\"). Bad regex returns error." },
+          { cmd: "WATERMARK.PATTERN.REMOVE name", desc: "Drop a custom pattern. Returns 1 if it existed." },
+          { cmd: "WATERMARK.PATTERN.LIST", desc: "Every custom pattern with source + weight." },
+          { cmd: "WATERMARK.STATS", desc: "Custom patterns / total scores / total likely-AI count. Drives the dashboard's content-detection panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Score a piece of submitted text
+WATERMARK.SCORE "Navigating the intricate tapestry of modern software requires a comprehensive understanding..."
+# score=0.74  verdict=ai  words=42
+# signals=[
+#   {name: ai_vocabulary,       contribution: 0.85,  weight: 0.40},
+#   {name: em_dash_density,     contribution: 0.20,  weight: 0.15},
+#   {name: bullet_density,      contribution: 0.00,  weight: 0.15},
+#   {name: paragraph_uniformity,contribution: 0.40,  weight: 0.10},
+#   {name: modifier_density,    contribution: 0.65,  weight: 0.10}
+# ]
+
+# Normal human text scores low
+WATERMARK.SCORE "ok so this is just a normal message lol, will follow up tomorrow"
+# score=0.08  verdict=human
+
+# Domain-specific patterns (e.g. catch "As an AI" / "I cannot")
+WATERMARK.PATTERN.ADD ai-signature "(?i)as an ai" 1.0
+WATERMARK.PATTERN.ADD assistant-disclaimer "(?i)I cannot \\\\w+ that" 0.7
+
+# Negative-weight patterns subtract AI signal (e.g. typos)
+WATERMARK.PATTERN.ADD typo-positive "(?i)\\\\b(gonna|wanna|lemme)\\\\b" -0.5
+
+# Trust-and-safety pipeline
+WATERMARK.SCORE "<submitted post>"
+# Apps fail-fast on verdict=ai, escalate verdict=unclear to a real classifier`,
+      },
     ],
   },
 

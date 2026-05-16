@@ -705,6 +705,31 @@ var registry = map[string]commandInfo{
 	"MOE.EXPERTS":         {[]string{CatAI, CatRead, CatFast}},
 	"MOE.FORGET":          {[]string{CatAI, CatWrite, CatFast}},
 	"MOE.STATS":           {[]string{CatAI, CatRead, CatFast}},
+
+	// CONFIDENCE.* — calibration via reliability bins.
+	"CONFIDENCE.RECORD":    {[]string{CatAI, CatWrite, CatFast}},
+	"CONFIDENCE.CURVE":     {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.ECE":       {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.CALIBRATE": {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONFIDENCE.MODELS":    {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// DRIFT.* — input distribution drift detection.
+	"DRIFT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.OBSERVE":  {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.SCORE":    {[]string{CatAI, CatRead, CatFast}},
+	"DRIFT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.TRACKERS": {[]string{CatAI, CatRead, CatFast}},
+	"DRIFT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// WATERMARK.* — AI-generated text detector.
+	"WATERMARK.SCORE":          {[]string{CatAI, CatRead, CatFast}},
+	"WATERMARK.PATTERN.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"WATERMARK.PATTERN.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"WATERMARK.PATTERN.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"WATERMARK.STATS":          {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

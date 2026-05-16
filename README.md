@@ -605,6 +605,36 @@ MOE.ROUTE "solve this calculus problem" K 1
 # top expert by capability × health
 MOE.RECORD math-gpt4 1 LATENCY_MS 420  # success in 420ms
 # (after 100 failures, the router auto-routes around the bad expert)
+
+# Confidence calibration — track (predicted, actual) pairs, return
+# reliability bins + Expected Calibration Error + CALIBRATE that
+# maps raw confidence to empirical hit-rate. Apps gate decisions on
+# calibrated probability, not raw output. ~88 ns/op RECORD.
+CONFIDENCE.RECORD gpt-4 0.85 1
+CONFIDENCE.RECORD gpt-4 0.85 0
+# ... after 1000+ samples ...
+CONFIDENCE.ECE gpt-4                  # → "ece=0.32"  ← miscalibrated!
+CONFIDENCE.CALIBRATE gpt-4 0.85
+# → "0.450000"   ← gate on this, not the raw 0.85
+
+# Input distribution drift detection — catches silent shifts in
+# prompt streams that latency/error-rate monitoring misses.
+DRIFT.BASELINE support WINDOW 500 \
+  "customer cannot log in via Safari" \
+  "user reporting checkout button broken" \
+  "refund not received yet" \
+  ...
+DRIFT.OBSERVE support "Safari login broken for premium tier"
+# (... hours later, viral data-loss bug hits ...)
+DRIFT.SCORE support                   # → score=0.71 verdict=diverged
+
+# AI-generated text detector — fast pre-filter for trust & safety.
+# Six statistical signals (AI vocab, em-dash density, bullet
+# structure, paragraph uniformity, modifier density, custom regex).
+# ~2.6 µs SCORE.
+WATERMARK.SCORE "Navigating the intricate tapestry of modern software..."
+# score=0.74  verdict=ai
+WATERMARK.PATTERN.ADD ai-signature "(?i)as an ai" 1.0
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

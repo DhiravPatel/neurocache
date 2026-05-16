@@ -244,6 +244,17 @@ var writeCommands = map[string]bool{
 	// the writeset.
 	"MOE.EXPERT.REGISTER": true, "MOE.FORGET": true,
 
+	// CONFIDENCE samples are rolling — losing them on restart is
+	// fine (calibration rebuilds from new traffic). None of
+	// CONFIDENCE.* is in the writeset.
+
+	// DRIFT baselines are durable (operator-curated samples);
+	// observations are rolling-window state that rebuilds naturally.
+	"DRIFT.BASELINE": true, "DRIFT.FORGET": true,
+
+	// WATERMARK custom patterns are durable; SCORE is pure compute.
+	"WATERMARK.PATTERN.ADD": true, "WATERMARK.PATTERN.REMOVE": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

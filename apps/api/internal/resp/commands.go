@@ -506,6 +506,16 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "MOE.EXPERT.REGISTER", "MOE.ROUTE", "MOE.RECORD",
 		"MOE.EXPERTS", "MOE.FORGET", "MOE.STATS":
 		c.moeCmd(strings.TrimPrefix(cmd, "MOE."), args)
+	case "CONFIDENCE.RECORD", "CONFIDENCE.CURVE", "CONFIDENCE.ECE",
+		"CONFIDENCE.CALIBRATE", "CONFIDENCE.RESET", "CONFIDENCE.MODELS",
+		"CONFIDENCE.STATS":
+		c.confidenceCmd(strings.TrimPrefix(cmd, "CONFIDENCE."), args)
+	case "DRIFT.BASELINE", "DRIFT.OBSERVE", "DRIFT.SCORE",
+		"DRIFT.RESET", "DRIFT.FORGET", "DRIFT.TRACKERS", "DRIFT.STATS":
+		c.driftCmd(strings.TrimPrefix(cmd, "DRIFT."), args)
+	case "WATERMARK.SCORE", "WATERMARK.PATTERN.ADD",
+		"WATERMARK.PATTERN.REMOVE", "WATERMARK.PATTERN.LIST", "WATERMARK.STATS":
+		c.watermarkCmd(strings.TrimPrefix(cmd, "WATERMARK."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
