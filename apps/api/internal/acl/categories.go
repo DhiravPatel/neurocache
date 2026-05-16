@@ -1043,6 +1043,36 @@ var registry = map[string]commandInfo{
 	"REPLAY.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
 	"REPLAY.RESET":    {[]string{CatAI, CatWrite, CatFast}},
 	"REPLAY.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// SHADOW.EVAL.* — mirror evaluation (namespaced to avoid the
+	// existing SHADOW.* stale-while-revalidate cache).
+	"SHADOW.EVAL.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.MIRROR":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.REPORT":  {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.PROMOTE": {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// BATCH.* — micro-batch accumulator.
+	"BATCH.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.FLUSH":   {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.PEEK":    {[]string{CatAI, CatRead, CatFast}},
+	"BATCH.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.BUCKETS": {[]string{CatAI, CatRead, CatFast}},
+	"BATCH.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// MEMORY.CONFLICT.* — memory contradiction detection.
+	"MEMORY.CONFLICT.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.KEYS":    {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

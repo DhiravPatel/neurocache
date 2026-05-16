@@ -4173,6 +4173,175 @@ REPLAY.DIFF sess-9f3a sess-9f3a-rerun
 # Ship the bundle with the bug report
 REPLAY.EXPORT sess-9f3a > bug-report.json`,
       },
+      {
+        id: "shadow-eval",
+        title: "Shadow evaluation — CANARY for the risk-averse (SHADOW.EVAL.*)",
+        blurb: (
+          <>
+            <code>ANSWER.CANARY</code> serves the candidate variant to{" "}
+            <i>N%</i> of real users. Healthcare, finance, legal and
+            regulated B2B can't do that — shipping an unproven prompt
+            to real customer outcomes is a compliance event.{" "}
+            <code>SHADOW.EVAL.*</code> mirrors{" "}
+            <i>100% of prod traffic</i> to the candidate but{" "}
+            <i>serves 0%</i>; both variants are scored offline. Because
+            both see the same input, paired-comparison stats are
+            tighter than two independent samples — fewer observations
+            needed to decide. <code>REPORT</code> also surfaces the
+            worst per-input regressions, so teams can see whether the
+            new prompt is better on average <i>and</i> whether the
+            worst cases stay inside acceptable bounds.
+          </>
+        ),
+        commands: [
+          { cmd: "SHADOW.EVAL.CONFIG exp-id [BASELINE name] [CANDIDATE name] [REGRESSION_THRESHOLD f] [SAMPLE_RATE f]", desc: "Defaults: regression_threshold=0.20, sample_rate=1.0." },
+          { cmd: "SHADOW.EVAL.MIRROR exp-id req-id input", desc: "Reserve a request id; returns 'mirror' or 'skip' (sampling)." },
+          { cmd: "SHADOW.EVAL.RECORD exp-id req-id BASELINE q CANDIDATE q [LATENCY_BASELINE_MS n] [LATENCY_CANDIDATE_MS n]", desc: "Paired outcomes. quality ∈ [0,1]." },
+          { cmd: "SHADOW.EVAL.REPORT exp-id [REGRESSION_LIMIT n]", desc: "n / win_rate_candidate / mean_lift / per-variant stats / worst regressions." },
+          { cmd: "SHADOW.EVAL.PROMOTE exp-id [RATE f]", desc: "Returns the ANSWER.CANARY config + verdict: ready / hold / not_recommended." },
+          { cmd: "SHADOW.EVAL.RESET exp-id", desc: "Clear results; preserve config." },
+          { cmd: "SHADOW.EVAL.LIST", desc: "Active experiments." },
+          { cmd: "SHADOW.EVAL.STATS", desc: "Experiments / total mirrors / total records." },
+        ],
+        examplesLang: "bash",
+        examples: `# Set up: mirror everything (1.0 sample rate, no user impact)
+SHADOW.EVAL.CONFIG summarizer-v3 \\
+  BASELINE  prompt-v2 \\
+  CANDIDATE prompt-v3 \\
+  REGRESSION_THRESHOLD 0.20
+
+# Every request: reserve a paired slot, run BOTH variants offline
+SHADOW.EVAL.MIRROR summarizer-v3 req-88 "<input text>"
+# → "mirror"   (or "skip" when SAMPLE_RATE drops it)
+
+# After scoring both responses offline (LLM judge, eval pipeline, ...)
+SHADOW.EVAL.RECORD summarizer-v3 req-88 \\
+  BASELINE  0.74 \\
+  CANDIDATE 0.86 \\
+  LATENCY_BASELINE_MS 850 \\
+  LATENCY_CANDIDATE_MS 920
+
+SHADOW.EVAL.REPORT summarizer-v3 REGRESSION_LIMIT 10
+# n=12480  win_rate_candidate=0.71  mean_lift=+0.09
+# baseline_mean=0.74  candidate_mean=0.83
+# latency_lift_ms=+90
+# regressions=[                                        ← inspect these
+#   { req_id: "req-9012", baseline: 0.92, candidate: 0.41, diff: -0.51 },
+#   { req_id: "req-9128", baseline: 0.88, candidate: 0.45, diff: -0.43 },
+# ]
+
+# Decision gate: ready to graduate to live canary?
+SHADOW.EVAL.PROMOTE summarizer-v3 RATE 0.10
+# verdict=ready  suggested_rate=0.10  reason="candidate beats baseline with usable lift; ship to ANSWER.CANARY"`,
+      },
+      {
+        id: "batch",
+        title: "Micro-batch accumulator (BATCH.*)",
+        blurb: (
+          <>
+            Embeddings APIs (OpenAI, Voyage, Cohere) and most
+            batch-inference endpoints are{" "}
+            <b>5–10\xd7 cheaper per item</b> when called in bulk.
+            App code almost never batches because request boundaries
+            don't line up — request A wants doc 12, request B wants
+            doc 47, they arrive 8 ms apart. The cache engine sees
+            both. <code>BATCH.*</code> coalesces items per bucket
+            until <code>MAXWAIT_MS</code> or <code>MAXSIZE</code> hits,
+            then <code>FLUSH</code> hands the caller one batch so they
+            make a single provider call. Directly bankable spend
+            reduction; <code>STATS</code> reports per-bucket{" "}
+            <code>calls_saved</code> and <code>saved_usd</code>.
+          </>
+        ),
+        commands: [
+          { cmd: "BATCH.CONFIG bucket-id [MAXWAIT_MS n] [MAXSIZE n] [COST_PER_CALL f] [COST_PER_ITEM f]", desc: "Defaults: 50ms / 64 items." },
+          { cmd: "BATCH.ADD bucket-id item-id payload", desc: "→ batch_id / slot / ready / age_ms. ready=1 means flush now." },
+          { cmd: "BATCH.FLUSH bucket-id", desc: "Roll the active batch forward; returns items for one provider call." },
+          { cmd: "BATCH.PEEK bucket-id", desc: "Active batch metadata without flushing (for background flushers)." },
+          { cmd: "BATCH.RESOLVE bucket-id batch-id [RESULTS r1 r2 ...]", desc: "App callback after the upstream call returns; bumps telemetry." },
+          { cmd: "BATCH.BUCKETS", desc: "Every known bucket id." },
+          { cmd: "BATCH.RESET bucket-id|ALL", desc: "Drop bucket(s)." },
+          { cmd: "BATCH.STATS", desc: "Global + per-bucket avg_batch / calls_saved / saved_usd." },
+        ],
+        examplesLang: "bash",
+        examples: `# Configure the embeddings bucket
+BATCH.CONFIG embeddings MAXWAIT_MS 50 MAXSIZE 96 COST_PER_CALL 0.0001
+
+# Every request that needs an embedding lands in the bucket
+BATCH.ADD embeddings item-1 "first chunk to embed"
+# → batch_id=b7  slot=0  ready=0  age_ms=2
+BATCH.ADD embeddings item-2 "second chunk"
+# → slot=1  ready=0
+
+# ... 50ms or 96 items later, ready flips to 1 ...
+BATCH.ADD embeddings item-96 "last chunk"
+# → slot=95  ready=1   ← fire FLUSH
+
+# Caller makes ONE provider call for the whole batch
+BATCH.FLUSH embeddings
+# → batch_id=b7  items=[{item-1, "first chunk..."}, {item-2, "second..."}, ...]
+
+# Tell the accumulator how many results came back (for telemetry)
+BATCH.RESOLVE embeddings b7 RESULTS "<vec1>" "<vec2>" ... "<vec96>"
+
+# Operational view
+BATCH.STATS
+# per_bucket=[{embeddings  total_items=14820  total_calls=156
+#              calls_saved=14664  avg_batch=95.0  saved_usd=$1.47}]
+# → 14664 provider calls saved across that bucket`,
+      },
+      {
+        id: "memory-conflict",
+        title: "Memory contradiction detection (MEMORY.CONFLICT.*)",
+        blurb: (
+          <>
+            <code>MEMORY.CONSOLIDATE</code> dedups similar facts. It
+            does nothing when a new fact <i>contradicts</i> an old one
+            (“user prefers async communication” → later
+            “user wants daily sync calls”). Long-running
+            agent memory rots silently without contradiction
+            detection, and no memory product handles it.{" "}
+            <code>MEMORY.CONFLICT.*</code> is that layer:{" "}
+            <code>CHECK</code> scores a candidate fact against every
+            stored fact under the key, flagging same-topic‑opposite‑assertion
+            pairs (cosine 0.4–0.85 <i>plus</i> polarity flip or
+            negation differential). <code>RESOLVE</code> drops the
+            losing side.
+          </>
+        ),
+        commands: [
+          { cmd: "MEMORY.CONFLICT.ADD key text [ID id]", desc: "Register a known fact for the key. Returns the fact id." },
+          { cmd: "MEMORY.CONFLICT.CHECK key candidate [STRICT 0|1]", desc: "→ conflict / with / with_id / score / resolution_hint / reason. STRICT=1 requires polarity-flip or negation signal." },
+          { cmd: "MEMORY.CONFLICT.LIST key", desc: "Open conflicts for one key (newest first)." },
+          { cmd: "MEMORY.CONFLICT.RESOLVE key conflict-id KEEP newer|older|both", desc: "Drop the non-kept fact(s)." },
+          { cmd: "MEMORY.CONFLICT.PURGE key", desc: "Drop every fact + conflict under key." },
+          { cmd: "MEMORY.CONFLICT.KEYS", desc: "Every key with stored facts." },
+          { cmd: "MEMORY.CONFLICT.STATS", desc: "Keys / facts / open conflicts / detection counters." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build up known facts about a user
+MEMORY.CONFLICT.ADD user:dhirav "prefers async communication for everything important"
+# → f1
+
+# Later: candidate fact from a new conversation
+MEMORY.CONFLICT.CHECK user:dhirav "wants synchronous daily standup meetings"
+# conflict=1  with="prefers async communication..."  with_id=f1
+# score=0.78  resolution_hint=supersede
+# reason="polarity flip (comms:async ↔ comms:sync)"
+
+# Diet contradiction
+MEMORY.CONFLICT.ADD user:dhirav "user is vegetarian"
+MEMORY.CONFLICT.CHECK user:dhirav "user ordered steak meat dinner"
+# conflict=1  reason="polarity flip (diet:veg ↔ diet:meat)"
+
+# Negation differential
+MEMORY.CONFLICT.ADD user:dhirav "user approves the migration plan"
+MEMORY.CONFLICT.CHECK user:dhirav "user does not approve the migration plan"
+# conflict=1  reason="negation differential"
+
+# Resolve: newer wins, drop the old fact
+MEMORY.CONFLICT.RESOLVE user:dhirav c-deadbeef KEEP newer`,
+      },
     ],
   },
 

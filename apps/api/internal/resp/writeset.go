@@ -412,6 +412,24 @@ var writeCommands = map[string]bool{
 	// only); the underlying trace is what persists.
 	"REPLAY.RECORD": true, "REPLAY.RESET": true,
 
+	// SHADOW.EVAL paired outcomes must survive restart — the whole
+	// point of offline evaluation is to accumulate enough samples to
+	// make a confident decision. MIRROR is a reservation; only RECORD
+	// and the structural ones persist.
+	"SHADOW.EVAL.CONFIG": true, "SHADOW.EVAL.RECORD": true,
+	"SHADOW.EVAL.RESET": true,
+
+	// BATCH config is durable; the per-bucket in-flight items are
+	// in-flight by definition and rebuild on restart from upstream
+	// retries. CONFIG/RESET persist; ADD/FLUSH/RESOLVE are operational.
+	"BATCH.CONFIG": true, "BATCH.RESET": true,
+
+	// MEMORY.CONFLICT facts and resolved decisions persist — they're
+	// the canonical record of "what's true for this key now". CHECK,
+	// LIST, KEYS, STATS are reads.
+	"MEMORY.CONFLICT.ADD": true, "MEMORY.CONFLICT.RESOLVE": true,
+	"MEMORY.CONFLICT.PURGE": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

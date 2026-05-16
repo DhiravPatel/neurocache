@@ -997,6 +997,48 @@ REPLAY.NEXT sess-9f3a KIND llm IN "<prompt>"
 REPLAY.DIFF sess-9f3a sess-9f3a-rerun
 # step=4 kind=tool field=out a="..." b="..."   ← root cause
 REPLAY.EXPORT sess-9f3a > bug-report.json
+
+# Shadow evaluation — CANARY for the risk-averse. Mirrors 100% of
+# prod traffic to a candidate, serves 0% to users, paired-scores
+# both offline. Required when compliance/regulatory rules forbid
+# any traffic split to an unproven variant.
+SHADOW.EVAL.CONFIG summarizer-v3 \
+  BASELINE prompt-v2 CANDIDATE prompt-v3 REGRESSION_THRESHOLD 0.20
+SHADOW.EVAL.MIRROR summarizer-v3 req-88 "<input text>"
+# → "mirror"   # caller runs BOTH variants offline
+SHADOW.EVAL.RECORD summarizer-v3 req-88 BASELINE 0.74 CANDIDATE 0.86 \
+  LATENCY_BASELINE_MS 850 LATENCY_CANDIDATE_MS 920
+SHADOW.EVAL.REPORT summarizer-v3 REGRESSION_LIMIT 10
+# n=12480  mean_lift=+0.09  latency_lift_ms=+90  win_rate_candidate=0.71
+# regressions=[{req_id:req-9012, baseline:0.92, candidate:0.41}, ...]
+SHADOW.EVAL.PROMOTE summarizer-v3 RATE 0.10
+# verdict=ready  reason="candidate beats baseline with usable lift"
+
+# Micro-batch accumulator — embedding/inference APIs are 5-10×
+# cheaper per item in bulk. BATCH coalesces items for MAXWAIT_MS
+# or until MAXSIZE, then FLUSH gives the caller one batch.
+# Direct, measurable cost savings.
+BATCH.CONFIG embeddings MAXWAIT_MS 50 MAXSIZE 96 COST_PER_CALL 0.0001
+BATCH.ADD embeddings item-1 "first chunk"
+BATCH.ADD embeddings item-2 "second chunk"
+# ... 50ms later or 96 items in ...
+BATCH.FLUSH embeddings        # → one batch, one provider call
+BATCH.STATS
+# embeddings: total_items=14820  total_calls=156
+#             calls_saved=14664  saved_usd=$1.47/day
+
+# Memory contradiction detection — MEMORY.CONSOLIDATE dedups
+# similar facts; MEMORY.CONFLICT catches the case where a new
+# fact contradicts an old one. Long-running agent memory rots
+# silently without this.
+MEMORY.CONFLICT.ADD user:dhirav "prefers async communication for everything"
+MEMORY.CONFLICT.CHECK user:dhirav "wants synchronous daily standup meetings"
+# conflict=1  with_id=f1  score=0.78  resolution_hint=supersede
+# reason="polarity flip (comms:async ↔ comms:sync)"
+MEMORY.CONFLICT.ADD user:dhirav "user approves the migration plan"
+MEMORY.CONFLICT.CHECK user:dhirav "user does not approve the migration plan"
+# conflict=1  reason="negation differential"
+MEMORY.CONFLICT.RESOLVE user:dhirav c-deadbeef KEEP newer
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

@@ -512,6 +512,27 @@ type Engine struct {
 	// are reproducible for debugging.
 	Replay *llmstack.ReplayStore
 
+	// Shadow evaluation — CANARY for the risk-averse. Mirrors 100%
+	// of prod traffic to a candidate variant, serves 0% to users,
+	// scores both and surfaces lift + per-input regressions. Lets
+	// regulated teams learn whether the candidate is better without
+	// exposing a single user. Field is ShadowEval (not Shadow) because
+	// the aiops.Shadow stale-while-revalidate cache already owns that.
+	ShadowEval *llmstack.ShadowEval
+
+	// Micro-batch accumulator for embedding / batch-inference APIs.
+	// Buckets items for MAXWAIT_MS or until MAXSIZE, then FLUSH
+	// hands the caller one batch — directly bankable cost savings
+	// since bulk endpoints are 5-10× cheaper per item.
+	Batch *llmstack.BatchAccumulator
+
+	// Memory contradiction detector. MEMORY.CONSOLIDATE dedups
+	// similar facts; MEMORY.CONFLICT.* catches the harder case
+	// where a new fact contradicts an old one ("user prefers async"
+	// later "user wants daily sync") so long-running agent memory
+	// doesn't rot silently.
+	MemConflicts *llmstack.MemoryConflicts
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -719,6 +740,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.ContextScan = llmstack.NewContextScanner()
 	e.RAGGap = llmstack.NewRAGGap()
 	e.Replay = llmstack.NewReplayStore()
+	e.ShadowEval = llmstack.NewShadowEval()
+	e.Batch = llmstack.NewBatchAccumulator()
+	e.MemConflicts = llmstack.NewMemoryConflicts()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
