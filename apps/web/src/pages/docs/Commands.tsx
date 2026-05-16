@@ -2695,6 +2695,158 @@ CACHE.LAYERS.STATS
 # misses=18000  hit_rate=0.83
 # (83% of requests resolve without ever calling upstream)`,
       },
+      {
+        id: "contract",
+        title: "LLM tool-call signature validator",
+        blurb: (
+          <>
+            Different from <code>STRUCT.*</code> (validates output)
+            — <code>CONTRACT.*</code> validates the tool-call
+            envelope the model emits when invoking a tool:{" "}
+            <code>{`{"name":"search","arguments":{"q":"..."}}`}</code>.
+            Catches <strong>hallucinated tools</strong>, missing
+            required args, wrong types, and out-of-range values
+            BEFORE the app dispatches the call. Reuses STRUCT's
+            schema walker. ~740 ns/op.
+          </>
+        ),
+        commands: [
+          { cmd: "CONTRACT.REGISTER tool-id schema-json", desc: "Register a tool's arguments schema (subset of JSON Schema)." },
+          { cmd: "CONTRACT.UNREGISTER tool-id", desc: "Drop a tool. Returns 1 if it existed." },
+          { cmd: "CONTRACT.VALIDATE call-json", desc: "Validate an LLM-emitted call envelope. Returns [valid, tool_id, errors[]]. Missing arguments treated as empty object." },
+          { cmd: "CONTRACT.LIST", desc: "Every registered tool with its schema." },
+          { cmd: "CONTRACT.STATS", desc: "Tools / validates / valid / invalid counters." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register tools at app boot
+CONTRACT.REGISTER web_search '{
+  "type": "object",
+  "properties": {
+    "query": {"type": "string"},
+    "limit": {"type": "integer", "min": 1, "max": 100}
+  },
+  "required": ["query"]
+}'
+
+# Validate every LLM tool-call before dispatching
+CONTRACT.VALIDATE '{"name":"web_search","arguments":{"query":"bitcoin","limit":10}}'
+# valid=1  tool_id=web_search  errors=[]
+
+# Catch hallucinated tool
+CONTRACT.VALIDATE '{"name":"calculatron","arguments":{"x":1}}'
+# valid=0  errors=[{path: $envelope.name, message: "hallucinated tool: 'calculatron' is not registered"}]
+
+# Catch missing required field
+CONTRACT.VALIDATE '{"name":"web_search","arguments":{"limit":5}}'
+# valid=0  errors=[{path: $arguments.query, message: "required field missing"}]
+
+# Catch out-of-range
+CONTRACT.VALIDATE '{"name":"web_search","arguments":{"query":"x","limit":500}}'
+# valid=0  errors=[{path: $arguments.limit, message: "500 > max 100"}]`,
+      },
+      {
+        id: "timeline",
+        title: "Per-key time-windowed event log",
+        blurb: (
+          <>
+            Every agentic app eventually needs "what did this user /
+            session / conversation do in the last N minutes?" for
+            context auto-injection. Apps build this ad-hoc with
+            sorted ZSET tricks. <code>TIMELINE.*</code> is purpose-
+            built: per-key sorted slice + binary-search slicing +
+            KIND filter + FIFO eviction at 10k events/key default.{" "}
+            <strong>37 ns/op APPEND — 27M ops/sec, now the fastest
+            command in NeuroCache.</strong> RECENT slicing in 163 ns.
+          </>
+        ),
+        commands: [
+          { cmd: "TIMELINE.APPEND key event [TS unix-ms] [KIND k]", desc: "Append an event. Binary-search insertion keeps the slice sorted by timestamp. TS defaults to now." },
+          { cmd: "TIMELINE.RANGE key [SINCE ms] [UNTIL ms] [KIND k] [LIMIT n]", desc: "Range slice by timestamp. KIND filter is case-sensitive. UNTIL defaults to now." },
+          { cmd: "TIMELINE.RECENT key seconds [KIND k] [LIMIT n]", desc: "Convenience: events in the last N seconds. Hot path for context-injection scenarios." },
+          { cmd: "TIMELINE.LEN key", desc: "Event count for a key." },
+          { cmd: "TIMELINE.KEYS", desc: "Every active key, sorted." },
+          { cmd: "TIMELINE.FORGET key", desc: "Drop a key entirely." },
+          { cmd: "TIMELINE.STATS", desc: "Keys / total events / appends / ranges / evicts." },
+        ],
+        examplesLang: "bash",
+        examples: `# Track per-user activity for context auto-injection
+TIMELINE.APPEND user-42 "viewed product iPhone-15" KIND view
+TIMELINE.APPEND user-42 "added to cart" KIND cart
+TIMELINE.APPEND user-42 "abandoned checkout" KIND cart
+TIMELINE.APPEND user-42 "started chat" KIND support
+
+# When the user opens chat, inject their recent activity
+TIMELINE.RECENT user-42 300 LIMIT 10
+# Last 5 minutes of events — feed into the agent's context window
+
+# Per-agent tool-call log
+TIMELINE.APPEND agent-99 "called web_search(bitcoin price)" KIND tool
+TIMELINE.APPEND agent-99 "called calculator(0.7*42)" KIND tool
+
+# Find what tools an agent used in the last minute
+TIMELINE.RECENT agent-99 60 KIND tool
+
+# Range slicing by absolute timestamps
+TIMELINE.RANGE user-42 SINCE 1700000000000 UNTIL 1700003600000 KIND cart
+
+# Cleanup after session ends
+TIMELINE.FORGET user-42`,
+      },
+      {
+        id: "lsh",
+        title: "Random-hyperplane LSH for near-duplicate detection",
+        blurb: (
+          <>
+            For datasets of 100k+ vectors, even{" "}
+            <code>EMBED.MAT.TOPK</code> (linear cosine scan) gets
+            slow. <code>HASH.LSH.*</code> buckets vectors by K-bit
+            signatures derived from their sign vs N random
+            hyperplanes — near-duplicate detection becomes O(1 +
+            bucket) instead of O(N). <strong>53.8 µs vs 1.80 ms
+            EMBED.MAT baseline at 10k × 128 dims = 33.5× faster</strong>{" "}
+            (the gap grows at larger N).
+          </>
+        ),
+        commands: [
+          { cmd: "HASH.LSH.CREATE bucket-id dim [BITS k]", desc: "Initialise an LSH index with k random hyperplanes. Default 16 bits → 65k possible signatures. Higher BITS = better selectivity / smaller buckets / lower recall." },
+          { cmd: "HASH.LSH.SET bucket-id row-id v,v,v,...", desc: "Insert (or replace) a row. Vector is L2-normalised; signature computed via hyperplane signs." },
+          { cmd: "HASH.LSH.DEL bucket-id row-id", desc: "Remove a row." },
+          { cmd: "HASH.LSH.SIGN bucket-id v,v,v,...", desc: "Compute a vector's signature (hex). Useful for debugging which bucket a query lands in." },
+          { cmd: "HASH.LSH.NEIGHBORS bucket-id v,v,v,... [RADIUS r] [K k]", desc: "Top-K cosine-ranked hits from buckets within Hamming radius r of the query signature. RADIUS default 1 (matches exact bucket + 1-bit-flip neighbours)." },
+          { cmd: "HASH.LSH.LEN bucket-id", desc: "Row count in a bucket." },
+          { cmd: "HASH.LSH.FORGET bucket-id", desc: "Drop an entire bucket. Returns rows removed." },
+          { cmd: "HASH.LSH.STATS", desc: "Per-bucket size, occupied signature count, avg rows per bucket." },
+        ],
+        examplesLang: "bash",
+        examples: `# Create an LSH index for product catalog embeddings
+HASH.LSH.CREATE products 768 BITS 16
+
+# Insert vectors (10k+ products)
+HASH.LSH.SET products sku-1234 0.12,0.45,-0.31,0.78,...
+HASH.LSH.SET products sku-1235 0.13,0.44,-0.30,0.79,...   # near-duplicate
+# (... 10k more ...)
+
+# Find near-duplicates of a query vector in ~50 µs (vs ~2 ms flat scan)
+HASH.LSH.NEIGHBORS products 0.11,0.44,-0.30,0.77,... K 10
+# [
+#   {row_id: sku-1234, score: 0.9982},
+#   {row_id: sku-1235, score: 0.9974},
+#   ...
+# ]
+
+# Inspect the signature to debug bucket distribution
+HASH.LSH.SIGN products 0.11,0.44,-0.30,0.77,...
+# → "a3f7"   (16-bit hex)
+
+# Widen the search if recall is too low
+HASH.LSH.NEIGHBORS products <query> K 10 RADIUS 2
+# (scans buckets within 2-bit Hamming distance — slower but better recall)
+
+# Dashboard: bucket distribution health
+HASH.LSH.STATS
+# products: rows=10000  occupied_signatures=8240  avg_rows_per_bucket=1.21
+# (good: vectors are well-distributed across buckets)`,
+      },
     ],
   },
 

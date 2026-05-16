@@ -352,6 +352,22 @@ type Engine struct {
 	// 3-sequential-GET RAG hot-path pattern.
 	CacheLayers *llmstack.CacheLayers
 
+	// LLM tool-call signature validator. Validates the call envelope
+	// (name + arguments object) against a registered per-tool args
+	// schema. Catches hallucinated tools, missing required args,
+	// wrong types, unknown extras.
+	Contract *llmstack.ContractValidator
+
+	// Per-key time-windowed event log. Binary-search slicing by
+	// timestamp; optional KIND filter. "What did this user / agent
+	// do in the last N minutes?" for context auto-injection.
+	Timeline *llmstack.TimelineLog
+
+	// Random-hyperplane LSH index for near-duplicate detection at
+	// scale. Bucket vectors by K-bit signature; NEIGHBORS scans
+	// buckets within Hamming radius. O(1+bucket) instead of O(N).
+	LSH *llmstack.LSHIndex
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -532,6 +548,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.StreamParser = llmstack.NewStreamParser()
 	e.LLMLimiter = llmstack.NewLLMLimiter()
 	e.CacheLayers = llmstack.NewCacheLayers()
+	e.Contract = llmstack.NewContractValidator()
+	e.Timeline = llmstack.NewTimelineLog()
+	e.LSH = llmstack.NewLSHIndex()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

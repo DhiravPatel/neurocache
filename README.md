@@ -684,6 +684,29 @@ CACHE.LAYERS.SET semantic "what is bitcoin" "Bitcoin is decentralized..."
 CACHE.LAYERS.SET negative "weather on mars in 1850" "no data" EX 3600
 CACHE.LAYERS.LOOKUP "tell me about bitcoin"
 # → hit_layer=semantic  value="Bitcoin is..."  score=0.87
+
+# LLM tool-call signature validator — catches hallucinated tools,
+# missing required args, wrong types BEFORE dispatching the call.
+# Different from STRUCT (output) — this validates the call envelope.
+CONTRACT.REGISTER web_search '{"type":"object","required":["q"],
+  "properties":{"q":{"type":"string"}}}'
+CONTRACT.VALIDATE '{"name":"calculatron","arguments":{"x":1}}'
+# valid=0  errors=[{message: "hallucinated tool: 'calculatron'..."}]
+
+# Per-key time-windowed event log — "what did this user do in the
+# last N min?" for context auto-injection. ~37 ns/op APPEND
+# (27M ops/sec) — fastest command in NeuroCache.
+TIMELINE.APPEND user-42 "viewed iPhone-15" KIND view
+TIMELINE.APPEND user-42 "added to cart" KIND cart
+TIMELINE.RECENT user-42 300 LIMIT 10
+# → last 5 minutes of events for context window injection
+
+# Random-hyperplane LSH for near-duplicate detection at scale.
+# 33× faster than EMBED.MAT.TOPK at 10k × 128 dims (53 µs vs 1.8 ms).
+HASH.LSH.CREATE products 768 BITS 16
+HASH.LSH.SET products sku-1234 0.12,0.45,-0.31,...
+HASH.LSH.NEIGHBORS products <query-vec> K 10
+# → top-10 near-duplicates by cosine, sub-100 µs at 100k+ rows
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
