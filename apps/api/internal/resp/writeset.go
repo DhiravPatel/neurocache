@@ -380,6 +380,22 @@ var writeCommands = map[string]bool{
 	"RETRIEVAL.LEARN.RECORD": true, "RETRIEVAL.LEARN.RESET": true,
 	"RETRIEVAL.LEARN.ALPHA": true,
 
+	// SPECDEC acceptance rates + draft cache must persist — the
+	// whole point of the acceptance EMA is to survive restart so
+	// the orchestrator's DECIDE has continuity. GET/RATE/DECIDE/
+	// STATUS/STATS are reads.
+	"SPECDEC.CACHE": true, "SPECDEC.RECORD": true,
+	"SPECDEC.RESET": true, "SPECDEC.SETCAP": true,
+
+	// PREFETCH.PREDICT session history persists so cache-warming
+	// survives a node bounce. PREDICT is a read.
+	"PREFETCH.PREDICT.OBSERVE": true, "PREFETCH.PREDICT.HIT": true,
+	"PREFETCH.PREDICT.HORIZON": true, "PREFETCH.PREDICT.RESET": true,
+
+	// JURY state — candidate texts and votes — persists. VERDICT /
+	// STATUS / LIST / STATS are reads.
+	"JURY.SUBMIT": true, "JURY.VOTE": true, "JURY.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

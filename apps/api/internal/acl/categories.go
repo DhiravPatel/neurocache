@@ -981,6 +981,36 @@ var registry = map[string]commandInfo{
 	"RETRIEVAL.LEARN.RESET":  {[]string{CatAI, CatWrite, CatFast}},
 	"RETRIEVAL.LEARN.ALPHA":  {[]string{CatAI, CatWrite, CatFast}},
 	"RETRIEVAL.LEARN.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// SPECDEC.* — speculative-decoding draft cache + acceptance.
+	"SPECDEC.CACHE":  {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.RATE":   {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.SETCAP": {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// PREFETCH.PREDICT.* — per-session next-request predictor.
+	"PREFETCH.PREDICT.OBSERVE":  {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.PREDICT":  {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.HIT":      {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.HORIZON":  {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// JURY.* — multi-LLM jury voting + verdict aggregation.
+	"JURY.SUBMIT":  {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.VOTE":    {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.VERDICT": {[]string{CatAI, CatRead, CatFast}},
+	"JURY.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"JURY.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"JURY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

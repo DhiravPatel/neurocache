@@ -920,6 +920,44 @@ RETRIEVAL.LEARN.RERANK \
 # → chunk-marketing-blurb boost=0.50 reranked=0.45 (demoted)
 # Find dead weight to prune from the RAG index
 RETRIEVAL.LEARN.BOTTOM LIMIT 50
+
+# Speculative-decoding cache + acceptance tracker — small "draft"
+# model proposes N tokens, large verifier accepts the matching
+# prefix in one pass. ~2-3× speedup when draft is well matched;
+# net loss when it isn't. SPECDEC.DECIDE answers "is it worth it
+# for this (model, prefix-class)?" so the orchestrator can skip.
+SPECDEC.CACHE prefix-9f3a "the cat sat on the mat and"
+SPECDEC.RECORD gpt-4o chat 7 10    # 7/10 tokens accepted on chat prefix
+SPECDEC.RECORD gpt-4o code 2 10    # 2/10 on code — draft poorly matched
+SPECDEC.DECIDE gpt-4o chat
+# use=1  rate=0.70  reason="acceptance rate justifies speculative decoding"
+SPECDEC.DECIDE gpt-4o code
+# use=0  rate=0.20  reason="acceptance rate too low — draft poorly matched"
+
+# Per-session next-request predictor — pre-warms embeddings/RAG
+# chunks while the user is still reading the previous answer.
+# Operates in embedding space (not URL bigrams), so paraphrases
+# hit too.
+PREFETCH.PREDICT.OBSERVE user-42 "what is the pricing model"
+PREFETCH.PREDICT.OBSERVE user-42 "how does billing work"
+PREFETCH.PREDICT.OBSERVE user-42 "what is the pricing model again"
+PREFETCH.PREDICT.PREDICT user-42 LIMIT 3
+# → [{text:"how does billing work", score:0.94}, ...]
+# Orchestrator now pre-warms the billing embedding/chunks
+PREFETCH.PREDICT.HIT user-42 "how does billing work"
+# updates per-session hit-rate EMA
+
+# Multi-LLM jury voting — self-consistency, LLM-as-judge,
+# multi-model ensemble all share SUBMIT/VOTE/VERDICT. Agreement
+# score lets the orchestrator route low-agreement Qs to humans.
+JURY.SUBMIT q-summary cand-a "<answer from prompt v1>"
+JURY.SUBMIT q-summary cand-b "<answer from prompt v2>"
+JURY.VOTE q-summary gpt-4o cand-b CONFIDENCE 0.85
+JURY.VOTE q-summary claude cand-b CONFIDENCE 0.90
+JURY.VOTE q-summary gemini cand-a CONFIDENCE 0.60
+JURY.VERDICT q-summary
+# winner=cand-b  winner_score=1.75  agreement=0.67
+# → ship cand-b; 2/3 judges with high confidence picked it
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

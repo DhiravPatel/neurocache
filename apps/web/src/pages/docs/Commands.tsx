@@ -3856,6 +3856,165 @@ RETRIEVAL.LEARN.RERANK \\
 RETRIEVAL.LEARN.BOTTOM LIMIT 50
 # → chunks that retrieve well but never get cited`,
       },
+      {
+        id: "specdec",
+        title: "Speculative-decoding cache + acceptance (SPECDEC.*)",
+        blurb: (
+          <>
+            Speculative decoding is the standard LLM-inference trick:
+            a small fast <i>draft</i> model proposes N tokens ahead;
+            the large <i>verifier</i> accepts the matching prefix in
+            one forward pass. Typical 2-3× speedup{" "}
+            <i>when the draft is well matched</i>. When it isn't (code
+            generation under a chat draft, multilingual under English
+            draft), acceptance drops to ~10% and specdec slows the
+            system down. <code>SPECDEC.*</code> ships the two pieces
+            apps always end up rebuilding: a draft-token cache keyed
+            by prefix hash, AND an acceptance-rate EMA per (model,
+            prefix-class) so <code>DECIDE</code> can answer "is
+            speculative decoding even worth running here?"
+          </>
+        ),
+        commands: [
+          { cmd: "SPECDEC.CACHE prefix-hash token [token...]", desc: "Cache the small-model's draft for a prefix." },
+          { cmd: "SPECDEC.GET prefix-hash", desc: "Retrieve cached draft tokens (nil on miss)." },
+          { cmd: "SPECDEC.RECORD model class accepted total", desc: "Update acceptance EMA. accepted ≤ total, total > 0." },
+          { cmd: "SPECDEC.RATE model [PREFIX_CLASS class]", desc: "Current acceptance rate (aggregated or per-class)." },
+          { cmd: "SPECDEC.DECIDE model class", desc: "→ use / rate / samples / reason. Warmup defaults to use=1." },
+          { cmd: "SPECDEC.STATUS model", desc: "All per-class rates for one model, sorted by rate desc." },
+          { cmd: "SPECDEC.SETCAP n", desc: "Tune the draft-cache cap (default 100k)." },
+          { cmd: "SPECDEC.RESET model|ALL", desc: "Drop acceptance stats." },
+          { cmd: "SPECDEC.STATS", desc: "Drafts / models tracked / cache hits / records / decisions." },
+        ],
+        examplesLang: "bash",
+        examples: `# Cache the small model's draft tokens for a prefix
+SPECDEC.CACHE prefix-9f3a "the cat sat on the mat and"
+
+# Record verifier outcomes after each speculative-decode pass
+SPECDEC.RECORD gpt-4o chat 7 10    # 7 of 10 tokens accepted
+SPECDEC.RECORD gpt-4o code 2 10    # code is brutal — draft poorly matched
+
+# Decide per request whether speculative decoding is worth it
+SPECDEC.DECIDE gpt-4o chat
+# use=1  rate=0.70  reason="acceptance rate justifies speculative decoding"
+SPECDEC.DECIDE gpt-4o code
+# use=0  rate=0.20  reason="acceptance rate too low — draft poorly matched"
+
+# Re-use the small model's previous draft (skip the draft pass entirely)
+SPECDEC.GET prefix-9f3a
+# → ["the","cat","sat","on","the","mat","and"]
+
+# Operational view
+SPECDEC.STATUS gpt-4o
+# chat  rate=0.70  samples=18420  accepted=130k  proposed=185k
+# code  rate=0.20  samples=  900  accepted= 2k   proposed= 9k
+# multi rate=0.45  samples= 3200  accepted=14k   proposed=31k`,
+      },
+      {
+        id: "prefetch-predict",
+        title: "Per-session next-request predictor (PREFETCH.PREDICT.*)",
+        blurb: (
+          <>
+            Production cache-warming usually has two layers: a global
+            popularity prefetcher (cold-start: <i>"everyone asks for
+            the pricing page"</i>) and a per-session predictor (warm:{" "}
+            <i>"this user is onboarding — next they'll ask about API
+            keys"</i>). The global layer lives in your CDN. The
+            per-session layer is what teams rebuild — usually as a
+            fragile bigram on URL paths.{" "}
+            <code>PREFETCH.PREDICT.*</code> is that layer in embedding
+            space — every <code>OBSERVE</code> records a request;{" "}
+            <code>PREDICT</code> returns the top-N likely next
+            requests drawn from prior transitions with similar
+            prefixes.
+          </>
+        ),
+        commands: [
+          { cmd: "PREFETCH.PREDICT.OBSERVE session-id text", desc: "Record one request in the session's history (cap 200/session)." },
+          { cmd: "PREFETCH.PREDICT.PREDICT session-id [LIMIT n]", desc: "Top-N predicted next requests, scored by accumulated prefix similarity." },
+          { cmd: "PREFETCH.PREDICT.HIT session-id text", desc: "Feedback — predictor's suggestion was actually used. Updates per-session EMA." },
+          { cmd: "PREFETCH.PREDICT.HORIZON session-id n", desc: "Per-session lookback window (default 8)." },
+          { cmd: "PREFETCH.PREDICT.STATUS session-id", desc: "history_size / horizon / hit_rate_ema / total predictions/hits." },
+          { cmd: "PREFETCH.PREDICT.SESSIONS", desc: "Every session id known to the predictor." },
+          { cmd: "PREFETCH.PREDICT.RESET session-id|ALL", desc: "Drop session history." },
+          { cmd: "PREFETCH.PREDICT.STATS", desc: "Sessions / observes / predicts / hits." },
+        ],
+        examplesLang: "bash",
+        examples: `# Record every user request the moment it arrives
+PREFETCH.PREDICT.OBSERVE user-42 "what is the pricing model"
+PREFETCH.PREDICT.OBSERVE user-42 "how does billing work"
+PREFETCH.PREDICT.OBSERVE user-42 "what is the pricing model again"
+
+# Next time we see a similar request, ask for predictions
+PREFETCH.PREDICT.PREDICT user-42 LIMIT 3
+# → [
+#   { text: "how does billing work", score: 0.94 },     # matched prior prefix
+#   { text: "what about discounts",   score: 0.31 },
+# ]
+# → Orchestrator pre-warms embeddings/RAG chunks for "how does billing work"
+
+# When the prediction lands, record the win to track quality
+PREFETCH.PREDICT.HIT user-42 "how does billing work"
+
+PREFETCH.PREDICT.STATUS user-42
+# history_size=3  horizon=8  hit_rate_ema=0.71
+# total_predictions=1  total_hits=1`,
+      },
+      {
+        id: "jury",
+        title: "Multi-LLM jury voting (JURY.*)",
+        blurb: (
+          <>
+            The model is confident, but it's wrong sometimes — how do
+            you gate the risky ones?{" "}
+            <code>JURY.*</code> aggregates votes from multiple LLM
+            judges into a single verdict. Three patterns collapse onto
+            the same operations: <b>self-consistency</b> (same model N
+            times → majority), <b>LLM-as-judge</b> (stronger model
+            scores weaker candidates), <b>multi-model ensemble</b>{" "}
+            (GPT-4o + Claude + Gemini vote). All three boil down to{" "}
+            <code>SUBMIT</code> + <code>VOTE</code> +{" "}
+            <code>VERDICT</code> with weighted majority and an{" "}
+            <i>agreement</i> score so the orchestrator can route
+            low-agreement questions to a human.
+          </>
+        ),
+        commands: [
+          { cmd: "JURY.SUBMIT question-id candidate-id text", desc: "Register a candidate answer for the jury to score." },
+          { cmd: "JURY.VOTE question-id judge-id candidate-id [CONFIDENCE f]", desc: "Each judge votes for one candidate. Re-vote replaces prior. Confidence in [0,1]." },
+          { cmd: "JURY.VERDICT question-id", desc: "→ winner / winner_text / winner_score / agreement / tie_broken." },
+          { cmd: "JURY.STATUS question-id", desc: "Per-candidate score + pick count, sorted by score desc." },
+          { cmd: "JURY.LIST", desc: "Every question id known to the jury, sorted." },
+          { cmd: "JURY.RESET question-id|ALL", desc: "Drop a question." },
+          { cmd: "JURY.STATS", desc: "Questions / submits / votes / verdicts." },
+        ],
+        examplesLang: "bash",
+        examples: `# Self-consistency: same model run 5×, vote on the majority
+JURY.SUBMIT q-pi "A" "3.14159"
+JURY.SUBMIT q-pi "B" "3.14157"
+JURY.VOTE q-pi run-1 A
+JURY.VOTE q-pi run-2 A
+JURY.VOTE q-pi run-3 A
+JURY.VOTE q-pi run-4 B
+JURY.VOTE q-pi run-5 A
+JURY.VERDICT q-pi
+# winner=A  winner_score=4  agreement=0.80
+# → "4 of 5 runs picked A; high agreement, ship the answer"
+
+# Multi-model ensemble: GPT-4o + Claude + Gemini vote on the same Q
+JURY.SUBMIT q-summary cand-a "<answer from prompt v1>"
+JURY.SUBMIT q-summary cand-b "<answer from prompt v2>"
+JURY.VOTE q-summary gpt-4o    cand-b CONFIDENCE 0.85
+JURY.VOTE q-summary claude    cand-b CONFIDENCE 0.90
+JURY.VOTE q-summary gemini    cand-a CONFIDENCE 0.60
+JURY.VERDICT q-summary
+# winner=cand-b  agreement=0.67   tie_broken=0
+# → "2/3 judges with high confidence chose cand-b; ship"
+
+# Low agreement → escalate to a human
+JURY.VERDICT q-controversial
+# agreement=0.34  → orchestrator routes to human review queue`,
+      },
     ],
   },
 

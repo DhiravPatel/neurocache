@@ -478,6 +478,22 @@ type Engine struct {
 	// training pipelines.
 	RetrievalLearn *llmstack.RetrievalLearner
 
+	// Speculative decoding cache + acceptance tracker. Caches the
+	// small "draft" model's tokens by prefix hash AND learns whether
+	// speculative decoding is worth running for each (model,
+	// prefix-class) so the orchestrator can DECIDE.
+	SpecDec *llmstack.SpecDecCache
+
+	// Per-session next-request predictor for cache warming. OBSERVE
+	// records requests; PREDICT returns top-N likely next requests
+	// drawn from prior transitions with similar prefixes.
+	PrefetchPredict *llmstack.PrefetchPredictor
+
+	// Multi-LLM jury voting + verdict aggregation. Self-consistency
+	// runs, LLM-as-judge ensembles, and multi-provider voting all
+	// collapse onto the same SUBMIT / VOTE / VERDICT operations.
+	Jury *llmstack.Jury
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -679,6 +695,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.ToolDrift = llmstack.NewToolDriftWatcher()
 	e.AnswerCanary = llmstack.NewAnswerCanary()
 	e.RetrievalLearn = llmstack.NewRetrievalLearner()
+	e.SpecDec = llmstack.NewSpecDecCache()
+	e.PrefetchPredict = llmstack.NewPrefetchPredictor()
+	e.Jury = llmstack.NewJury()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
