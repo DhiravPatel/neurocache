@@ -263,6 +263,19 @@ var writeCommands = map[string]bool{
 
 	// EMBED.POOL.* is entirely pure compute — never in the writeset.
 
+	// STREAM.PARSE state is per-active-stream, in-flight runtime
+	// only — never in the writeset.
+
+	// LIMITER.LLM config is durable (operator-set caps); RESERVE/
+	// RECORD are sliding-window bucket updates that rebuild from
+	// traffic post-restart, so don't replay them.
+	"LIMITER.LLM.CONFIG": true, "LIMITER.LLM.RESET": true,
+
+	// CACHE.LAYERS is durable — apps pay real LLM cost to populate
+	// it, can't crater hit-rate on restart.
+	"CACHE.LAYERS.SET": true, "CACHE.LAYERS.FORGET": true,
+	"CACHE.LAYERS.PURGE": true, "CACHE.LAYERS.SET_THRESHOLD": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

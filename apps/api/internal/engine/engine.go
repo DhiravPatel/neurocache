@@ -335,6 +335,23 @@ type Engine struct {
 	// state — single round-trip replacing client-side glue.
 	EmbedPool *llmstack.EmbedPooler
 
+	// Incremental JSON streaming parser. Apps PUSH chunks as LLM
+	// tokens arrive; PUSH returns any newly-completed top-level
+	// fields so UIs can render before the response finishes.
+	// State machine, single-pass, no full-buffer.
+	StreamParser *llmstack.StreamParser
+
+	// Token-aware sliding-window rate limiter for LLM API calls.
+	// LLM providers limit on TOKENS per minute (not requests); a
+	// single 32k-token call blows a request-count limiter. RESERVE
+	// up front + RECORD actual handles the estimate-vs-actual gap.
+	LLMLimiter *llmstack.LLMLimiter
+
+	// 3-layer cache (exact → semantic → negative) that resolves
+	// to the first hit in ONE round-trip. Replaces apps' typical
+	// 3-sequential-GET RAG hot-path pattern.
+	CacheLayers *llmstack.CacheLayers
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -512,6 +529,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Matryoshka = llmstack.NewMatryoshkaMatrix()
 	e.VecQuant = llmstack.NewVecQuantMatrix()
 	e.EmbedPool = llmstack.NewEmbedPooler()
+	e.StreamParser = llmstack.NewStreamParser()
+	e.LLMLimiter = llmstack.NewLLMLimiter()
+	e.CacheLayers = llmstack.NewCacheLayers()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

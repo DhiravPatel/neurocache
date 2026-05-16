@@ -754,6 +754,31 @@ var registry = map[string]commandInfo{
 	"EMBED.POOL.WEIGHTED": {[]string{CatAI, CatRead, CatFast}},
 	"EMBED.POOL.NORM_SUM": {[]string{CatAI, CatRead, CatFast}},
 	"EMBED.POOL.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// STREAM.PARSE.* — incremental JSON streaming parser.
+	"STREAM.PARSE.OPEN":     {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.PARSE.PUSH":     {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.PARSE.COMPLETE": {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.PARSE.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.PARSE.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.PARSE.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// LIMITER.LLM.* — token-aware rate limiter.
+	"LIMITER.LLM.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"LIMITER.LLM.RESERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"LIMITER.LLM.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"LIMITER.LLM.USAGE":   {[]string{CatAI, CatRead, CatFast}},
+	"LIMITER.LLM.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"LIMITER.LLM.ALL":     {[]string{CatAI, CatRead, CatFast}},
+	"LIMITER.LLM.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CACHE.LAYERS.* — 3-layer cache lookup.
+	"CACHE.LAYERS.SET":           {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.LAYERS.LOOKUP":        {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.LAYERS.FORGET":        {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.LAYERS.PURGE":         {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.LAYERS.SET_THRESHOLD": {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.LAYERS.STATS":         {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
