@@ -950,6 +950,37 @@ var registry = map[string]commandInfo{
 	"RATELIMIT.SEM.LIST":   {[]string{CatAI, CatRead, CatFast}},
 	"RATELIMIT.SEM.RECENT": {[]string{CatAI, CatRead, CatFast}},
 	"RATELIMIT.SEM.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// TOOLDRIFT.* — tool/API response schema drift watcher.
+	"TOOLDRIFT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.SAMPLE":   {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.RECENT":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// ANSWER.CANARY.* — prompt/model canary A/B with z-test decision.
+	"ANSWER.CANARY.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.ROUTE":  {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// RETRIEVAL.LEARN.* — closed-loop retrieval re-rank.
+	"RETRIEVAL.LEARN.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.RERANK": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.WEIGHT": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.TOP":    {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.BOTTOM": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.ALPHA":  {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

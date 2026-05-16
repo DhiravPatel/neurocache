@@ -3696,6 +3696,166 @@ RATELIMIT.SEM.CHECK free-tier "translate French to English"
 # Dry-run check before committing the call
 RATELIMIT.SEM.PEEK free-tier "would this paraphrase be blocked?"`,
       },
+      {
+        id: "tooldrift",
+        title: "Tool output drift watcher (TOOLDRIFT.*)",
+        blurb: (
+          <>
+            Agents call dozens of tools — search, calc, weather,
+            internal microservices — and <i>any one of them</i> can
+            silently change response shape (renamed key, new error
+            envelope, a number that became a string). The agent breaks
+            downstream in a way that's brutal to debug because nothing
+            raised an exception, it just produced bad answers.{" "}
+            <code>TOOLDRIFT.*</code> extracts a shape signature per
+            payload (JSON key-path:type pairs, or character-trigram
+            fingerprint for plain text), and flips{" "}
+            <code>stable → warning → drift</code> as live samples
+            diverge from baseline.
+          </>
+        ),
+        commands: [
+          { cmd: "TOOLDRIFT.BASELINE tool-id payload [payload...]", desc: "Seed the baseline from K known-good samples." },
+          { cmd: "TOOLDRIFT.SAMPLE tool-id payload", desc: "Record one observation + score it against baseline." },
+          { cmd: "TOOLDRIFT.CHECK tool-id payload", desc: "Score without recording → drift_score / verdict / signature_size / baseline_size." },
+          { cmd: "TOOLDRIFT.STATUS tool-id", desc: "Last verdict / last score / baseline size / recent buffer size." },
+          { cmd: "TOOLDRIFT.RECENT tool-id [LIMIT n]", desc: "Recent samples with verdict per row." },
+          { cmd: "TOOLDRIFT.LIST", desc: "Every tool id known to the watcher." },
+          { cmd: "TOOLDRIFT.RESET tool-id", desc: "Drop baseline + samples for one tool." },
+          { cmd: "TOOLDRIFT.STATS", desc: "Tools / samples / checks / drifts detected." },
+        ],
+        examplesLang: "bash",
+        examples: `# Seed baseline from known-good responses
+TOOLDRIFT.BASELINE weather-api \\
+  '{"temp":72,"unit":"F","city":"SF"}' \\
+  '{"temp":68,"unit":"F","city":"NYC"}'
+
+# Every live call also samples through TOOLDRIFT
+TOOLDRIFT.SAMPLE weather-api '{"temp":75,"unit":"F","city":"LA"}'
+# drift_score=0.04  verdict=stable
+
+# Day later — provider renamed the temp key (silent break)
+TOOLDRIFT.SAMPLE weather-api '{"temperature":75,"unit":"F","city":"LA"}'
+# drift_score=0.38  verdict=warning   # rising drift
+
+# A few hours later — they also added a forecast object
+TOOLDRIFT.SAMPLE weather-api \\
+  '{"temperature":75,"unit":"F","city":"LA","forecast":{"hi":80,"lo":62}}'
+# drift_score=0.62  verdict=drift     # page the team
+
+# Orchestrator can react:
+TOOLDRIFT.STATUS weather-api
+# last_verdict=drift  last_score=0.62  baseline_size=2
+# → orchestrator quarantines this tool until baseline is re-seeded`,
+      },
+      {
+        id: "answer-canary",
+        title: "Prompt/model canary A/B (ANSWER.CANARY.*)",
+        blurb: (
+          <>
+            Teams that ship a new prompt or upgrade GPT-4 → GPT-4o
+            usually do one of two bad things: (a) flip the whole fleet
+            and hope, or (b) run a manual side-by-side on a few test
+            queries and ship. Both fail in production because LLM
+            quality is high-variance — the only safe ship is to route a{" "}
+            <i>small fraction</i> of live traffic through canary, score
+            both, let statistics decide.{" "}
+            <code>ANSWER.CANARY.*</code> does exactly that with
+            deterministic per-request routing, Welford-accumulated
+            quality, and a two-sample z-test for the{" "}
+            <code>DECIDE</code> recommendation.
+          </>
+        ),
+        commands: [
+          { cmd: "ANSWER.CANARY.CONFIG exp-id [BASELINE name] [CANARY name] [RATE f]", desc: "Define experiment. RATE is canary fraction in [0,1]." },
+          { cmd: "ANSWER.CANARY.ROUTE exp-id request-id", desc: "Deterministic hash → 'baseline' or 'canary'. Same id always lands on same variant." },
+          { cmd: "ANSWER.CANARY.RECORD exp-id variant quality [LATENCY_MS n] [REQUEST_ID id]", desc: "Log outcome. quality ∈ [0,1]." },
+          { cmd: "ANSWER.CANARY.REPORT exp-id", desc: "Per-variant n / mean / stddev / latency + quality lift %." },
+          { cmd: "ANSWER.CANARY.DECIDE exp-id", desc: "ship | rollback | hold | insufficient_data, with z-score + reason." },
+          { cmd: "ANSWER.CANARY.RESET exp-id", desc: "Clear results, keep config." },
+          { cmd: "ANSWER.CANARY.LIST", desc: "Active experiments." },
+          { cmd: "ANSWER.CANARY.STATS", desc: "Experiments / total routes / total records." },
+        ],
+        examplesLang: "bash",
+        examples: `# Set up the experiment: 10% of traffic to the new prompt
+ANSWER.CANARY.CONFIG summarizer-v3 \\
+  BASELINE prompt-v2 \\
+  CANARY   prompt-v3 \\
+  RATE     0.10
+
+# Every incoming request asks ROUTE first
+ANSWER.CANARY.ROUTE summarizer-v3 req-9842
+# → baseline   # this user lands on v2
+ANSWER.CANARY.ROUTE summarizer-v3 req-9842
+# → baseline   # same id always same variant (sticky for retries)
+
+# After the answer was scored by your eval pipeline
+ANSWER.CANARY.RECORD summarizer-v3 baseline 0.72 LATENCY_MS 850
+ANSWER.CANARY.RECORD summarizer-v3 canary   0.83 LATENCY_MS 920
+# ... thousands more ...
+
+# Aggregated view
+ANSWER.CANARY.REPORT summarizer-v3
+# baseline: n=950  mean=0.74  stddev=0.12  latency=820ms
+# canary:   n=104  mean=0.82  stddev=0.10  latency=910ms
+# quality_lift=+10.8%   latency_lift_ms=+90
+
+# Recommended action — two-sample z-test
+ANSWER.CANARY.DECIDE summarizer-v3
+# decision=ship  z_score=2.74  quality_lift=0.108
+# reason="canary significantly better (z >= 2.0)"`,
+      },
+      {
+        id: "retrieval-learn",
+        title: "Closed-loop retrieval re-rank (RETRIEVAL.LEARN.*)",
+        blurb: (
+          <>
+            Standard RAG is open-loop: retrieve top-K by embedding
+            cosine, throw at the LLM, never learn from what actually
+            worked. Production RAG teams build this feedback layer by
+            hand — a Postgres table of <code>(chunk_id, cited_count,
+            win_count)</code> glued to a re-rank step.{" "}
+            <code>RETRIEVAL.LEARN.*</code> ships it: <code>RECORD</code>{" "}
+            updates a per-chunk EMA of "was this chunk cited";{" "}
+            <code>RERANK</code> applies the learned boost (range{" "}
+            <code>[0.5, 2.0]</code>) to incoming retrieval scores so
+            the RAG index gets smarter without offline training.
+          </>
+        ),
+        commands: [
+          { cmd: "RETRIEVAL.LEARN.RECORD chunk-id cited|not_cited [SCORE q]", desc: "Update EMA. quality ∈ [0,1] overrides the cited signal if supplied." },
+          { cmd: "RETRIEVAL.LEARN.RERANK chunk-id score [chunk-id score ...]", desc: "Apply learned weight to a list of (chunk, score) pairs. Returns sorted high-to-low by reranked score." },
+          { cmd: "RETRIEVAL.LEARN.WEIGHT chunk-id", desc: "Current learned boost for one chunk. Unseen = 1.0." },
+          { cmd: "RETRIEVAL.LEARN.STATUS chunk-id", desc: "cited_rate / weight / samples / cited_count." },
+          { cmd: "RETRIEVAL.LEARN.TOP [LIMIT n]", desc: "Top-N most helpful chunks." },
+          { cmd: "RETRIEVAL.LEARN.BOTTOM [LIMIT n]", desc: "Worst-N chunks — pruning candidates for the RAG index." },
+          { cmd: "RETRIEVAL.LEARN.ALPHA f", desc: "Tune EMA factor (default 0.10; smaller = slower learning)." },
+          { cmd: "RETRIEVAL.LEARN.RESET chunk-id|ALL", desc: "Drop learned weight." },
+          { cmd: "RETRIEVAL.LEARN.STATS", desc: "Chunks / records / reranks / mean weight." },
+        ],
+        examplesLang: "bash",
+        examples: `# After each answer was scored, tell the learner which chunks were cited
+RETRIEVAL.LEARN.RECORD chunk-product-api cited
+RETRIEVAL.LEARN.RECORD chunk-product-api cited
+RETRIEVAL.LEARN.RECORD chunk-marketing-blurb not_cited
+
+# Quality-weighted record (instead of binary cited)
+RETRIEVAL.LEARN.RECORD chunk-tutorial cited SCORE 0.9
+
+# Next retrieval — embedding ranks marketing-blurb first by cosine
+RETRIEVAL.LEARN.RERANK \\
+  chunk-marketing-blurb 0.90 \\
+  chunk-product-api     0.82 \\
+  chunk-tutorial        0.75
+# → reranked:
+# chunk-tutorial        boost=2.00  reranked=1.50
+# chunk-product-api     boost=2.00  reranked=1.64    # learned winner
+# chunk-marketing-blurb boost=0.50  reranked=0.45    # demoted
+
+# Find dead weight to prune from the RAG index
+RETRIEVAL.LEARN.BOTTOM LIMIT 50
+# → chunks that retrieve well but never get cited`,
+      },
     ],
   },
 

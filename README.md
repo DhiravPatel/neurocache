@@ -877,6 +877,49 @@ RATELIMIT.SEM.CHECK free-tier "summarize the doc briefly"
 # allow=0  reason=rate_limit_exceeded  similar_count=3  top_cosine=0.91
 RATELIMIT.SEM.CHECK free-tier "translate French to English"
 # allow=1  similar_count=0   # different intent → bypasses bucket
+
+# Tool output drift watcher — agents call dozens of tools; any one
+# can silently change response shape (renamed key, new error
+# envelope, number→string). TOOLDRIFT extracts a shape signature
+# per payload and flips stable → warning → drift.
+TOOLDRIFT.BASELINE weather-api \
+  '{"temp":72,"unit":"F","city":"SF"}' \
+  '{"temp":68,"unit":"F","city":"NYC"}'
+TOOLDRIFT.SAMPLE weather-api '{"temp":75,"unit":"F","city":"LA"}'
+# verdict=stable
+# Provider silently renames "temp" → "temperature":
+TOOLDRIFT.SAMPLE weather-api '{"temperature":75,"unit":"F"}'
+# verdict=warning  drift_score=0.38
+TOOLDRIFT.SAMPLE weather-api '{"temperature":75,"unit":"F","forecast":{"hi":80}}'
+# verdict=drift    drift_score=0.62   # page the team / quarantine tool
+
+# Prompt/model canary A/B — deterministic ROUTE per request_id,
+# Welford-accumulated quality, two-sample z-test DECIDE.
+# Replaces the per-team "ship the new prompt and pray" workflow.
+ANSWER.CANARY.CONFIG summarizer-v3 BASELINE prompt-v2 CANARY prompt-v3 RATE 0.10
+ANSWER.CANARY.ROUTE summarizer-v3 req-9842   # → baseline  (sticky)
+ANSWER.CANARY.RECORD summarizer-v3 baseline 0.72 LATENCY_MS 850
+ANSWER.CANARY.RECORD summarizer-v3 canary   0.83 LATENCY_MS 920
+# ... thousands of samples later ...
+ANSWER.CANARY.DECIDE summarizer-v3
+# decision=ship  z_score=2.74  quality_lift=0.108
+# reason="canary significantly better (z >= 2.0)"
+
+# Closed-loop retrieval re-rank — RAG normally never learns from
+# what worked. RETRIEVAL.LEARN records which chunks were cited and
+# applies a learned boost (range [0.5, 2.0]) on next retrieval.
+RETRIEVAL.LEARN.RECORD chunk-product-api cited
+RETRIEVAL.LEARN.RECORD chunk-product-api cited
+RETRIEVAL.LEARN.RECORD chunk-marketing-blurb not_cited
+# Next retrieval: embedding ranks marketing-blurb first by cosine,
+# but learner promotes the product-api chunk that's been cited
+RETRIEVAL.LEARN.RERANK \
+  chunk-marketing-blurb 0.90 \
+  chunk-product-api     0.82
+# → chunk-product-api boost=2.00 reranked=1.64    (learned winner)
+# → chunk-marketing-blurb boost=0.50 reranked=0.45 (demoted)
+# Find dead weight to prune from the RAG index
+RETRIEVAL.LEARN.BOTTOM LIMIT 50
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

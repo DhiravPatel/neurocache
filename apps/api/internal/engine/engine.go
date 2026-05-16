@@ -460,6 +460,24 @@ type Engine struct {
 	// embedding bursts inside a per-tenant window.
 	SemRate *llmstack.SemRateLimiter
 
+	// Tool-output drift watcher. Agents call dozens of tools; any one
+	// can silently change response shape (renamed key, new error
+	// envelope, number→string). TOOLDRIFT.* extracts a shape signature
+	// per payload and flips warning → drift when live samples diverge
+	// from baseline.
+	ToolDrift *llmstack.ToolDriftWatcher
+
+	// Canary A/B for prompts/models. Deterministic ROUTE on request
+	// hash, Welford-accumulated quality, two-sample z-test DECIDE.
+	// Replaces the per-team "side-by-side spreadsheet" everyone builds.
+	AnswerCanary *llmstack.AnswerCanary
+
+	// Closed-loop retrieval re-rank. Records whether each retrieved
+	// chunk was actually cited; RERANK applies the learned boost to
+	// new retrievals so the RAG index gets smarter without offline
+	// training pipelines.
+	RetrievalLearn *llmstack.RetrievalLearner
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -658,6 +676,9 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.ConvFork = llmstack.NewConvForkManager()
 	e.SemDiff = llmstack.NewSemDiffStore()
 	e.SemRate = llmstack.NewSemRateLimiter()
+	e.ToolDrift = llmstack.NewToolDriftWatcher()
+	e.AnswerCanary = llmstack.NewAnswerCanary()
+	e.RetrievalLearn = llmstack.NewRetrievalLearner()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

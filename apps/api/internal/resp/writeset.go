@@ -362,6 +362,24 @@ var writeCommands = map[string]bool{
 	// per-tenant config is what we have to persist.
 	"RATELIMIT.SEM.CONFIG": true, "RATELIMIT.SEM.RESET": true,
 
+	// TOOLDRIFT baselines must survive restart — they're the golden
+	// reference for whether tool output has drifted. SAMPLE is also
+	// durable so a 24h+ drift signal can survive a restart. CHECK is
+	// pure read.
+	"TOOLDRIFT.BASELINE": true, "TOOLDRIFT.SAMPLE": true,
+	"TOOLDRIFT.RESET": true,
+
+	// ANSWER.CANARY config + recorded outcomes are durable — the whole
+	// point is statistical decisions over many samples. ROUTE is a
+	// deterministic read; REPORT/DECIDE are aggregations.
+	"ANSWER.CANARY.CONFIG": true, "ANSWER.CANARY.RECORD": true,
+	"ANSWER.CANARY.RESET": true,
+
+	// RETRIEVAL.LEARN per-chunk EMA + chunks-known-to-the-learner
+	// must persist. WEIGHT/RERANK/STATUS/TOP/BOTTOM/STATS are reads.
+	"RETRIEVAL.LEARN.RECORD": true, "RETRIEVAL.LEARN.RESET": true,
+	"RETRIEVAL.LEARN.ALPHA": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
