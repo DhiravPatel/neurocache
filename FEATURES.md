@@ -1256,3 +1256,180 @@ GRAPH.LINK is manual; GRAPH.EXTRACT auto-extracts (subject, relation, object) fr
 - Every mutating command is in `internal/resp/writeset.go` so AOF replays them on restart. Reads (READ/CHECK/SCORE/STATUS/SIMULATE/COMPARE/STATS/LIST/PERMITS/ANSWER/WHY/IMPACT/REPORT/HAPPENS_BEFORE/CLOCK/VARIANTS/DIFF/GET/HEALTH/RANK/EXPIRING/SOURCES/CLAIMS/AGENTS/PENDING/VERSIONS) are excluded.
 - `c.eng.RecordWrite()` propagates them to replicas via the standard path.
 - ACL: every Phase 14 command lives in `@ai` + `@read`/`@write` + `@fast` (HANDOFF.JOIN is `@blocking`).
+
+---
+
+## Phase 15 — the categories structurally absent from earlier phases
+
+Four load-bearing primitives (cryptographic provenance, agent resource market, autonomous closed-loop rules, self-tuning) plus nine rapid-fire ones (federated learning, deliberation, approval gates, traffic replay, watermark embed, drift invalidation, carbon accounting, mode-collapse, unified time-travel). Together these close the categories that earlier phases didn't address at all: cryptographic verifiability for regulated buyers, dynamic resource markets for multi-agent systems, autonomous reaction to detected signals, self-optimisation of internal knobs, and a handful of measurement / governance primitives a serious buyer expects next to the cost ledger.
+
+State lives in `internal/llmstack/`; RESP handlers in `internal/resp/commands_aiops_v35..v38.go`; AOF write-set in `internal/resp/writeset.go`; ACL categories in `internal/acl/categories.go`. All under the `@ai` category.
+
+### ATTEST.* — tamper-evident, offline-verifiable audit log
+
+The load-bearing primitive for regulated buyers. PROV / LINEAGE / AUDIT all assume the reader trusts our in-memory state. ATTEST removes the trust requirement: hash-chained leaves, Merkle tree per log, ed25519 sealing, offline-verifiable receipts. An auditor takes the receipt + the publicly-posted root and re-verifies *without* our engine.
+
+| Command | What it does | Where |
+|---|---|---|
+| `ATTEST.LOG log-id json-payload` | Append canonicalised entry; returns seq + leaf_hash + prev_hash. | `llmstack/attest.go` + `resp/commands_aiops_v35.go` |
+| `ATTEST.ROOT log-id` | Merkle root + head hash. Publish externally for tamper-evidence. | same |
+| `ATTEST.PROVE log-id seq` | Inclusion proof: canon + leaf-hash + audit path + indices + root. | same |
+| `ATTEST.VERIFY root leaf-canon path-csv indices-csv` | **Stateless**. Reproducible audit; runs without the engine. | same |
+| `ATTEST.RECEIPT log-id seq [PROV ans-id]` | Bundle inclusion proof + optional provenance lineage. | same |
+| `ATTEST.SEAL log-id PUBKEY hex` / `ATTEST.SIGN log-id seq PRIVKEY hex` | ed25519 sign one leaf with operator key. | same |
+| `ATTEST.VERIFY_SIG log-id seq` | Check signature against sealed public key. | same |
+| `ATTEST.SCAN` / `HEAD` / `FORGET` / `LIST` / `STATS` | | same |
+
+### MARKET.* — agent resource auction
+
+FAIRQUEUE is static priority; RATELIMIT rejects. Neither handles the 2026 problem: many autonomous agents competing for one rate-limited resource where importance is dynamic and only the agents know it. The right primitive is a market, not a queue. Agents bid → engine clears (uniform or Vickrey second-price) → winners get a lease → losers see the clearing price and self-throttle.
+
+| Command | What it does | Where |
+|---|---|---|
+| `MARKET.CREATE id CAPACITY n [CLEARING uniform\|second_price] [WINDOW ms] [MAX_BIDS_PER_AGENT n]` | Open auction. | `llmstack/market.go` + `resp/commands_aiops_v35.go` |
+| `MARKET.BID market agent PRICE p QTY q [DEADLINE ms]` | Post a bid (carries forward if unfilled). | same |
+| `MARKET.CLEAR market` | Run auction (within-WINDOW memoised). | same |
+| `MARKET.LEASE market agent` | Issue a one-shot token to a winner. | same |
+| `MARKET.RELEASE market token` | Free the lease. | same |
+| `MARKET.PRICE market` | Live clearing price — agents poll this to self-throttle. | same |
+| `MARKET.STARVED market [MIN_LOSSES n]` | Agents losing repeatedly — fairness alarm. | same |
+| `MARKET.STATUS` / `FORGET` / `LIST` / `STATS` | | same |
+
+### AUTO.* — autonomous closed-loop rules
+
+Every detector primitive (VECSPACE.HEALTH, TRUST.SCORE, FORECAST, etc.) requires the app to poll and react. AUTO inverts the relationship: register a rule (WHEN condition DO action) and the engine evaluates + fires. Edge-triggered with cooldown; the engine doesn't self-exec (action is a string the dispatching app honours), keeping the security model simple.
+
+| Command | What it does | Where |
+|---|---|---|
+| `AUTO.RULE id WHEN "cond" DO "action" [COOLDOWN ms]` | Register rule. Conditions over vecspace / trust / risk / market / cfcache. | `llmstack/auto.go` + `resp/commands_aiops_v35.go` |
+| `AUTO.EVALUATE [LIMIT n]` | Evaluate every rule, return new fires. | same |
+| `AUTO.DRYRUN id` | What WOULD fire right now, without firing. | same |
+| `AUTO.FIRES [RULE r] [LIMIT n]` | Audit trail of every autonomous action. | same |
+| `AUTO.UNRULE` / `PAUSE` / `RESUME` / `LIST` / `GET` / `STATS` | | same |
+
+### TUNE.* — Bayesian/bandit self-tuning
+
+NeuroCache has dozens of magic numbers (SEMANTIC_THRESHOLD, eviction weights, every DELTA/THRESHOLD). Operators tune them once at deploy and they rot. TUNE treats them as an optimization problem: knobs over discretised ranges, objective expression over metrics, Thompson-sampling bandit to pick candidates, APPLY returns the winner.
+
+| Command | What it does | Where |
+|---|---|---|
+| `TUNE.KNOB id knob RANGE low high [BUCKETS n]` | Discretise a knob into buckets. | `llmstack/tune.go` + `resp/commands_aiops_v36.go` |
+| `TUNE.OBJECTIVE id MAXIMIZE\|MINIMIZE "expr"` | Declare what to optimise (e.g. `hit_rate - 0.3*stale_rate`). | same |
+| `TUNE.SUGGEST id` | Next candidate value via Thompson sampling. | same |
+| `TUNE.OBSERVE id value METRIC k v ...` | Record the outcome; objective evaluated, Beta posteriors update. | same |
+| `TUNE.APPLY id` | Best value + projected lift + confidence (LOW/MEDIUM/HIGH). | same |
+| `TUNE.STATUS` / `HISTORY` / `FORGET` / `LIST` / `STATS` | | same |
+
+### FED.* — federated meta-learning across a fleet
+
+CRDT-for-learned-signals. Nodes EXPORT their learned posteriors (TRUST Betas, BANDIT pulls); peers MERGE additively. Each node's trust scores improve from every node's traffic; raw user data never leaves origin. Privacy-preserving fleet brain.
+
+| Command | What it does | Where |
+|---|---|---|
+| `FED.NODE node-id` | Set this node's identity (one-time). | `llmstack/fed.go` + `resp/commands_aiops_v36.go` |
+| `FED.EXPORT [KIND k]` | Dump signals; pass to a peer's MERGE. | same |
+| `FED.MERGE peer-id kind1 key1 alpha1 beta1 n1 ...` | Apply peer's signals additively. | same |
+| `FED.SIGNAL kind key alpha beta [N n]` | Manual signal (typically used by primitives feeding FED). | same |
+| `FED.GET` / `PEERS` / `FORGET` / `STATS` | | same |
+
+### DEBATE.* — multi-agent decision consensus
+
+Proposal → critique rounds → vote → resolved with recorded dissent. The "get 3 agents to agree on a plan, and log who disagreed" primitive every framework fakes with prompt glue. Each revision tracks its own votes; resolve picks approve vs reject by quorum.
+
+| Command | What it does | Where |
+|---|---|---|
+| `DEBATE.START id proposer "proposal"` | Open a debate. | `llmstack/debate.go` + `resp/commands_aiops_v36.go` |
+| `DEBATE.CRITIQUE id agent "text"` | Append a critique. | same |
+| `DEBATE.REVISE id proposer "proposal"` | Replace proposal (proposer-only), bump revision, clear votes. | same |
+| `DEBATE.VOTE id agent approve\|reject [REASON r]` | Per-revision vote (replaces prior). | same |
+| `DEBATE.RESOLVE id [QUORUM n]` | Close; returns approved + dissent list. | same |
+| `DEBATE.GET` / `LIST` / `FORGET` / `STATS` | | same |
+
+### QUORUM.* — N-of-M agent approval gate
+
+A commit gate for side-effecting autonomous actions. "No single agent can wire $10k; needs 2-of-3 sign-off." Distinct from DEBATE (which is deliberation): QUORUM gates *commitment*. Any reject from an allowed voter fails the gate; deadlines auto-expire.
+
+| Command | What it does | Where |
+|---|---|---|
+| `QUORUM.PROPOSE id payload QUORUM n VOTERS a,b,c [DEADLINE ms]` | Open gate. | `llmstack/quorum.go` + `resp/commands_aiops_v36.go` |
+| `QUORUM.APPROVE id agent [REASON r]` / `QUORUM.REJECT id agent [REASON r]` | Vote. | same |
+| `QUORUM.COMMIT id` | Confirm + lock; errors if quorum unmet. | same |
+| `QUORUM.STATUS` / `LIST` / `FORGET` / `STATS` | | same |
+
+### SANDBOX.* — replay-traffic dry-run for config diffs
+
+WHATIF projects one route; SANDBOX replays the whole system. RECORD captures real traffic into a rolling buffer; SET_ROUTE adds rerouting rules; REPLAY walks the buffer and reports aggregate impact (changed_count, cost_delta_total, quality_delta_avg, latency_delta_avg, per-route breakdown).
+
+| Command | What it does | Where |
+|---|---|---|
+| `SANDBOX.RECORD id req-id input route quality cost latency` | Append one real observation. | `llmstack/sandbox.go` + `resp/commands_aiops_v37.go` |
+| `SANDBOX.SET_ROUTE id substring new-route` | Add a rerouting rule (substring match, first-rule-wins). | same |
+| `SANDBOX.SET_PROJECTION id route q-scale c-scale lat-scale` | Per-route scaling factors. | same |
+| `SANDBOX.REPLAY id` | Aggregate impact + per-route breakdown. | same |
+| `SANDBOX.RULES` / `UNSET_ROUTE` / `SIZE` / `FORGET` / `LIST` / `STATS` | | same |
+
+### WMARK.EMBED / DETECT — statistical text watermark
+
+The existing `WATERMARK.*` is a pattern detector for known watermarks; WMARK is the *embedder*. Kirchenbauer-style green-list scheme implemented post-hoc via synonym substitution. EMBED rewrites text biased to "green" synonyms keyed by a secret; DETECT z-scores the green-rate against a 0.5 baseline. Deterministic for the same (text, key, strength).
+
+| Command | What it does | Where |
+|---|---|---|
+| `WMARK.EMBED text KEY k [STRENGTH 0..1]` | Inject watermark; returns marked text + replacement count. | `llmstack/wmarkembed.go` + `resp/commands_aiops_v37.go` |
+| `WMARK.DETECT text KEY k` | green_rate + z_score + watermarked (z>4) + confidence. | same |
+| `WMARK.KEY id PUBLISH key` | Register known key for retrospective detection. | same |
+| `WMARK.KEYS` / `DROPKEY` / `STATS` | | same |
+
+### RECALL.* — drift-driven proactive cache invalidation
+
+Invalidation without a trigger event. REGISTER answers with their model/prompt/embed versions + timestamp; MARK a drift window (model swap, knowledge cutoff change); SCAN returns answer IDs that fall in the window with a recall_confidence score that decays per the supplied half-life. The app decides whether to invalidate.
+
+| Command | What it does | Where |
+|---|---|---|
+| `RECALL.REGISTER answer-id model-version [PROMPT v] [EMBED v] [AT unix-ms]` | Ledger the answer. | `llmstack/recall.go` + `resp/commands_aiops_v37.go` |
+| `RECALL.MARK change-id REASON "text" FROM ms TO ms [HALF_LIFE_S s] [SCOPE model\|prompt\|embed]` | Declare drift event window. | same |
+| `RECALL.SCAN [MIN_CONFIDENCE f] [LIMIT n] [SCOPE s]` | Stale candidates ranked by confidence. | same |
+| `RECALL.FORGET` / `UNMARK` / `STATS` | | same |
+
+### CARBON.* — energy / CO₂ per inference
+
+Increasingly a hard procurement gate in EU enterprise RFPs. Per-model intensity (Wh / 1k tokens), per-region carbon (g CO₂ / kWh). CHARGE records per inference; AGGREGATE breaks down by tenant/feature/model; BUDGET enforces a per-tenant CO₂ ceiling parallel to COST.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CARBON.INTENSITY model wh-per-1k-tokens` | Per-model energy intensity. | `llmstack/carbon.go` + `resp/commands_aiops_v38.go` |
+| `CARBON.REGION region g-co2-per-kwh` | Per-region carbon intensity. | same |
+| `CARBON.CHARGE tenant feature model tokens [REGION r]` | One-call accounting. | same |
+| `CARBON.AGGREGATE [TENANT t] [FEATURE f] [MODEL m]` | Filtered totals. | same |
+| `CARBON.BUDGET tenant co2-grams` / `CARBON.OVER tenant` | Per-tenant ceiling + over check. | same |
+| `CARBON.RESET TENANT t\|MODEL m\|FEATURE f\|ALL` / `STATS` | | same |
+
+### ENTROPY.* — population-level mode-collapse detector
+
+STREAM.WATCH catches one stream degenerating; ENTROPY catches the case where every stream looks fine but across 10k users this week the agent's outputs have converged to a bland sameness. Shannon entropy + unique-fraction over a rolling per-population window. Verdict HEALTHY / DEGRADED / COLLAPSED / INSUFFICIENT.
+
+| Command | What it does | Where |
+|---|---|---|
+| `ENTROPY.OBSERVE pop output` | One observation into the rolling window. | `llmstack/entropy.go` + `resp/commands_aiops_v38.go` |
+| `ENTROPY.REPORT pop [TOP n]` | Shannon bits + unique fraction + top modes + verdict + reason. | same |
+| `ENTROPY.RESET` / `LIST` / `STATS` | | same |
+
+### TEMPORAL.* — unified point-in-time belief-state snapshot
+
+Per-store time-travel exists (KEY.AT, DOC.FRESH, MEMORY history); TEMPORAL composes them into one coherent snapshot — the postmortem primitive. SNAPSHOT opens a bundle; each store CONTRIBUTEs its payload; CLOSE seals it. AT-T returns the nearest closed snapshot ≤ T. DIFF compares two snapshots and reports which stores changed.
+
+| Command | What it does | Where |
+|---|---|---|
+| `TEMPORAL.SNAPSHOT id [META k v ...]` | Open empty snapshot bundle. | `llmstack/temporal.go` + `resp/commands_aiops_v38.go` |
+| `TEMPORAL.CONTRIBUTE id store payload` | Add one store's contribution. | same |
+| `TEMPORAL.CLOSE id` | Seal (read-only thereafter). | same |
+| `TEMPORAL.AT unix-ms` | Nearest closed snapshot ≤ T. | same |
+| `TEMPORAL.GET id` | Full bundle. | same |
+| `TEMPORAL.DIFF snap-a snap-b` | Which stores changed (only_in_a, only_in_b, changed, same). | same |
+| `TEMPORAL.LIST` / `FORGET` / `STATS` | | same |
+
+### Phase 15 persistence + replication
+
+- Every mutating command is in `internal/resp/writeset.go` so AOF replays them on restart. Pure reads (ROOT/PROVE/VERIFY/RECEIPT/VERIFY_SIG/SCAN/HEAD/EVALUATE/DRYRUN/FIRES/SUGGEST/STATUS/HISTORY/EXPORT/GET/PEERS/PRICE/STARVED/RULES/SIZE/REPLAY/DETECT/KEYS/AGGREGATE/OVER/REPORT/AT/DIFF/LIST/STATS) are excluded.
+- `c.eng.RecordWrite()` propagates to replicas via the standard path.
+- ACL: every Phase 15 command lives in `@ai` + `@read`/`@write` + `@fast` or `@slow` (ROOT/PROVE/RECEIPT/REPLAY are slow). ATTEST.FORGET is `@dangerous` since it destroys audit history.
+- ATTEST.VERIFY is intentionally STATELESS — auditors verify offline without consulting the engine. The supplied reference implementation is the source of truth; production auditors are encouraged to re-implement it in their own language for true independence.

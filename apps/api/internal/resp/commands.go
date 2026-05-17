@@ -753,6 +753,59 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"GRAPH.EXTRACT.STATS":
 		c.graphExtractCmd(strings.TrimPrefix(cmd, "GRAPH.EXTRACT."), args)
 
+	// ─── Phase 15 — cryptographic provenance, agent markets,
+	// autonomous rules, self-tuning, federated meta-learning,
+	// deliberation, approval gates, traffic replay, watermarking,
+	// drift invalidation, carbon, mode collapse, time-travel ─────
+	case "ATTEST.LOG", "ATTEST.ROOT", "ATTEST.PROVE", "ATTEST.VERIFY",
+		"ATTEST.RECEIPT", "ATTEST.SEAL", "ATTEST.SIGN", "ATTEST.VERIFY_SIG",
+		"ATTEST.SCAN", "ATTEST.HEAD", "ATTEST.FORGET", "ATTEST.LIST",
+		"ATTEST.STATS":
+		c.attestCmd(strings.TrimPrefix(cmd, "ATTEST."), args)
+	case "MARKET.CREATE", "MARKET.BID", "MARKET.CLEAR", "MARKET.LEASE",
+		"MARKET.RELEASE", "MARKET.PRICE", "MARKET.STARVED", "MARKET.STATUS",
+		"MARKET.FORGET", "MARKET.LIST", "MARKET.STATS":
+		c.marketCmd(strings.TrimPrefix(cmd, "MARKET."), args)
+	case "AUTO.RULE", "AUTO.UNRULE", "AUTO.EVALUATE", "AUTO.DRYRUN",
+		"AUTO.FIRES", "AUTO.PAUSE", "AUTO.RESUME", "AUTO.LIST",
+		"AUTO.GET", "AUTO.STATS":
+		c.autoCmd(strings.TrimPrefix(cmd, "AUTO."), args)
+	case "TUNE.KNOB", "TUNE.OBJECTIVE", "TUNE.SUGGEST", "TUNE.OBSERVE",
+		"TUNE.APPLY", "TUNE.STATUS", "TUNE.HISTORY", "TUNE.FORGET",
+		"TUNE.LIST", "TUNE.STATS":
+		c.tuneCmd(strings.TrimPrefix(cmd, "TUNE."), args)
+	case "FED.NODE", "FED.EXPORT", "FED.MERGE", "FED.SIGNAL",
+		"FED.GET", "FED.PEERS", "FED.FORGET", "FED.STATS":
+		c.fedCmd(strings.TrimPrefix(cmd, "FED."), args)
+	case "DEBATE.START", "DEBATE.CRITIQUE", "DEBATE.REVISE", "DEBATE.VOTE",
+		"DEBATE.RESOLVE", "DEBATE.GET", "DEBATE.LIST", "DEBATE.FORGET",
+		"DEBATE.STATS":
+		c.debateCmd(strings.TrimPrefix(cmd, "DEBATE."), args)
+	case "QUORUM.PROPOSE", "QUORUM.APPROVE", "QUORUM.REJECT", "QUORUM.COMMIT",
+		"QUORUM.STATUS", "QUORUM.LIST", "QUORUM.FORGET", "QUORUM.STATS":
+		c.quorumCmd(strings.TrimPrefix(cmd, "QUORUM."), args)
+	case "SANDBOX.RECORD", "SANDBOX.SET_ROUTE", "SANDBOX.UNSET_ROUTE",
+		"SANDBOX.SET_PROJECTION", "SANDBOX.RULES", "SANDBOX.REPLAY",
+		"SANDBOX.SIZE", "SANDBOX.FORGET", "SANDBOX.LIST", "SANDBOX.STATS":
+		c.sandboxCmd(strings.TrimPrefix(cmd, "SANDBOX."), args)
+	case "WMARK.EMBED", "WMARK.DETECT", "WMARK.KEY", "WMARK.KEYS",
+		"WMARK.DROPKEY", "WMARK.STATS":
+		c.wmarkEmbedCmd(strings.TrimPrefix(cmd, "WMARK."), args)
+	case "RECALL.REGISTER", "RECALL.MARK", "RECALL.SCAN", "RECALL.FORGET",
+		"RECALL.UNMARK", "RECALL.STATS":
+		c.recallCmd(strings.TrimPrefix(cmd, "RECALL."), args)
+	case "CARBON.INTENSITY", "CARBON.REGION", "CARBON.CHARGE",
+		"CARBON.AGGREGATE", "CARBON.BUDGET", "CARBON.OVER",
+		"CARBON.RESET", "CARBON.STATS":
+		c.carbonCmd(strings.TrimPrefix(cmd, "CARBON."), args)
+	case "ENTROPY.OBSERVE", "ENTROPY.REPORT", "ENTROPY.RESET",
+		"ENTROPY.LIST", "ENTROPY.STATS":
+		c.entropyCmd(strings.TrimPrefix(cmd, "ENTROPY."), args)
+	case "TEMPORAL.SNAPSHOT", "TEMPORAL.CONTRIBUTE", "TEMPORAL.CLOSE",
+		"TEMPORAL.AT", "TEMPORAL.GET", "TEMPORAL.DIFF", "TEMPORAL.LIST",
+		"TEMPORAL.FORGET", "TEMPORAL.STATS":
+		c.temporalCmd(strings.TrimPrefix(cmd, "TEMPORAL."), args)
+
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
 	case "AGENT.CALL", "AGENT.STORE", "AGENT.PROFILE", "AGENT.FORGET", "AGENT.STATS", "AGENT.PURGE":
