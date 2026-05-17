@@ -1552,6 +1552,38 @@ var registry = map[string]commandInfo{
 	"REPLAY.SHADOW.LIST":       {[]string{CatAI, CatRead, CatFast}},
 	"REPLAY.SHADOW.FORGET":     {[]string{CatAI, CatWrite, CatFast}},
 	"REPLAY.SHADOW.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// Phase 17 — netting, xtxn, aiwal.
+	"NETTING.OPEN":   {[]string{CatAI, CatWrite, CatFast}},
+	"NETTING.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"NETTING.CLOSE":  {[]string{CatAI, CatWrite, CatFast}},
+	"NETTING.APPLY":  {[]string{CatAI, CatWrite, CatSlow}},
+	"NETTING.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"NETTING.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"NETTING.FORGET": {[]string{CatAI, CatWrite, CatDangerous}},
+	"NETTING.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	"XTXN.BEGIN":        {[]string{CatAI, CatWrite, CatFast}},
+	"XTXN.STAGE":        {[]string{CatAI, CatWrite, CatFast}},
+	"XTXN.PREPARE":      {[]string{CatAI, CatWrite, CatFast}},
+	"XTXN.COMMIT":       {[]string{CatAI, CatWrite, CatFast}},
+	"XTXN.ABORT":        {[]string{CatAI, CatWrite, CatFast}},
+	"XTXN.STATUS":       {[]string{CatAI, CatRead, CatFast}},
+	"XTXN.LIST":         {[]string{CatAI, CatRead, CatFast}},
+	"XTXN.FORGET":       {[]string{CatAI, CatWrite, CatDangerous}},
+	"XTXN.PARTICIPANTS": {[]string{CatAI, CatRead, CatFast}},
+	"XTXN.STATS":        {[]string{CatAI, CatRead, CatFast}},
+
+	"AIWAL.APPEND":     {[]string{CatAI, CatWrite, CatFast}},
+	"AIWAL.FSYNC":      {[]string{CatAI, CatWrite, CatFast}},
+	"AIWAL.READ":       {[]string{CatAI, CatRead, CatFast}},
+	"AIWAL.CHECKPOINT": {[]string{CatAI, CatWrite, CatFast}},
+	"AIWAL.RECOVER":    {[]string{CatAI, CatRead, CatFast}},
+	"AIWAL.TRUNCATE":   {[]string{CatAI, CatWrite, CatDangerous}},
+	"AIWAL.STATUS":     {[]string{CatAI, CatRead, CatFast}},
+	"AIWAL.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"AIWAL.FORGET":     {[]string{CatAI, CatWrite, CatDangerous}},
+	"AIWAL.STATS":      {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

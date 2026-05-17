@@ -631,6 +631,14 @@ var writeCommands = map[string]bool{
 	"LICENSE.TAG": true, "LICENSE.UNTAG": true, "LICENSE.COMPAT_SET": true,
 	"REPLAY.SHADOW.ENABLE": true, "REPLAY.SHADOW.RECORD": true,
 	"REPLAY.SHADOW.DISABLE": true, "REPLAY.SHADOW.FORGET": true,
+
+	// Phase 17 — netting, xtxn, aiwal.
+	"NETTING.OPEN": true, "NETTING.ADD": true,
+	"NETTING.CLOSE": true, "NETTING.APPLY": true, "NETTING.FORGET": true,
+	"XTXN.BEGIN": true, "XTXN.STAGE": true, "XTXN.PREPARE": true,
+	"XTXN.COMMIT": true, "XTXN.ABORT": true, "XTXN.FORGET": true,
+	"AIWAL.APPEND": true, "AIWAL.FSYNC": true, "AIWAL.CHECKPOINT": true,
+	"AIWAL.TRUNCATE": true, "AIWAL.FORGET": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

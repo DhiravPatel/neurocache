@@ -1581,3 +1581,77 @@ SANDBOX replays historical traffic against a proposed diff; REPLAY.SHADOW runs *
 - `c.eng.RecordWrite()` propagates to replicas via the standard path.
 - ACL: every Phase 16 command lives in `@ai` + `@read`/`@write` + `@fast` (with `@slow` for SETTLE.RECONCILE / DR.RESTORE_INTO / DR.ASSERT). CHAOS.INJECT, DR.PROMOTE, PROOF.FORGET are `@dangerous`.
 - Settlement is the one place strict consistency matters: a single mutex per Settlement instance guarantees cross-account atomicity for every TXN. For higher throughput, a sharded design is straightforward — but invariant preservation is the load-bearing property and is correct as shipped.
+
+---
+
+## Phase 17 — three primitives only, addressing real gaps
+
+Three primitives, kept narrow. The selection criterion this round was strict: each must address a gap the prior phases left open *for the existing primitives*, not invent a new product surface. The voice on this section is also deliberately different from the earlier phases — we describe scope honestly, name the limits, and avoid framing-claims we can't defend in a benchmark.
+
+State lives in `internal/llmstack/`; RESP handlers in `internal/resp/commands_aiops_v42.go`; AOF write-set in `internal/resp/writeset.go`; ACL categories in `internal/acl/categories.go`.
+
+### NETTING.* — clearing layer on top of SETTLE
+
+The gap it fills: SETTLE atomically posts one transaction. An agent economy with N parties making M obligations during a clearing cycle currently calls SETTLE.TXN M times. Netting collapses gross obligations to the minimum set of net transfers that produces the same final balances. Classic clearinghouse function — no settlement semantics invented, just the planner.
+
+| Command | What it does | Where |
+|---|---|---|
+| `NETTING.OPEN cycle-id [DEADLINE ms]` | Open a clearing cycle. | `llmstack/netting.go` + `resp/commands_aiops_v42.go` |
+| `NETTING.ADD cycle from to amount [TXN_ID i]` | Record one gross obligation. | same |
+| `NETTING.CLOSE cycle [DRY_RUN 0\|1]` | Build the netting plan. Returns gross/net counts + savings %. DRY_RUN doesn't lock the cycle. | same |
+| `NETTING.APPLY cycle [LEDGER l]` | Post the netted plan via SETTLE.TXN. Best-effort rollback on failure. | same |
+| `NETTING.STATUS` / `LIST` / `FORGET` / `STATS` | | same |
+
+**Honest scope and limits:**
+- The algorithm is the canonical greedy debt-cancellation pass. It produces the *minimum-transfer* plan, not the minimum-cost plan under all edge-weight models. For typical clearing-cycle inputs (dozens-to-hundreds of parties) this is the right answer; cost-routing variants are a separate problem the operator can layer on.
+- APPLY's rollback is best-effort. If a posted reversal *itself* fails, the cycle moves to `apply_failed` with the partial state visible in STATUS — the operator must reconcile manually. This is a documented operational failure mode, not a silent inconsistency.
+
+### XTXN.* — single-process cross-primitive two-phase commit
+
+The gap it fills: SETTLE.TXN is atomic within the ledger; PROV is atomic within itself; TRUST is atomic within itself. There has been no primitive for "post this settlement AND update trust AND record provenance as one atomic unit." Partway-through failure has left stores that disagree.
+
+XTXN is the coordinator that solves this for the specific shape "I have N independent ops, all-or-nothing." Each primitive opts in via the `XTxnParticipant` contract (Prepare → token; Commit; Abort). The protocol is classical 2PC, scoped to a single process.
+
+| Command | What it does | Where |
+|---|---|---|
+| `XTXN.BEGIN xid [META k v ...]` | Open a transaction. | `llmstack/xtxn.go` + `resp/commands_aiops_v42.go` |
+| `XTXN.STAGE xid participant op [ARG k v ...]` | Record an intent against a registered participant. | same |
+| `XTXN.PREPARE xid` | Call Prepare on every participant. First failure aborts the rest. | same |
+| `XTXN.COMMIT xid` | Call Commit on every prepared participant. | same |
+| `XTXN.ABORT xid [REASON r]` | Tear down open / prepared. | same |
+| `XTXN.STATUS` / `LIST` / `FORGET` / `PARTICIPANTS` / `STATS` | | same |
+
+**Honest scope and limits:**
+- This is a *single-process* coordinator. No distributed 2PC, no quorum, no fault-tolerant TM. The realistic scope of NeuroCache.
+- *Commit-phase failure is uncertain by definition.* If a Commit fails after others have already committed, the txn enters state `commit_partial` and the operator is required to drive it home using the participant-level audit log. We surface this state explicitly rather than pretend it can't happen.
+- Participants are responsible for the durability of their own prepared state. AIWAL is the companion primitive for that.
+
+### AIWAL.* — per-primitive write-ahead log
+
+The gap it fills: the global AOF replays the dispatch path on boot. That works for "one mutation = one command." It does not cleanly serve primitives that want their own ordered recovery + checkpoint compaction (MARKET shouldn't replay six months of bids on boot), or that participate as 2PC participants and need durable prepare-state independent of the global commit point.
+
+AIWAL is the *protocol layer* those primitives can opt into. APPEND, FSYNC, READ, CHECKPOINT, RECOVER, TRUNCATE.
+
+| Command | What it does | Where |
+|---|---|---|
+| `AIWAL.APPEND primitive entry` | Append an opaque entry; returns monotonic seq. | `llmstack/aiwal.go` + `resp/commands_aiops_v42.go` |
+| `AIWAL.FSYNC primitive` | Mark current head as the fsynced boundary. | same |
+| `AIWAL.READ primitive [FROM seq] [LIMIT n]` | Stream entries. | same |
+| `AIWAL.CHECKPOINT primitive seq blob` | Store state-as-of-seq blob. | same |
+| `AIWAL.RECOVER primitive` | Returns (checkpoint, blob, replay-log up to fsynced head). | same |
+| `AIWAL.TRUNCATE primitive UPTO seq` | Drop entries ≤ upto. Refuses to truncate past the checkpoint. | same |
+| `AIWAL.STATUS` / `LIST` / `FORGET` / `STATS` | | same |
+
+**Honest scope and limits:**
+- *This implementation is in-memory.* It owns the ordering / recovery / compaction *contract* — not the filesystem. For real on-disk durability, the engine's AOF subsystem already handles disk; AIWAL is the per-primitive layer alongside it. A future filesystem-backed implementation that swaps in transparently is a natural extension; this is not it.
+- FSYNC is a commitment boundary the primitive can rely on for its own semantics. The actual fsync syscall, if you want it, lives outside this primitive.
+- This primitive is not transactional across multiple primitives. XTXN is for that.
+
+### What we deliberately didn't ship in this phase
+
+The scope-discipline note from this round: there were other candidates (continual-learning durability, settlement clearing-and-novation as separate primitives, an explicit fault-tolerant TM). We didn't ship them. Each was either speculative without a named user need, or a heavier engineering exercise than the scope justified.
+
+### Phase 17 persistence + replication
+
+- NETTING.* / XTXN.* mutating commands are in `internal/resp/writeset.go` for AOF replay. AIWAL.* mutations are also in the writeset; AIWAL is itself a write-ahead log layer, so the engine's AOF effectively logs the log — fine, since AOF replay reconstructs the AIWAL state.
+- ACL: NETTING.APPLY is `@slow` (it posts N SETTLE.TXNs). `*.FORGET` and AIWAL.TRUNCATE are `@dangerous` since they discard durable history.

@@ -850,6 +850,20 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"REPLAY.SHADOW.STATS":
 		c.replayShadowCmd(strings.TrimPrefix(cmd, "REPLAY.SHADOW."), args)
 
+	// ─── Phase 17 — netting on SETTLE, cross-primitive 2PC, per-
+	// primitive WAL ───────────────────────────────────────────────
+	case "NETTING.OPEN", "NETTING.ADD", "NETTING.CLOSE", "NETTING.APPLY",
+		"NETTING.STATUS", "NETTING.LIST", "NETTING.FORGET", "NETTING.STATS":
+		c.nettingCmd(strings.TrimPrefix(cmd, "NETTING."), args)
+	case "XTXN.BEGIN", "XTXN.STAGE", "XTXN.PREPARE", "XTXN.COMMIT",
+		"XTXN.ABORT", "XTXN.STATUS", "XTXN.LIST", "XTXN.FORGET",
+		"XTXN.PARTICIPANTS", "XTXN.STATS":
+		c.xtxnCmd(strings.TrimPrefix(cmd, "XTXN."), args)
+	case "AIWAL.APPEND", "AIWAL.FSYNC", "AIWAL.READ", "AIWAL.CHECKPOINT",
+		"AIWAL.RECOVER", "AIWAL.TRUNCATE", "AIWAL.STATUS", "AIWAL.LIST",
+		"AIWAL.FORGET", "AIWAL.STATS":
+		c.aiwalCmd(strings.TrimPrefix(cmd, "AIWAL."), args)
+
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
 	case "AGENT.CALL", "AGENT.STORE", "AGENT.PROFILE", "AGENT.FORGET", "AGENT.STATS", "AGENT.PURGE":
