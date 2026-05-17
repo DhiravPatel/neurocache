@@ -556,6 +556,32 @@ var writeCommands = map[string]bool{
 	"TRACE.START": true, "TRACE.END": true, "TRACE.ANNOTATE": true, "TRACE.FORGET": true,
 	"DOC.INIT": true, "DOC.APPLY": true, "DOC.FORGET": true,
 	"OBSERVE.REGISTER": true, "OBSERVE.INC": true, "OBSERVE.SET": true,
+
+	// Phase 14 — multi-agent coordination + governance + ML feedback
+	// + incident response. Pure reads (READ/STATUS/SCORE/CHECK/
+	// SIMULATE/COMPARE/STATS/LIST/PERMITS/ANSWER/WHY/IMPACT/REPORT
+	// /HAPPENS_BEFORE/CLOCK/VARIANTS/DIFF/GET/PROGRESS/EXPIRING/
+	// SOURCES/AGENTS/PENDING/CLAIMS/HEALTH/RANK) are not in the
+	// writeset.
+	"AGENT.BB.POST": true, "AGENT.BB.CLAIM": true,
+	"AGENT.BB.RELEASE": true, "AGENT.BB.DROP": true,
+	"AGENT.BUS.REGISTER": true, "AGENT.BUS.UNREGISTER": true,
+	"AGENT.BUS.SEND": true, "AGENT.BUS.ACK": true, "AGENT.BUS.RESET": true,
+	"PROV.BEGIN": true, "PROV.NODE": true, "PROV.FORGET": true,
+	"TRUST.RECORD": true, "TRUST.DECAY": true, "TRUST.RESET": true,
+	"ISOLATE.BIND": true, "ISOLATE.UNBIND": true, "ISOLATE.EXPECT": true,
+	"VECSPACE.SAMPLE": true, "VECSPACE.RESET": true,
+	"PREF.RECORD": true, "PREF.RESET": true,
+	"HANDOFF.SPAWN": true, "HANDOFF.REPORT_USAGE": true,
+	"HANDOFF.RETURN": true, "HANDOFF.CANCEL": true, "HANDOFF.FORGET": true,
+	"RISK.BUDGET.SET": true, "RISK.BUDGET.DEBIT": true, "RISK.BUDGET.RESET": true,
+	"CFCACHE.PUT": true, "CFCACHE.FORGET": true,
+	"BLAST.SET": true, "BLAST.RECORD": true, "BLAST.REVERT": true, "BLAST.FORGET": true,
+	"CAUSAL.APPEND": true, "CAUSAL.FORGET": true,
+	"SCHEMA.REGISTER": true, "SCHEMA.FORGET": true,
+	"WHATIF.OBSERVE": true, "WHATIF.FORGET": true,
+	"CONSENT.GRANT": true, "CONSENT.REVOKE": true, "CONSENT.WITHDRAW": true,
+	"GRAPH.EXTRACT.RUN": true, "GRAPH.EXTRACT.FORGET": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

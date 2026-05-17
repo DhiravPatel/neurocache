@@ -1054,3 +1054,205 @@ Effectively everything Redis / Valkey / DiceDB ships is now covered after Phase 
 - AOF RDB preamble (Redis 4.0+ writes AOF as `[RDB snapshot][delta commands]`)
 
 Within an all-NeuroCache deployment our equivalents work identically.
+
+---
+
+## Phase 14 — multi-agent, governance, ML feedback, incident response
+
+The "more than one agent, less than full trust" tier. Every prior family assumed one agent / one request / no side effects / no second party that needs to audit. Phase 14 is what's left: multi-agent coordination, answer provenance, source reputation, tenant isolation, embedding-space health, preference data, subagent handoffs, hallucination-risk budgets, counterfactual caches, incident-response kill switches, causal event logs, schema-change classification, dry-run cost simulators, GDPR consent, auto-triple extraction.
+
+State lives in `internal/llmstack/`; RESP handlers in `internal/resp/commands_aiops_v31..v34.go`; AOF write-set in `internal/resp/writeset.go`; ACL categories in `internal/acl/categories.go`. All under the `@ai` category.
+
+### AGENT.BB.* — multi-agent shared blackboard
+
+A per-run workspace where agents POST findings and READ them semantically. `READ "anything about pricing?"` returns posts that never said "pricing". CLAIM is atomic with TTL.
+
+| Command | What it does | Where |
+|---|---|---|
+| `AGENT.BB.POST run agent text [TAGS ...]` | Append a finding. | `llmstack/agentbb.go` + `resp/commands_aiops_v31.go` |
+| `AGENT.BB.READ run query [K n] [MIN_SIM f]` | Top-K posts by cosine. | same |
+| `AGENT.BB.LIST run [LIMIT n] [TAG t]` | Reverse-chronological, optional tag filter. | same |
+| `AGENT.BB.CLAIM run task agent [TTL ms]` | Atomic task claim (1=won, 0=owner). | same |
+| `AGENT.BB.RELEASE run task agent` | Owner releases. | same |
+| `AGENT.BB.CLAIMS run` | Active claims (with expiry annotation). | same |
+| `AGENT.BB.DROP` / `LIST_RUNS` / `STATS` | Housekeeping. | same |
+
+### AGENT.BUS.* — agent-to-agent message bus with semantic routing
+
+Senders know capability, not recipient. Each agent REGISTERs a capability; SEND picks the best cosine match via char-trigram embedding (handles morphological neighbours like "migration"↔"migrations").
+
+| Command | What it does | Where |
+|---|---|---|
+| `AGENT.BUS.REGISTER agent "capability"` | Declare capability. | `llmstack/agentbus.go` + `resp/commands_aiops_v31.go` |
+| `AGENT.BUS.SEND message [MIN_SIM f] [FROM agent]` | Route to best-match. | same |
+| `AGENT.BUS.RECV agent [LIMIT n]` | Pending messages (no auto-ack). | same |
+| `AGENT.BUS.ACK agent msg-id` | Remove from inbox. | same |
+| `AGENT.BUS.UNREGISTER` / `AGENTS` / `PENDING` / `RESET` / `STATS` | | same |
+
+### PROV.* — answer-provenance DAG ("why did the system say this?")
+
+Per-answer DAG of nodes (query/rewrite/chunk/llm/answer) with FROM edges and external REFS. WHY emits the full lineage; IMPACT does the reverse: when a source turns out wrong, name every answer that used it.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PROV.BEGIN answer [META k v ...]` | Open answer DAG. | `llmstack/prov.go` + `resp/commands_aiops_v32.go` |
+| `PROV.NODE answer node KIND k label [FROM n ...] [REFS r ...]` | Append typed node with edges + refs. | same |
+| `PROV.WHY answer [node] [DEPTH n]` | Full lineage path. | same |
+| `PROV.IMPACT ref` | Every answer that referenced this source. | same |
+| `PROV.ANSWER` / `LIST` / `FORGET` / `STATS` | | same |
+
+### TRUST.* — Bayesian source/tool reputation
+
+Closed-loop inverse of RETRIEVAL.LEARN. Beta-posterior per entity. RECORD posts outcomes (grounded/hallucinated/cited/contradicted); SCORE returns posterior mean + 95% CI; RANK lists top/bottom; DECAY shrinks toward prior.
+
+| Command | What it does | Where |
+|---|---|---|
+| `TRUST.RECORD entity outcome [WEIGHT w]` | Append outcome. | `llmstack/trust.go` + `resp/commands_aiops_v32.go` |
+| `TRUST.SCORE entity` | trust + n + ci_low + ci_high + breakdown. | same |
+| `TRUST.RANK [SOURCES\|TOOLS] [TOP n\|BOTTOM n] [MIN_N k]` | Sorted by posterior. | same |
+| `TRUST.DECAY half_life_seconds` | Shrink toward prior. | same |
+| `TRUST.RESET` / `LIST` / `STATS` | | same |
+
+### ISOLATE.* — hard tenant boundary inside semantic retrieval
+
+Fail-closed binding of vectors to (tenant, classification). PERMITS is the boolean fast-path. AUDIT surfaces expected-but-unbound vectors before they leak.
+
+| Command | What it does | Where |
+|---|---|---|
+| `ISOLATE.BIND vector TENANT t [CLASS c]` | Attach binding. | `llmstack/isolate.go` + `resp/commands_aiops_v32.go` |
+| `ISOLATE.CHECK vector AS_TENANT t` | Structured allow/deny + reason. | same |
+| `ISOLATE.PERMITS vector AS_TENANT t` | Boolean (inline guard). | same |
+| `ISOLATE.EXPECT vector` | Register vector that must be bound. | same |
+| `ISOLATE.AUDIT [VECTORS v ...]` | Surface unbound vectors. | same |
+| `ISOLATE.UNBIND` / `LIST_FOR` / `STATS` | | same |
+
+### VECSPACE.* — embedding-space collapse health check
+
+DRIFT watches input text; VECSPACE watches the vector space. Mean pairwise cosine + effective-dim (participation ratio) + nan-rate → verdict HEALTHY/DEGRADED/COLLAPSED/INSUFFICIENT. Rolling 1024-vector window per space.
+
+| Command | What it does | Where |
+|---|---|---|
+| `VECSPACE.SAMPLE space DIM d v1 v2 ...` | Append vectors (capped window). | `llmstack/vecspace.go` + `resp/commands_aiops_v32.go` |
+| `VECSPACE.HEALTH space [COLLAPSE_AT f] [LOW_DIM_AT n]` | metrics + verdict + reason. | same |
+| `VECSPACE.RESET` / `LIST` / `STATS` | | same |
+
+### PREF.* — production traffic → DPO/RLHF preference dataset
+
+Every thumbs / jury / canary signal is a (prompt, chosen, rejected) triple. PREF dedupes by hash, tracks margin + source. EXPORT emits ready-to-train JSONL in DPO / SFT / RLHF format with margin + source filters.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PREF.RECORD dataset prompt CHOSEN c REJECTED r [SOURCE s] [MARGIN m]` | Append, deduped. | `llmstack/pref.go` + `resp/commands_aiops_v32.go` |
+| `PREF.STATS dataset` | pairs / mean_margin / clean_pairs / by_source. | same |
+| `PREF.EXPORT dataset [FORMAT dpo\|sft\|rlhf] [MIN_MARGIN m] [SOURCE s] [LIMIT n]` | Streaming JSONL. | same |
+| `PREF.LIST` / `RESET` / `STATS_GLOBAL` | | same |
+
+### HANDOFF.* — typed subagent spawn/join
+
+Parent SPAWNs with a token budget + required-return-keys + deadline. REPORT_USAGE debits (auto-cancels on overflow). RETURN validates required keys. JOIN blocks with a hard cap.
+
+| Command | What it does | Where |
+|---|---|---|
+| `HANDOFF.SPAWN parent task [BUDGET tokens] [DEADLINE ms] [RETURN k,...] [META k v ...]` | Open handoff. | `llmstack/handoff.go` + `resp/commands_aiops_v32.go` |
+| `HANDOFF.REPORT_USAGE id tokens` | Debit; over-budget auto-cancels. | same |
+| `HANDOFF.RETURN id k v [k v ...]` | Post typed result (validates required keys). | same |
+| `HANDOFF.JOIN id [TIMEOUT ms]` | Block until done/cancelled/timeout. | same |
+| `HANDOFF.STATUS` / `CANCEL` / `LIST` / `FORGET` / `STATS` | | same |
+
+### RISK.BUDGET.* — per-session hallucination-risk accumulator
+
+Distinct from cost budgets. Each low-GROUND answer debits a balance; exhaustion forces verify / escalate. Debit = (1-score) × weight.
+
+| Command | What it does | Where |
+|---|---|---|
+| `RISK.BUDGET.SET session budget [WEIGHT w]` | Configure (resets balance). | `llmstack/riskbudget.go` + `resp/commands_aiops_v32.go` |
+| `RISK.BUDGET.DEBIT session score [REASON r]` | Reduce balance; enforce=1 on exhaust. | same |
+| `RISK.BUDGET.STATUS session` | balance / budget / debits / mean_score / enforce. | same |
+| `RISK.BUDGET.RESET` / `LIST` / `STATS` | | same |
+
+### CFCACHE.* — counterfactual RAG cache
+
+Keys answers by (query, context-hash) so the same question against different context yields distinct entries. DIFF compares variants line-by-line.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CFCACHE.PUT query ctx-hash answer [REFS r ...] [TTL s]` | Store one variant. | `llmstack/counterfactual.go` + `resp/commands_aiops_v33.go` |
+| `CFCACHE.GET query ctx-hash` | Hit/miss + answer + refs + age. | same |
+| `CFCACHE.VARIANTS query [LIMIT n]` | Every (ctx-hash, answer) for this query. | same |
+| `CFCACHE.DIFF query ctx-a ctx-b` | only_in_a / only_in_b / common_lines. | same |
+| `CFCACHE.FORGET` / `LIST` / `STATS` | | same |
+
+### BLAST.* — incident-response kill switch with accounting
+
+CANARY rolls forward; BLAST rolls back. RECORD logs every (tenant, user, version) exposure. REVERT swings current → safeVersion and returns the impact report: exposed users, tenants, duration, per-tenant breakdown.
+
+| Command | What it does | Where |
+|---|---|---|
+| `BLAST.SET feature version` | Declare live version. | `llmstack/blastradius.go` + `resp/commands_aiops_v33.go` |
+| `BLAST.RECORD feature version tenant user` | Log one exposure. | same |
+| `BLAST.REVERT feature bad-version safe-version [REASON r]` | Roll back + impact report. | same |
+| `BLAST.REPORT feature version` | Same report on demand. | same |
+| `BLAST.STATUS` / `FORGET` / `STATS` | | same |
+
+### CAUSAL.* — vector-clock-ordered distributed event log
+
+Streams give arrival order — wrong when agents emit out of order. Vector clocks fix it: APPEND records per-actor bumps + AFTER deps; READ returns topological order; HAPPENS_BEFORE answers concurrency questions.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CAUSAL.APPEND log actor payload [AFTER e1 e2 ...]` | Append with deps. | `llmstack/causallog.go` + `resp/commands_aiops_v33.go` |
+| `CAUSAL.READ log [LIMIT n]` | Topological order, stable tie-break. | same |
+| `CAUSAL.HAPPENS_BEFORE log a b` | true/false (with concurrent flag). | same |
+| `CAUSAL.CLOCK log actor` | Per-actor counter. | same |
+| `CAUSAL.FORGET` / `LIST` / `STATS` | | same |
+
+### SCHEMA.* — tool/API schema-change classifier
+
+TOOLDRIFT detects change; SCHEMA decides if it's safe. Verdict BREAKING/RISKY/NON-BREAKING + migration hint. Rules: type change / required-added / enum-removed = breaking; default-change / constraint-tighten = risky; new op / new optional field = safe.
+
+| Command | What it does | Where |
+|---|---|---|
+| `SCHEMA.REGISTER tool version schema-json` | Store version. | `llmstack/contractevolve.go` + `resp/commands_aiops_v34.go` |
+| `SCHEMA.DIFF tool from to` | verdict + change list + hint. | same |
+| `SCHEMA.VERSIONS tool` / `LIST` / `FORGET` / `STATS` | | same |
+
+### WHATIF.* — dry-run cost/quality/latency simulator
+
+Predicts a route's outcome from real-traffic telemetry. SIMULATE returns projected_quality + 95% CI + projected_cost_usd + projected_p99_ms + confidence label. COMPARE picks dominant route or reports the trade-off explicitly.
+
+| Command | What it does | Where |
+|---|---|---|
+| `WHATIF.OBSERVE route quality cost-usd latency-ms` | One real observation. | `llmstack/whatif.go` + `resp/commands_aiops_v34.go` |
+| `WHATIF.SIMULATE route [REPEATS n]` | Projected metrics + CI + confidence. | same |
+| `WHATIF.COMPARE route-a route-b` | Side-by-side + recommendation. | same |
+| `WHATIF.ROUTES` / `FORGET` / `STATS` | | same |
+
+### CONSENT.* — GDPR / CCPA per-user consent ledger
+
+Per-(user, scope, purpose) grants with TTL expiry. Memory/retrieval consults PERMITS before surfacing user-derived facts. WITHDRAW wipes a user (right-to-be-forgotten). EXPIRING surfaces grants about to lapse. Fail-closed.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CONSENT.GRANT user scope purpose [TTL s] [META k v ...]` | Add/refresh grant. | `llmstack/consent.go` + `resp/commands_aiops_v34.go` |
+| `CONSENT.REVOKE user scope purpose` | Drop one grant. | same |
+| `CONSENT.WITHDRAW user` | Drop all of a user's grants. | same |
+| `CONSENT.PERMITS user scope purpose` | Boolean fast-path. | same |
+| `CONSENT.CHECK user scope purpose` | Structured allow + expiry + reason. | same |
+| `CONSENT.LIST user` / `EXPIRING [WITHIN s]` / `STATS` | | same |
+
+### GRAPH.EXTRACT.* — auto-triple extractor (memo-deduped)
+
+GRAPH.LINK is manual; GRAPH.EXTRACT auto-extracts (subject, relation, object) from text. Deterministic regex patterns ("X is the CEO of Y", "X founded Y", "X works at Y", "X was born in Y", "X has Y", "X owns Y", "X uses Y", "X is in Y"). Content-hash memoized.
+
+| Command | What it does | Where |
+|---|---|---|
+| `GRAPH.EXTRACT.RUN graph text [SOURCE s]` | Extract + dedupe + append. | `llmstack/graphextract.go` + `resp/commands_aiops_v34.go` |
+| `GRAPH.EXTRACT.LIST graph [LIMIT n]` | Most-recent triples. | same |
+| `GRAPH.EXTRACT.SOURCES graph` | Distinct sources extracted from. | same |
+| `GRAPH.EXTRACT.FORGET graph\|ALL` / `STATS` | | same |
+
+### Phase 14 persistence + replication
+
+- Every mutating command is in `internal/resp/writeset.go` so AOF replays them on restart. Reads (READ/CHECK/SCORE/STATUS/SIMULATE/COMPARE/STATS/LIST/PERMITS/ANSWER/WHY/IMPACT/REPORT/HAPPENS_BEFORE/CLOCK/VARIANTS/DIFF/GET/HEALTH/RANK/EXPIRING/SOURCES/CLAIMS/AGENTS/PENDING/VERSIONS) are excluded.
+- `c.eng.RecordWrite()` propagates them to replicas via the standard path.
+- ACL: every Phase 14 command lives in `@ai` + `@read`/`@write` + `@fast` (HANDOFF.JOIN is `@blocking`).

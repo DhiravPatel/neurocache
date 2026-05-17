@@ -696,6 +696,63 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"FAIRQUEUE.LIST", "FAIRQUEUE.RESET", "FAIRQUEUE.STATS":
 		c.fairQueueCmd(strings.TrimPrefix(cmd, "FAIRQUEUE."), args)
 
+	// ─── Phase 14 — multi-agent coordination + governance + ML
+	// feedback + incident response. The "more than one agent, less
+	// than full trust" tier.
+	case "AGENT.BB.POST", "AGENT.BB.READ", "AGENT.BB.LIST",
+		"AGENT.BB.CLAIM", "AGENT.BB.RELEASE", "AGENT.BB.CLAIMS",
+		"AGENT.BB.DROP", "AGENT.BB.LIST_RUNS", "AGENT.BB.STATS":
+		c.agentBBCmd(strings.TrimPrefix(cmd, "AGENT.BB."), args)
+	case "AGENT.BUS.REGISTER", "AGENT.BUS.UNREGISTER", "AGENT.BUS.SEND",
+		"AGENT.BUS.RECV", "AGENT.BUS.ACK", "AGENT.BUS.AGENTS",
+		"AGENT.BUS.PENDING", "AGENT.BUS.RESET", "AGENT.BUS.STATS":
+		c.agentBusCmd(strings.TrimPrefix(cmd, "AGENT.BUS."), args)
+	case "PROV.BEGIN", "PROV.NODE", "PROV.WHY", "PROV.IMPACT",
+		"PROV.ANSWER", "PROV.LIST", "PROV.FORGET", "PROV.STATS":
+		c.provCmd(strings.TrimPrefix(cmd, "PROV."), args)
+	case "TRUST.RECORD", "TRUST.SCORE", "TRUST.RANK", "TRUST.DECAY",
+		"TRUST.RESET", "TRUST.LIST", "TRUST.STATS":
+		c.trustCmd(strings.TrimPrefix(cmd, "TRUST."), args)
+	case "ISOLATE.BIND", "ISOLATE.UNBIND", "ISOLATE.CHECK", "ISOLATE.PERMITS",
+		"ISOLATE.LIST_FOR", "ISOLATE.EXPECT", "ISOLATE.AUDIT", "ISOLATE.STATS":
+		c.isolateCmd(strings.TrimPrefix(cmd, "ISOLATE."), args)
+	case "VECSPACE.SAMPLE", "VECSPACE.HEALTH", "VECSPACE.RESET",
+		"VECSPACE.LIST", "VECSPACE.STATS":
+		c.vecspaceCmd(strings.TrimPrefix(cmd, "VECSPACE."), args)
+	case "PREF.RECORD", "PREF.STATS", "PREF.EXPORT", "PREF.LIST",
+		"PREF.RESET", "PREF.STATS_GLOBAL":
+		c.prefCmd(strings.TrimPrefix(cmd, "PREF."), args)
+	case "HANDOFF.SPAWN", "HANDOFF.REPORT_USAGE", "HANDOFF.RETURN",
+		"HANDOFF.JOIN", "HANDOFF.STATUS", "HANDOFF.CANCEL",
+		"HANDOFF.LIST", "HANDOFF.FORGET", "HANDOFF.STATS":
+		c.handoffCmd(strings.TrimPrefix(cmd, "HANDOFF."), args)
+	case "RISK.BUDGET.SET", "RISK.BUDGET.DEBIT", "RISK.BUDGET.STATUS",
+		"RISK.BUDGET.RESET", "RISK.BUDGET.LIST", "RISK.BUDGET.STATS":
+		c.riskBudgetCmd(strings.TrimPrefix(cmd, "RISK.BUDGET."), args)
+	case "CFCACHE.PUT", "CFCACHE.GET", "CFCACHE.VARIANTS", "CFCACHE.DIFF",
+		"CFCACHE.FORGET", "CFCACHE.LIST", "CFCACHE.STATS":
+		c.cfCacheCmd(strings.TrimPrefix(cmd, "CFCACHE."), args)
+	case "BLAST.SET", "BLAST.RECORD", "BLAST.REVERT", "BLAST.REPORT",
+		"BLAST.STATUS", "BLAST.FORGET", "BLAST.STATS":
+		c.blastCmd(strings.TrimPrefix(cmd, "BLAST."), args)
+	case "CAUSAL.APPEND", "CAUSAL.READ", "CAUSAL.HAPPENS_BEFORE",
+		"CAUSAL.CLOCK", "CAUSAL.FORGET", "CAUSAL.LIST", "CAUSAL.STATS":
+		c.causalCmd(strings.TrimPrefix(cmd, "CAUSAL."), args)
+	case "SCHEMA.REGISTER", "SCHEMA.DIFF", "SCHEMA.VERSIONS",
+		"SCHEMA.FORGET", "SCHEMA.LIST", "SCHEMA.STATS":
+		c.schemaCmd(strings.TrimPrefix(cmd, "SCHEMA."), args)
+	case "WHATIF.OBSERVE", "WHATIF.SIMULATE", "WHATIF.COMPARE",
+		"WHATIF.ROUTES", "WHATIF.FORGET", "WHATIF.STATS":
+		c.whatIfCmd(strings.TrimPrefix(cmd, "WHATIF."), args)
+	case "CONSENT.GRANT", "CONSENT.REVOKE", "CONSENT.WITHDRAW",
+		"CONSENT.PERMITS", "CONSENT.CHECK", "CONSENT.LIST",
+		"CONSENT.EXPIRING", "CONSENT.STATS":
+		c.consentCmd(strings.TrimPrefix(cmd, "CONSENT."), args)
+	case "GRAPH.EXTRACT.RUN", "GRAPH.EXTRACT.LIST",
+		"GRAPH.EXTRACT.SOURCES", "GRAPH.EXTRACT.FORGET",
+		"GRAPH.EXTRACT.STATS":
+		c.graphExtractCmd(strings.TrimPrefix(cmd, "GRAPH.EXTRACT."), args)
+
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
 	case "AGENT.CALL", "AGENT.STORE", "AGENT.PROFILE", "AGENT.FORGET", "AGENT.STATS", "AGENT.PURGE":
