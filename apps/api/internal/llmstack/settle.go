@@ -443,12 +443,26 @@ type SettleReconcileResult struct {
 }
 
 // Reconcile proves the global double-entry invariant: every debit
-// has a matching credit somewhere. Walks every account's entries
-// (could be cached but at typical ledger sizes it's microseconds).
+// has a matching credit somewhere.
+//
+// FP-tolerance: the per-txn acceptance check (`math.Abs(sumD-sumC) <=
+// 1e-9`) accepts each individual txn within a tight tolerance. When
+// thousands of those txns accumulate, ordinary float-summation error
+// can push the global sum's representation drift beyond 1e-9 even
+// when the *mathematical* sum is exact. A purely absolute epsilon
+// here produced false `balanced=false` for ledgers that are in fact
+// balanced — caught by `TestSettleFuzzInvariantsUnderConcurrentLoad`.
+//
+// Fix: tolerance scales with both transaction count (each can
+// contribute up to 1e-9 of accepted-but-unbalanced slack) and total
+// magnitude (proportional FP representation error). The bound is
+// the max of those two effects plus a small absolute floor for the
+// trivial-ledger case.
 func (s *Settlement) Reconcile() SettleReconcileResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var d, c float64
+	entries := 0
 	for _, a := range s.accounts {
 		for _, e := range a.Entries {
 			if e.Side == "debit" {
@@ -456,13 +470,45 @@ func (s *Settlement) Reconcile() SettleReconcileResult {
 			} else {
 				c += e.Amount
 			}
+			entries++
 		}
 	}
+	tol := reconcileTolerance(d, c, entries)
 	return SettleReconcileResult{
 		TotalDebits: d, TotalCredits: c,
-		Difference: d - c, Balanced: math.Abs(d-c) < 1e-9,
+		Difference: d - c,
+		Balanced: math.Abs(d-c) <= tol,
 		AccountCount: len(s.accounts), TxnCount: len(s.txns),
 	}
+}
+
+// reconcileTolerance produces a tolerance proportional to both the
+// magnitude of the sums and the count of entries summed. The two
+// dominant error sources:
+//
+//   1. Per-txn acceptance slack: each posted txn was accepted with
+//      up to 1e-9 of debit/credit imbalance (see Txn). Across N
+//      accepted txns, that slack can sum to N * 1e-9.
+//
+//   2. Float representation error: summing N values of magnitude M
+//      using IEEE-754 64-bit floats has relative error bounded by
+//      ~N * machine_epsilon. machine_epsilon for float64 is ~2.22e-16.
+//
+// The tolerance is the max of those terms plus a 1e-9 floor for
+// the empty / single-entry case.
+func reconcileTolerance(d, c float64, entries int) float64 {
+	mag := math.Max(math.Abs(d), math.Abs(c))
+	const machineEps = 2.22e-16
+	perTxnSlack := float64(entries) * 1e-9
+	fpRepError := float64(entries) * mag * machineEps * 4 // ×4 for safety margin
+	tol := perTxnSlack
+	if fpRepError > tol {
+		tol = fpRepError
+	}
+	if tol < 1e-9 {
+		tol = 1e-9
+	}
+	return tol
 }
 
 // List enumerates accounts.
