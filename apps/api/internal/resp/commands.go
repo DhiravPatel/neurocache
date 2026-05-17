@@ -806,6 +806,50 @@ func (c *conn) dispatch(cmd string, args []string) {
 		"TEMPORAL.FORGET", "TEMPORAL.STATS":
 		c.temporalCmd(strings.TrimPrefix(cmd, "TEMPORAL."), args)
 
+	// ─── Phase 16 — settlement, chaos, continual, DR, negotiation,
+	// proof, repro, regwatch, egress, license, replay-shadow ──────
+	case "ACCT.OPEN", "ACCT.BALANCE", "ACCT.STATEMENT", "ACCT.CLOSE", "ACCT.LIST":
+		c.acctCmd(strings.TrimPrefix(cmd, "ACCT."), args)
+	case "SETTLE.TXN", "SETTLE.REVERSE", "SETTLE.GET",
+		"SETTLE.RECONCILE", "SETTLE.STATS":
+		c.settleCmd(strings.TrimPrefix(cmd, "SETTLE."), args)
+	case "CHAOS.INJECT", "CHAOS.REVOKE", "CHAOS.ACTIVE", "CHAOS.HISTORY",
+		"CHAOS.CHECK", "CHAOS.STATS":
+		c.chaosCmd(strings.TrimPrefix(cmd, "CHAOS."), args)
+	case "CONTINUAL.CHECKPOINT", "CONTINUAL.ANCHOR", "CONTINUAL.REHEARSE",
+		"CONTINUAL.DIVERGENCE", "CONTINUAL.ROLLBACK", "CONTINUAL.LIST",
+		"CONTINUAL.FORGET", "CONTINUAL.STATS":
+		c.continualCmd(strings.TrimPrefix(cmd, "CONTINUAL."), args)
+	case "DR.SNAPSHOT", "DR.CONTRIBUTE", "DR.SEAL", "DR.RESTORE_INTO",
+		"DR.ASSERT", "DR.PROMOTE", "DR.LIST", "DR.GET", "DR.PAYLOAD",
+		"DR.FORGET", "DR.STATS":
+		c.drCmd(strings.TrimPrefix(cmd, "DR."), args)
+	case "NEGOTIATE.OPEN", "NEGOTIATE.OFFER", "NEGOTIATE.COUNTER",
+		"NEGOTIATE.ACCEPT", "NEGOTIATE.REJECT", "NEGOTIATE.WALK",
+		"NEGOTIATE.GET", "NEGOTIATE.LIST", "NEGOTIATE.FORGET",
+		"NEGOTIATE.STATS":
+		c.negotiateCmd(strings.TrimPrefix(cmd, "NEGOTIATE."), args)
+	case "PROOF.COMMIT", "PROOF.PRODUCE", "PROOF.VERIFY",
+		"PROOF.GET", "PROOF.LIST", "PROOF.FORGET", "PROOF.STATS":
+		c.proofCmd(strings.TrimPrefix(cmd, "PROOF."), args)
+	case "REPRO.BUNDLE", "REPRO.USE", "REPRO.TRACE", "REPRO.HASH",
+		"REPRO.GET", "REPRO.LIST", "REPRO.FORGET", "REPRO.STATS":
+		c.reproCmd(strings.TrimPrefix(cmd, "REPRO."), args)
+	case "REGWATCH.RULE", "REGWATCH.UNRULE", "REGWATCH.CHECK",
+		"REGWATCH.CROSS", "REGWATCH.RULES", "REGWATCH.STATS":
+		c.regwatchCmd(strings.TrimPrefix(cmd, "REGWATCH."), args)
+	case "EGRESS.REGISTER", "EGRESS.CHECK", "EGRESS.UNREGISTER",
+		"EGRESS.RESET", "EGRESS.CLUSTERS", "EGRESS.STATS":
+		c.egressCmd(strings.TrimPrefix(cmd, "EGRESS."), args)
+	case "LICENSE.TAG", "LICENSE.UNTAG", "LICENSE.GET", "LICENSE.MATRIX",
+		"LICENSE.COMPAT_SET", "LICENSE.CHECK", "LICENSE.LIST", "LICENSE.STATS":
+		c.licenseCmd(strings.TrimPrefix(cmd, "LICENSE."), args)
+	case "REPLAY.SHADOW.ENABLE", "REPLAY.SHADOW.RECORD",
+		"REPLAY.SHADOW.DIVERGENCE", "REPLAY.SHADOW.DISABLE",
+		"REPLAY.SHADOW.LIST", "REPLAY.SHADOW.FORGET",
+		"REPLAY.SHADOW.STATS":
+		c.replayShadowCmd(strings.TrimPrefix(cmd, "REPLAY.SHADOW."), args)
+
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────
 	case "AGENT.CALL", "AGENT.STORE", "AGENT.PROFILE", "AGENT.FORGET", "AGENT.STATS", "AGENT.PURGE":

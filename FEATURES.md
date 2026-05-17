@@ -1433,3 +1433,151 @@ Per-store time-travel exists (KEY.AT, DOC.FRESH, MEMORY history); TEMPORAL compo
 - `c.eng.RecordWrite()` propagates to replicas via the standard path.
 - ACL: every Phase 15 command lives in `@ai` + `@read`/`@write` + `@fast` or `@slow` (ROOT/PROVE/RECEIPT/REPLAY are slow). ATTEST.FORGET is `@dangerous` since it destroys audit history.
 - ATTEST.VERIFY is intentionally STATELESS — auditors verify offline without consulting the engine. The supplied reference implementation is the source of truth; production auditors are encouraged to re-implement it in their own language for true independence.
+
+---
+
+## Phase 16 — settlement, chaos, continual, DR + seven rapid-fire
+
+The honest selection criterion this round (applied for the first time): only categories where a real user is plausibly blocked — not "the next list I could generate." Four load-bearing (double-entry settlement, chaos engineering, catastrophic-forgetting guards, DR drill) plus seven rapid-fire (bargaining, proof receipts, repro seeds, regwatch, semantic egress, license, replay-shadow).
+
+State lives in `internal/llmstack/`; RESP handlers in `internal/resp/commands_aiops_v39..v41.go`; AOF write-set in `internal/resp/writeset.go`; ACL categories in `internal/acl/categories.go`. All under the `@ai` category.
+
+### ACCT.* + SETTLE.* — atomic double-entry bookkeeping
+
+The load-bearing primitive for the agent economy. Every financial primitive earlier shipped *measures*; SETTLE *transacts* with invariant enforcement: Σ debits == Σ credits, atomic post or full rollback, no overdraft on asset/expense accounts, idempotency on txn-id, global RECONCILE proves the invariant.
+
+| Command | What it does | Where |
+|---|---|---|
+| `ACCT.OPEN name TYPE asset\|liability\|equity\|income\|expense [CURRENCY iso] [NO_NEGATIVE 0\|1]` | Open account with chart-of-accounts type. | `llmstack/settle.go` + `resp/commands_aiops_v39.go` |
+| `ACCT.BALANCE name` | Current point-in-time balance + type + currency. | same |
+| `ACCT.STATEMENT name [SINCE unix] [UNTIL unix] [LIMIT n]` | Chronological entries with running balance. | same |
+| `ACCT.CLOSE name` / `ACCT.LIST` | Lifecycle. | same |
+| `SETTLE.TXN txn-id [MEMO m] DEBIT a amt [DEBIT ...] CREDIT b amt [CREDIT ...]` | Atomic balanced post. Idempotent on txn-id. | same |
+| `SETTLE.REVERSE original-id new-id [MEMO m]` | Atomic reversing entry. | same |
+| `SETTLE.RECONCILE` | Prove Σ debits == Σ credits globally — auditor's button. | same |
+| `SETTLE.GET txn-id` / `SETTLE.STATS` | | same |
+
+### CHAOS.* — fault injection for the AI stack
+
+If your AUTO rules, BLAST kill-switches, and FORECAST alarms never fire in production before a real incident, you don't actually know whether they work. CHAOS synthesizes the failure in a controlled window, with optional rate + scope, so the rest of the governance surface is *tested* rather than merely *present*.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CHAOS.INJECT id TARGET t KIND k [RATE r] [DURATION ms] [SCOPE k=v,...] [REASON r]` | Synthesize a failure on a target primitive. | `llmstack/chaos.go` + `resp/commands_aiops_v39.go` |
+| `CHAOS.CHECK target kind [scope-k v ...]` | Primitive integration point — call before doing real work; act on injected=1. | same |
+| `CHAOS.REVOKE` / `ACTIVE` / `HISTORY` / `STATS` | | same |
+
+CHAOS.INJECT is in `@dangerous` — synthetic failure injection is destructive of confidence, so the ACL keeps it gated.
+
+### CONTINUAL.* — online-learning catastrophic-forgetting guards
+
+Every learner in the engine (TRUST, BANDIT, FED) drifts forever in one direction without protection. CONTINUAL is the classic rehearsal-on-anchor-set guard wired as a first-class primitive: held-out gold standard, periodic rehearsal, drift detection, rollback to a blessed checkpoint.
+
+| Command | What it does | Where |
+|---|---|---|
+| `CONTINUAL.CHECKPOINT learner-id checkpoint-id payload [BLESS 0\|1]` | Snapshot the learner; BLESS marks it the reference. | `llmstack/continual.go` + `resp/commands_aiops_v39.go` |
+| `CONTINUAL.ANCHOR learner anchor input expected [TOL f]` | Register one gold-standard (input, expected). | same |
+| `CONTINUAL.REHEARSE learner obs-id anchor observed` | Post the learner's current output for an anchor. | same |
+| `CONTINUAL.DIVERGENCE learner-id` | pass_rate + verdict (HEALTHY/DRIFTING/FORGOTTEN/INSUFFICIENT). | same |
+| `CONTINUAL.ROLLBACK learner-id [TO checkpoint-id]` | Returns the payload to restore. | same |
+| `CONTINUAL.LIST` / `FORGET` / `STATS` | | same |
+
+### DR.* — disaster recovery drill
+
+Answers "is any of this actually recoverable?" — the question 15 phases of state never asked. SNAPSHOT captures every store's serialised state. RESTORE_INTO assembles a shadow registry. ASSERT compares hashes per-store. PROMOTE records operator intent if a real recovery is executed.
+
+| Command | What it does | Where |
+|---|---|---|
+| `DR.SNAPSHOT bundle-id [META k v ...]` | Open empty bundle. | `llmstack/dr.go` + `resp/commands_aiops_v40.go` |
+| `DR.CONTRIBUTE bundle store payload` | Each store hands in its serialised state. | same |
+| `DR.SEAL bundle-id` | Lock for restore. | same |
+| `DR.RESTORE_INTO source shadow` | Create shadow copy (sealed). | same |
+| `DR.ASSERT source shadow` | Per-store SHA-256 match + all_match + diverged + missing/extra. | same |
+| `DR.PROMOTE bundle-id` | Record operator intent (applying is the stores' job). | same |
+| `DR.GET` / `PAYLOAD` / `LIST` / `FORGET` / `STATS` | | same |
+
+DR.PROMOTE is `@dangerous` since promoting a stale bundle as live could clobber work.
+
+### NEGOTIATE.* — bilateral agent bargaining
+
+Distinct from MARKET (auction) and DEBATE (deliberation). Structured offer / counter / accept / reject / walk-away with BATNA reservation values. The protocol is the contract so agents from different vendors can bargain.
+
+| Command | What it does | Where |
+|---|---|---|
+| `NEGOTIATE.OPEN id buyer seller asset [BATNA_BUYER f] [BATNA_SELLER f] [DEADLINE ms]` | Open. | `llmstack/negotiate.go` + `resp/commands_aiops_v40.go` |
+| `NEGOTIATE.OFFER/COUNTER id party price [TERMS "..."]` | Move. | same |
+| `NEGOTIATE.ACCEPT id party` | Close at current offer; guards against own-BATNA breach. | same |
+| `NEGOTIATE.REJECT/WALK id party [REASON r]` | Terminal exits. | same |
+| `NEGOTIATE.GET` / `LIST` / `FORGET` / `STATS` | | same |
+
+### PROOF.* — verifiable computation receipts
+
+Beyond audit logs (ATTEST). COMMIT canonicalises (model, prompt, params) → H_commit. PRODUCE binds output to commit: receipt = (commit_id, H_commit, H_output, issued_at). VERIFY is stateless — caller can re-implement in any language using only the receipt JSON.
+
+| Command | What it does | Where |
+|---|---|---|
+| `PROOF.COMMIT id model prompt params-json` | Returns commit hash. | `llmstack/proof.go` + `resp/commands_aiops_v40.go` |
+| `PROOF.PRODUCE commit-id receipt-id output` | Issue receipt. | same |
+| `PROOF.VERIFY receipt-id model prompt params output` | Stateless binding check. | same |
+| `PROOF.GET` / `LIST` / `FORGET` / `STATS` | | same |
+
+### REPRO.* — deterministic seed bundles
+
+A bundle pins every stochastic decision (BANDIT draw, MARKET tie-break, sampling) so a run is bit-reproducible. USE(bundle, name) returns the same 64-bit seed every time. HASH emits a content hash over the full trace.
+
+| Command | What it does | Where |
+|---|---|---|
+| `REPRO.BUNDLE id [SEED u64] [META k v ...]` | Create bundle. | `llmstack/repro.go` + `resp/commands_aiops_v40.go` |
+| `REPRO.USE bundle name` | Deterministic 64-bit seed for the (bundle, name) pair. | same |
+| `REPRO.TRACE` / `HASH` / `GET` / `LIST` / `FORGET` / `STATS` | | same |
+
+### REGWATCH.* — regulatory-obligation mapper
+
+Maps capability claims to risk tiers (minimal/limited/high/unacceptable) per the EU AI Act shape. RULE declares an obligation; CHECK returns triggered rules + max tier + obligations; CROSS reports tier change from before → after.
+
+| Command | What it does | Where |
+|---|---|---|
+| `REGWATCH.RULE id TIER t MATCHES "kw,kw2" OBLIGATION "..." [JURIS j]` | Register obligation. | `llmstack/regwatch.go` + `resp/commands_aiops_v41.go` |
+| `REGWATCH.CHECK capability-text` | Triggered rules + max tier + obligations. | same |
+| `REGWATCH.CROSS before after` | Tier-bump detection + new rules. | same |
+| `REGWATCH.UNRULE` / `RULES [JURIS j]` / `STATS` | | same |
+
+### EGRESS.* — semantic DLP on outbound generation
+
+ISOLATE guards retrieval-in; EGRESS guards generation-out. Register sensitive-document clusters; CHECK an outbound text and block if max cosine to any registered sample exceeds MIN_BLOCK.
+
+| Command | What it does | Where |
+|---|---|---|
+| `EGRESS.REGISTER cluster text [LABEL l]` | Add one sample to a sensitive cluster. | `llmstack/egress.go` + `resp/commands_aiops_v41.go` |
+| `EGRESS.CHECK text [CLUSTER c] [MIN_BLOCK f]` | Returns blocked + cluster_id + score + reason. | same |
+| `EGRESS.UNREGISTER` / `RESET` / `CLUSTERS` / `STATS` | | same |
+
+### LICENSE.* — source-license tracker
+
+Pre-seeded compatibility matrix (MIT/Apache for commercial = OK; GPL for commercial = blocked; etc.). TAG a source with its license. CHECK an answer's lineage against a declared use; report incompatible sources. Unknown sources default-deny.
+
+| Command | What it does | Where |
+|---|---|---|
+| `LICENSE.TAG source LICENSE name [URL u] [AUTHOR a]` | Attach license. | `llmstack/license.go` + `resp/commands_aiops_v41.go` |
+| `LICENSE.CHECK use SOURCES s1,s2,...` | Blocked + incompatible-sources breakdown. | same |
+| `LICENSE.MATRIX license use` | Single (license, use) compatibility lookup. | same |
+| `LICENSE.COMPAT_SET license use compatible\|incompatible "note"` | Override matrix entries. | same |
+| `LICENSE.UNTAG` / `GET` / `LIST` / `STATS` | | same |
+
+### REPLAY.SHADOW.* — always-on shadow replay
+
+SANDBOX replays historical traffic against a proposed diff; REPLAY.SHADOW runs *live*: every real request is mirrored to a candidate, divergence is computed continuously, alert fires when agree rate drops below the floor.
+
+| Command | What it does | Where |
+|---|---|---|
+| `REPLAY.SHADOW.ENABLE pair-id live-route shadow-route [MIN_AGREE f]` | Open the shadow pair. | `llmstack/replayshadow.go` + `resp/commands_aiops_v41.go` |
+| `REPLAY.SHADOW.RECORD pair req-id LIVE "..." SHADOW "..."` | Post one paired observation. | same |
+| `REPLAY.SHADOW.DIVERGENCE pair-id [LIMIT n]` | Agree rate + mean similarity + top-N divergent + alert. | same |
+| `REPLAY.SHADOW.DISABLE` / `LIST` / `FORGET` / `STATS` | | same |
+
+### Phase 16 persistence + replication
+
+- Every mutating command is in `internal/resp/writeset.go` so AOF replays on restart. Reads (BALANCE/STATEMENT/GET/RECONCILE/DIVERGENCE/CHECK/MATRIX/CHECK/VERIFY/TRACE/HASH/ROLLBACK/CHECK/CROSS/REPORT/DIFF/ASSERT) excluded.
+- `c.eng.RecordWrite()` propagates to replicas via the standard path.
+- ACL: every Phase 16 command lives in `@ai` + `@read`/`@write` + `@fast` (with `@slow` for SETTLE.RECONCILE / DR.RESTORE_INTO / DR.ASSERT). CHAOS.INJECT, DR.PROMOTE, PROOF.FORGET are `@dangerous`.
+- Settlement is the one place strict consistency matters: a single mutex per Settlement instance guarantees cross-account atomicity for every TXN. For higher throughput, a sharded design is straightforward — but invariant preservation is the load-bearing property and is correct as shipped.

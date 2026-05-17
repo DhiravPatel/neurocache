@@ -664,6 +664,23 @@ type Engine struct {
 	Entropy     *llmstack.EntropyMonitor
 	Temporal    *llmstack.TemporalSnapshots
 
+	// Phase 16 — settlement (double-entry bookkeeping with invariant
+	// enforcement), chaos injection, continual-learning guards, DR
+	// drill, plus seven rapid-fire: bargaining, computation proofs,
+	// repro seeds, regwatch, semantic egress DLP, license tracker,
+	// always-on shadow replay.
+	Settlement   *llmstack.Settlement
+	Chaos        *llmstack.ChaosInjector
+	Continual    *llmstack.ContinualLearning
+	DR           *llmstack.DRRegistry
+	Negotiations *llmstack.Negotiations
+	Proofs       *llmstack.ProofRegistry
+	Repro        *llmstack.ReproSeeds
+	RegWatch     *llmstack.RegWatch
+	Egress       *llmstack.EgressGuard
+	License      *llmstack.LicenseTracker
+	ReplayShadow *llmstack.ReplayShadow
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -923,6 +940,21 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Carbon = llmstack.NewCarbonLedger()
 	e.Entropy = llmstack.NewEntropyMonitor()
 	e.Temporal = llmstack.NewTemporalSnapshots()
+
+	// Phase 16 — settlement, chaos, continual, DR, plus the seven
+	// rapid-fire ones.
+	e.Settlement = llmstack.NewSettlement()
+	e.Chaos = llmstack.NewChaosInjector()
+	e.Continual = llmstack.NewContinualLearning()
+	e.DR = llmstack.NewDRRegistry()
+	e.Negotiations = llmstack.NewNegotiations()
+	e.Proofs = llmstack.NewProofRegistry()
+	e.Repro = llmstack.NewReproSeeds()
+	e.RegWatch = llmstack.NewRegWatch()
+	e.Egress = llmstack.NewEgressGuard()
+	e.License = llmstack.NewLicenseTracker()
+	e.ReplayShadow = llmstack.NewReplayShadow()
+
 	// Wire AUTO to read live state from the other Phase 14/15 primitives.
 	e.Auto.SetContext(&autoEvalContextAdapter{e: e})
 

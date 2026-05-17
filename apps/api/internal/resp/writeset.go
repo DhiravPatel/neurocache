@@ -611,6 +611,26 @@ var writeCommands = map[string]bool{
 	"ENTROPY.OBSERVE": true, "ENTROPY.RESET": true,
 	"TEMPORAL.SNAPSHOT": true, "TEMPORAL.CONTRIBUTE": true,
 	"TEMPORAL.CLOSE": true, "TEMPORAL.FORGET": true,
+
+	// Phase 16 — settlement, chaos, continual, DR, negotiate, proof,
+	// repro, regwatch, egress, license, replay-shadow.
+	"ACCT.OPEN": true, "ACCT.CLOSE": true,
+	"SETTLE.TXN": true, "SETTLE.REVERSE": true,
+	"CHAOS.INJECT": true, "CHAOS.REVOKE": true,
+	"CONTINUAL.CHECKPOINT": true, "CONTINUAL.ANCHOR": true,
+	"CONTINUAL.REHEARSE": true, "CONTINUAL.FORGET": true,
+	"DR.SNAPSHOT": true, "DR.CONTRIBUTE": true, "DR.SEAL": true,
+	"DR.RESTORE_INTO": true, "DR.PROMOTE": true, "DR.FORGET": true,
+	"NEGOTIATE.OPEN": true, "NEGOTIATE.OFFER": true, "NEGOTIATE.COUNTER": true,
+	"NEGOTIATE.ACCEPT": true, "NEGOTIATE.REJECT": true, "NEGOTIATE.WALK": true,
+	"NEGOTIATE.FORGET": true,
+	"PROOF.COMMIT": true, "PROOF.PRODUCE": true, "PROOF.FORGET": true,
+	"REPRO.BUNDLE": true, "REPRO.USE": true, "REPRO.FORGET": true,
+	"REGWATCH.RULE": true, "REGWATCH.UNRULE": true,
+	"EGRESS.REGISTER": true, "EGRESS.UNREGISTER": true, "EGRESS.RESET": true,
+	"LICENSE.TAG": true, "LICENSE.UNTAG": true, "LICENSE.COMPAT_SET": true,
+	"REPLAY.SHADOW.ENABLE": true, "REPLAY.SHADOW.RECORD": true,
+	"REPLAY.SHADOW.DISABLE": true, "REPLAY.SHADOW.FORGET": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.
