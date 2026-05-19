@@ -474,6 +474,26 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "AGENTLOOP.START", "AGENTLOOP.STEP", "AGENTLOOP.STATUS",
 		"AGENTLOOP.RESET", "AGENTLOOP.FORGET", "AGENTLOOP.ACTIVE", "AGENTLOOP.STATS":
 		c.agentLoopCmd(strings.TrimPrefix(cmd, "AGENTLOOP."), args)
+	case "DEDUP.SEM.SEEN", "DEDUP.SEM.PEEK", "DEDUP.SEM.ADD",
+		"DEDUP.SEM.RECENT", "DEDUP.SEM.FORGET", "DEDUP.SEM.BUCKETS", "DEDUP.SEM.STATS":
+		c.dedupSemCmd(strings.TrimPrefix(cmd, "DEDUP.SEM."), args)
+	case "PREFIX.REGISTER", "PREFIX.LOOKUP", "PREFIX.HASH",
+		"PREFIX.FORGET", "PREFIX.EVICT", "PREFIX.LIST", "PREFIX.STATS":
+		c.prefixCmd(strings.TrimPrefix(cmd, "PREFIX."), args)
+	case "TOOLBOX.REGISTER", "TOOLBOX.SEARCH", "TOOLBOX.GET",
+		"TOOLBOX.LIST", "TOOLBOX.FORGET", "TOOLBOX.STATS":
+		c.toolboxCmd(strings.TrimPrefix(cmd, "TOOLBOX."), args)
+	case "TRANSLATE.SET", "TRANSLATE.GET", "TRANSLATE.MGET",
+		"TRANSLATE.FORGET", "TRANSLATE.PURGE", "TRANSLATE.SETCAP",
+		"TRANSLATE.SETCOST", "TRANSLATE.STATS":
+		c.translateCmd(strings.TrimPrefix(cmd, "TRANSLATE."), args)
+	case "EMBED.MAT.SET", "EMBED.MAT.DEL", "EMBED.MAT.TOPK",
+		"EMBED.MAT.DOT", "EMBED.MAT.COSINE", "EMBED.MAT.LEN",
+		"EMBED.MAT.LIST", "EMBED.MAT.FORGET", "EMBED.MAT.STATS":
+		c.embedMatCmd(strings.TrimPrefix(cmd, "EMBED.MAT."), args)
+	case "OPCACHE.SET", "OPCACHE.GET", "OPCACHE.FORGET", "OPCACHE.PURGE",
+		"OPCACHE.SETCAP", "OPCACHE.SETCOST", "OPCACHE.STATS":
+		c.opcacheCmd(strings.TrimPrefix(cmd, "OPCACHE."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

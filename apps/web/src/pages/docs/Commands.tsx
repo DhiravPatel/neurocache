@@ -1696,6 +1696,360 @@ AGENTLOOP.STATS
 # total_starts=148200  total_steps=2.1M  total_stops=4820
 # (~3.2% of agent runs hit a budget cap — usually the intended outcome)`,
       },
+      {
+        id: "dedupsem",
+        title: "Semantic deduplication for streams",
+        blurb: (
+          <>
+            High-volume text streams — bug reports, customer
+            complaints, news ingest, agent traces — get the same
+            item rephrased 50 ways. Hash-based dedup misses every
+            paraphrase. The standard fix is cosine over recent
+            items, but apps reimplement the sliding window + the
+            (subtly wrong) eviction policy in every project.{" "}
+            <code>DEDUP.SEM.*</code> gives the cache one command:{" "}
+            <code>SEEN</code> does dedup-check-and-insert in a
+            single round trip over a per-bucket FIFO window. 128-dim
+            hashed-BoW vectors are L2-normalised so cosine reduces
+            to a dot product. <strong>66 µs over a 1000-item window</strong>{" "}
+            — 15k QPS per core.
+          </>
+        ),
+        commands: [
+          { cmd: "DEDUP.SEM.SEEN bucket text [THRESHOLD f] [WINDOW n] [EMBED v1,v2,...]", desc: "Atomic dedup-check-and-insert. Returns [is_dup, similar_id, similar_text, score, new_id]. On a miss, the item is inserted and assigned an ID. Threshold defaults to 0.85; window to 1000." },
+          { cmd: "DEDUP.SEM.PEEK bucket text [THRESHOLD f] [EMBED v,v,...]", desc: "Query-only variant — never inserts. Useful for read-only dedup checks." },
+          { cmd: "DEDUP.SEM.ADD bucket id text [EMBED v,v,...]", desc: "Explicit insert with caller-supplied ID. Bypasses the dedup check." },
+          { cmd: "DEDUP.SEM.RECENT bucket [N n]", desc: "The N most-recent items in the bucket (newest last)." },
+          { cmd: "DEDUP.SEM.FORGET bucket", desc: "Drop a whole bucket." },
+          { cmd: "DEDUP.SEM.BUCKETS", desc: "Every active bucket with current size + configured window." },
+          { cmd: "DEDUP.SEM.STATS", desc: "Total seens / hits / misses / adds / evictions + hit_rate. Drives the dashboard's stream-dedup panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Customer support: dedup paraphrased complaints
+DEDUP.SEM.SEEN tickets "I can't log in on Safari, page just crashes" THRESHOLD 0.75
+# is_dup=0  new_id="a3f7e9"   ← first sighting, recorded
+
+DEDUP.SEM.SEEN tickets "Safari login broken, the page crashes" THRESHOLD 0.75
+# is_dup=1  similar_id="a3f7e9"  score=0.81
+# similar_text="I can't log in on Safari, page just crashes"
+# (App merges into the existing ticket instead of opening a new one)
+
+# Different topic — not deduped
+DEDUP.SEM.SEEN tickets "Refund not received yet" THRESHOLD 0.75
+# is_dup=0  new_id="b1c8d4"   ← genuinely new
+
+# After a day of traffic
+DEDUP.SEM.STATS
+# total_seens=8420  total_hits=3105  hit_rate=0.37
+# (37% of incoming items were paraphrases of recent ones)
+
+# News ingest: stricter threshold for headline dedup
+DEDUP.SEM.SEEN news "Apple announces M5 chip" THRESHOLD 0.90 WINDOW 5000
+
+# Multi-tenant: bucket per tenant
+DEDUP.SEM.SEEN tenant:acme:bugs "<text>" THRESHOLD 0.85`,
+      },
+      {
+        id: "prefix",
+        title: "KV-cache-aware prefix routing",
+        blurb: (
+          <>
+            Modern LLM-serving stacks (vLLM, TGI, SGLang) reuse the
+            KV-cache when prompt prefixes match an already-computed
+            one — frequently a 5-10x speedup on the prefill phase.
+            But this only helps if your routing layer KNOWS which
+            worker has the prefix loaded. Random / round-robin
+            routing leaves most of that win on the table.{" "}
+            <code>PREFIX.*</code> gives the cache a coordination
+            point: workers REGISTER what they have warm; apps
+            LOOKUP and route to the freshest worker. Atomic CAS
+            ops, nested <code>sync.Map</code>, lazy TTL expiry —{" "}
+            <strong>160 ns/op LOOKUP, faster than Redis GET</strong>.
+          </>
+        ),
+        commands: [
+          { cmd: "PREFIX.REGISTER prefix-hash worker [TTL ms]", desc: "Worker just processed a prompt with this prefix — record the claim. TTL defaults to no-expiry (worker explicitly evicts when shutting down)." },
+          { cmd: "PREFIX.LOOKUP prefix-hash", desc: "Return workers that have the prefix warm, ordered most-recently-registered first (LRU front). Apps pick the first as their routing target." },
+          { cmd: "PREFIX.HASH text", desc: "16-hex-char sha256 prefix. Convenience for callers that don't want to hash client-side. Hash the system prompt + few-shot block, NOT the per-request tail." },
+          { cmd: "PREFIX.FORGET prefix-hash [WORKER w]", desc: "Drop one prefix entirely (worker omitted) or just one (prefix, worker) claim." },
+          { cmd: "PREFIX.EVICT worker", desc: "Drop ALL prefix claims for a worker in one call. Used when a worker shuts down (graceful) or is detected dead (heartbeat timeout)." },
+          { cmd: "PREFIX.LIST", desc: "Every registered prefix-hash with its worker count, sorted by worker count desc. Useful for debugging prefix popularity." },
+          { cmd: "PREFIX.STATS", desc: "prefixes / lookups / hits / misses / registers / evictions + hit_rate. Drives the dashboard's KV-cache-reuse panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Stable prefix hash for the system prompt + few-shot block
+PREFIX.HASH "You are a helpful assistant. Examples: Q: foo / A: bar"
+# → "a3f9e7b22d8c1f04"
+
+# On every successful request, the worker registers:
+PREFIX.REGISTER a3f9e7b22d8c1f04 worker-7 TTL 600000
+# OK   (10-minute TTL — KV-cache usually evicted by then anyway)
+
+# Routing layer chooses where to send the next request:
+PREFIX.LOOKUP a3f9e7b22d8c1f04
+# [
+#   {worker: "worker-7",  registered_at_ms: ..., age_ms: 1200},  ← warmest
+#   {worker: "worker-3",  registered_at_ms: ..., age_ms: 45000},
+#   {worker: "worker-12", registered_at_ms: ..., age_ms: 89000}
+# ]
+# (App routes the next request to worker-7 — 5-10x faster prefill)
+
+# Worker shutting down — evict cleanly
+PREFIX.EVICT worker-7
+# → 142   (dropped 142 prefix claims for this worker)
+
+# Dashboard: are we benefiting from cache-aware routing?
+PREFIX.STATS
+# prefixes=1240  total_lookups=58400  total_hits=46200
+# hit_rate=0.79   ← 79% of requests route to a warm worker`,
+      },
+      {
+        id: "toolbox",
+        title: "Tool schema registry with semantic search",
+        blurb: (
+          <>
+            Modern agentic apps register dozens to hundreds of
+            tools — each with a name, description, JSON-schema args,
+            and tags. Two production pains: (1) the function-call
+            manifest balloons (200 tool schemas per LLM call costs
+            tokens AND degrades the model's tool-pick accuracy), and
+            (2) tool discovery via human docs is slow.{" "}
+            <code>TOOLBOX.*</code> solves both with one registry +
+            semantic search:{" "}
+            <code>TOOLBOX.SEARCH "weather questions"</code> returns
+            top-K relevant tools so apps feed a slim manifest to the
+            LLM. Cosine over hashed-BoW or app-supplied embeddings.{" "}
+            <strong>11 µs for 100 tools × 128-dim search</strong>.
+          </>
+        ),
+        commands: [
+          { cmd: "TOOLBOX.REGISTER tool-id name description schema-json [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Register or replace a tool. Schema must be valid JSON (apps usually pass the function-calling args schema verbatim). Optional EMBED for real embeddings; otherwise a hashed-BoW vector is computed from name+description." },
+          { cmd: "TOOLBOX.SEARCH query [K n] [TAGS t1,t2,...] [EMBED v,v,...]", desc: "Top-K tools by semantic match. K defaults to 5. TAGS narrows the candidate set." },
+          { cmd: "TOOLBOX.GET tool-id", desc: "Single tool fetch." },
+          { cmd: "TOOLBOX.LIST [TAGS t1,t2,...]", desc: "Every tool, optionally tag-filtered. Ordered by id." },
+          { cmd: "TOOLBOX.FORGET tool-id", desc: "Drop a tool. Returns 1 if it existed." },
+          { cmd: "TOOLBOX.STATS", desc: "Total tools / registers / searches / returns. Drives the dashboard's tool-discovery panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Register 50 tools at app boot
+TOOLBOX.REGISTER get_weather get_weather \\
+  "Fetch current weather conditions for a city" \\
+  '{"type":"object","properties":{"city":{"type":"string"}}}' \\
+  TAGS weather,travel
+
+TOOLBOX.REGISTER web_search web_search \\
+  "Search the web for general queries" \\
+  '{"type":"object","properties":{"q":{"type":"string"}}}' \\
+  TAGS research,realtime
+
+TOOLBOX.REGISTER calculator calculator \\
+  "Evaluate arithmetic expressions" \\
+  '{"type":"object","properties":{"expr":{"type":"string"}}}' \\
+  TAGS math
+
+# For each user request, find relevant tools (not all 50)
+TOOLBOX.SEARCH "what's the temperature in paris" K 3
+# [
+#   {id: get_weather, score: 0.71, schema: "...", tags: [weather, travel]},
+#   {id: web_search,  score: 0.34, schema: "...", tags: [research, realtime]},
+#   {id: calculator,  score: 0.05, schema: "...", tags: [math]}
+# ]
+# (App passes only the top 3 to the LLM — 6x fewer tokens, better pick)
+
+# Multi-tenant: filter by tenant tag
+TOOLBOX.SEARCH "anything" K 10 TAGS tenant:acme
+
+# Dashboard
+TOOLBOX.STATS
+# tools=58  total_registers=58  total_searches=128400  total_returns=412000
+# (avg 3.2 tools returned per search across the day)`,
+      },
+      {
+        id: "translate",
+        title: "Multi-language translation cache",
+        blurb: (
+          <>
+            Translation is one of the most cacheable LLM-adjacent
+            workloads — every text translates identically every time,
+            and queries repeat across users + tenants. The upstream
+            APIs are pricey (Google ~$20/M chars, DeepL ~$25/M).
+            Apps still pay for the same translation hundreds of times
+            because nobody centralised the cache.{" "}
+            <code>TRANSLATE.*</code> is a sub-microsecond
+            (source-lang, target-lang, text) → translation cache
+            with per-language-pair hit stats and bulk{" "}
+            <code>MGET</code> for paragraph-level fan-out.{" "}
+            <strong>272 ns/op GET — parallel-safe, ~3.7M ops/sec.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "TRANSLATE.SET source target text translation [EX sec | PX ms]", desc: "Store a translation with optional TTL." },
+          { cmd: "TRANSLATE.GET source target text", desc: "Return the cached translation or nil." },
+          { cmd: "TRANSLATE.MGET source target text1 text2 ...", desc: "Bulk fetch for the same language pair. Returns array of {text, translation, hit} preserving input order. Single round-trip." },
+          { cmd: "TRANSLATE.FORGET source target text", desc: "Drop one entry. Returns 1 if it existed." },
+          { cmd: "TRANSLATE.PURGE [SOURCE s] [TARGET t]", desc: "Wipe everything, or just one lang's entries (filter by source, target, or both)." },
+          { cmd: "TRANSLATE.SETCAP n", desc: "Soft eviction threshold (default 100k)." },
+          { cmd: "TRANSLATE.SETCOST usd", desc: "Configure $/upstream-call so STATS reports saved_usd." },
+          { cmd: "TRANSLATE.STATS", desc: "Global counters + per-pair hit rate (en|es, en|fr...). Drives the dashboard's i18n panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Cache translations as the app receives them
+TRANSLATE.SETCOST 0.00002              # Google charges ~$20/M chars
+TRANSLATE.SET en es "Welcome back!" "¡Bienvenido de nuevo!"
+TRANSLATE.SET en es "Order shipped" "Pedido enviado"
+
+# Next request: instant cache hit
+TRANSLATE.GET en es "Welcome back!"
+# → "¡Bienvenido de nuevo!"
+
+# Bulk fetch for paragraph-level translation
+TRANSLATE.MGET en es \\
+  "Welcome back!" \\
+  "Your order is on the way" \\
+  "Order shipped"
+# [
+#   {text: "Welcome back!",            translation: "...",  hit: 1},
+#   {text: "Your order is on the way", translation: "",     hit: 0},  ← upstream needed
+#   {text: "Order shipped",            translation: "...",  hit: 1}
+# ]
+# (App calls upstream only for the misses)
+
+# Tenant-scoped purge after a deploy
+TRANSLATE.PURGE SOURCE en TARGET fr
+
+# Dashboard
+TRANSLATE.STATS
+# entries=124000  hit_rate=0.83  saved_calls=1.2M  saved_usd=24.00
+# pairs=[
+#   {pair: en|es, hits: 480k, misses: 90k, hit_rate: 0.84},
+#   {pair: en|fr, hits: 320k, misses: 75k, hit_rate: 0.81},
+#   ...
+# ]`,
+      },
+      {
+        id: "embedmat",
+        title: "Inline embedding matrix with top-K cosine",
+        blurb: (
+          <>
+            "I want to do top-K cosine over a few thousand vectors"
+            is too small for a full vector DB but too slow to do
+            client-side (you'd ship every vector across the network).{" "}
+            <code>EMBED.MAT.*</code> keeps the matrix in the cache
+            and runs cosine server-side: vectors stored L2-normalised
+            so the hot path reduces to a single dot product per row.{" "}
+            <strong>7.77 ms for 10k rows × 768 dims</strong> — beats
+            a network roundtrip to Pinecone (~10-50 ms). Per-prefix
+            FILTER for multi-tenant matrices.
+          </>
+        ),
+        commands: [
+          { cmd: "EMBED.MAT.SET matrix-id row-id v1,v2,v3,...", desc: "Insert or replace a row. First insert fixes the matrix dimensionality; subsequent rows must match. Vector is L2-normalised in place. Zero-norm rejected." },
+          { cmd: "EMBED.MAT.DEL matrix-id row-id", desc: "Remove a row. Returns 1 if it existed." },
+          { cmd: "EMBED.MAT.TOPK matrix-id query-vec K [FILTER prefix]", desc: "Top-K rows by cosine similarity. K defaults to 10. FILTER narrows by row_id prefix (e.g. multi-tenant)." },
+          { cmd: "EMBED.MAT.COSINE matrix-id row-a row-b", desc: "Cosine similarity between two stored rows. Returns bulk float or nil if either row is missing." },
+          { cmd: "EMBED.MAT.DOT matrix-id row-a row-b", desc: "Same as COSINE (vectors stored normalised — dot = cosine). Provided for API symmetry." },
+          { cmd: "EMBED.MAT.LEN matrix-id", desc: "Row count, 0 if matrix not found." },
+          { cmd: "EMBED.MAT.LIST matrix-id [PREFIX p]", desc: "All row_ids, optionally prefix-filtered, sorted." },
+          { cmd: "EMBED.MAT.FORGET matrix-id", desc: "Drop a whole matrix. Returns the number of rows removed." },
+          { cmd: "EMBED.MAT.STATS", desc: "Total sets / topks / rows + per-matrix size + dim. Drives the dashboard's small-vector-search panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Build a doc-similarity matrix
+EMBED.MAT.SET docs doc-1 0.12,0.45,-0.31,0.78,...
+EMBED.MAT.SET docs doc-2 0.05,0.92,-0.18,0.34,...
+EMBED.MAT.SET docs doc-3 0.88,-0.12,0.45,-0.22,...
+# (... 10k docs ...)
+
+# Top-5 most similar to a query embedding
+EMBED.MAT.TOPK docs 0.11,0.44,-0.30,0.77,... 5
+# [
+#   {row_id: doc-1, score: 0.9982},
+#   {row_id: doc-7, score: 0.8341},
+#   {row_id: doc-92, score: 0.7720},
+#   ...
+# ]
+
+# Multi-tenant: filter by row_id prefix
+EMBED.MAT.SET docs tenant_acme:doc-1 ...
+EMBED.MAT.SET docs tenant_globex:doc-1 ...
+EMBED.MAT.TOPK docs <query> 10 FILTER tenant_acme:
+# (only acme's docs)
+
+# Per-pair similarity for explanation
+EMBED.MAT.COSINE docs doc-1 doc-7
+# → "0.834102"
+
+# Cleanup after deprecating an index
+EMBED.MAT.FORGET old-docs
+# → 5420   (rows removed)`,
+      },
+      {
+        id: "opcache",
+        title: "Deterministic LLM operation memoisation",
+        blurb: (
+          <>
+            Different from the semantic cache — that one matches{" "}
+            <em>paraphrases</em>; <code>OPCACHE.*</code> matches{" "}
+            <strong>exactly</strong> on (op_id, input, model, params).
+            For temperature=0 workloads where identical inputs must
+            produce bit-identical outputs:
+            <strong> code generation, SQL synthesis, named-entity
+            extraction, function-call argument generation</strong>.
+            A paraphrase match would be wrong here — exact-match is
+            valuable because the same app sends the same prompt
+            repeatedly across users.{" "}
+            <strong>269 ns/op GET — sub-microsecond, parallel-safe.</strong>
+          </>
+        ),
+        commands: [
+          { cmd: "OPCACHE.SET op-id input output [MODEL m] [PARAMS json] [EX sec | PX ms]", desc: "Store output keyed by the full (op_id, input, model, params) tuple. Different model or params → different cache entry (correctly — outputs would differ)." },
+          { cmd: "OPCACHE.GET op-id input [MODEL m] [PARAMS json]", desc: "Exact-match lookup. Returns the cached output or nil." },
+          { cmd: "OPCACHE.FORGET op-id input [MODEL m] [PARAMS json]", desc: "Drop one entry." },
+          { cmd: "OPCACHE.PURGE [OP op-id]", desc: "Wipe all or just one op_id's entries." },
+          { cmd: "OPCACHE.SETCAP n", desc: "Soft eviction threshold (default 100k)." },
+          { cmd: "OPCACHE.SETCOST usd", desc: "Configure $/upstream-call so STATS reports saved_usd." },
+          { cmd: "OPCACHE.STATS", desc: "Global hit rate + per-op_id breakdown. Drives the dashboard's deterministic-ops panel." },
+        ],
+        examplesLang: "bash",
+        examples: `# Cache code completions (deterministic at temp=0)
+OPCACHE.SETCOST 0.005                  # $5/M tokens upstream
+
+OPCACHE.SET code_complete \\
+  "def fibonacci(n):" \\
+  "def fibonacci(n):\\n    if n < 2: return n\\n    return fibonacci(n-1) + fibonacci(n-2)" \\
+  MODEL gpt-4 PARAMS '{"temp":0,"max_tokens":200}'
+
+# Next user types the same prefix → instant cached completion
+OPCACHE.GET code_complete "def fibonacci(n):" \\
+  MODEL gpt-4 PARAMS '{"temp":0,"max_tokens":200}'
+# → cached completion
+
+# Different model or temp → different cache entry (correct!)
+OPCACHE.GET code_complete "def fibonacci(n):" \\
+  MODEL claude PARAMS '{"temp":0,"max_tokens":200}'
+# → nil (claude wasn't cached)
+
+# SQL generation from natural language
+OPCACHE.SET sql_gen "users registered last week" \\
+  "SELECT * FROM users WHERE created_at >= NOW() - INTERVAL '7 days'"
+
+# Named-entity extraction
+OPCACHE.SET ner "Tim Cook met with President Macron in Paris yesterday" \\
+  '[{"text":"Tim Cook","type":"PERSON"},{"text":"President Macron","type":"PERSON"},{"text":"Paris","type":"LOCATION"}]'
+
+# Cleanup after a prompt rev
+OPCACHE.PURGE OP code_complete
+# → 4820   (entries dropped — re-cache with new prompt)
+
+# Dashboard
+OPCACHE.STATS
+# total_gets=820000  hit_rate=0.61  saved_calls=500k  saved_usd=2500.00
+# ops=[
+#   {op_id: code_complete, hits: 280k, misses: 84k, hit_rate: 0.77},
+#   {op_id: sql_gen,       hits: 145k, misses: 65k, hit_rate: 0.69},
+#   {op_id: ner,           hits:  75k, misses: 50k, hit_rate: 0.60}
+# ]`,
+      },
     ],
   },
 

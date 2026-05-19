@@ -240,6 +240,44 @@ type Engine struct {
 	// budgets. Lock-free, sub-100ns per step.
 	AgentLoop *llmstack.AgentLoopTracker
 
+	// Semantic deduplication for streams. SEEN does dedup-check-
+	// and-insert in a single round trip: cosine over a per-bucket
+	// FIFO window. Catches paraphrases that hash dedup misses.
+	// 128-dim hashed-BoW fallback or app-supplied embeddings.
+	SemDedup *llmstack.SemDeduper
+
+	// KV-cache-aware prefix routing. Tracks which workers have
+	// which prompt prefixes warm so apps route to a warm worker
+	// instead of round-robin. Lock-free reads via sync.Map nested
+	// in sync.Map. Sub-microsecond LOOKUP at typical N.
+	PrefixRouter *llmstack.PrefixRouter
+
+	// Tool schema registry with semantic capability search. Apps
+	// register N tools once; SEARCH returns the top-K relevant to
+	// a query so the LLM's function-call manifest stays slim.
+	// Replaces the "give me only tools relevant to THIS query"
+	// glue every team writes.
+	Toolbox *llmstack.ToolBox
+
+	// Translation cache by (source_lang, target_lang, text).
+	// Translation calls are massively cacheable — same input always
+	// produces the same output and queries repeat across users.
+	// Sub-microsecond hash-keyed lookup; per-language-pair stats.
+	Translate *llmstack.TranslateCache
+
+	// Inline embedding matrix with server-side cosine top-K.
+	// Replaces "ship vectors to a separate vector DB just for math"
+	// for small-scale (sub-100k row) retrieval workloads. Vectors
+	// stored L2-normalised so cosine = dot product on the hot path.
+	EmbedMat *llmstack.EmbedMatrix
+
+	// Deterministic LLM operation memoisation. Exact-match cache
+	// keyed by (op_id, input, model, params) — for temp=0 workloads
+	// where the same prompt MUST yield the same output (code
+	// generation, SQL synthesis, structured extraction). Distinct
+	// from the semantic cache which matches paraphrases.
+	OpCache *llmstack.OpCache
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -402,6 +440,12 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Citations = llmstack.NewCitationExtractor()
 	e.Shrinker = llmstack.NewPromptShrinker(e.Tokens)
 	e.AgentLoop = llmstack.NewAgentLoopTracker()
+	e.SemDedup = llmstack.NewSemDeduper()
+	e.PrefixRouter = llmstack.NewPrefixRouter()
+	e.Toolbox = llmstack.NewToolBox()
+	e.Translate = llmstack.NewTranslateCache()
+	e.EmbedMat = llmstack.NewEmbedMatrix()
+	e.OpCache = llmstack.NewOpCache()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

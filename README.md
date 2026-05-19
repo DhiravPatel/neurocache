@@ -513,6 +513,66 @@ AGENTLOOP.STEP sess-1234 TOKENS 850 TOOL_CALL 1
 # ... after many turns:
 AGENTLOOP.STEP sess-1234 TOKENS 1200 TOOL_CALL 1
 # should_stop=1  reason="max_tokens exceeded (51200 > 50000)"
+
+# Semantic deduplication for high-volume streams — catches
+# paraphrases that hash dedup misses. SEEN does atomic
+# check-and-insert in a single round-trip. 66 µs over a
+# 1000-item window.
+DEDUP.SEM.SEEN tickets "I can't log in on Safari" THRESHOLD 0.75
+# is_dup=0  new_id="a3f7e9"
+DEDUP.SEM.SEEN tickets "Safari login broken" THRESHOLD 0.75
+# is_dup=1  similar_id="a3f7e9"  score=0.81
+#                                ↑ merge into existing ticket
+
+# KV-cache-aware prefix routing — vLLM/TGI/SGLang reuse the KV
+# cache when prompt prefixes match (5-10x faster prefill). Apps
+# REGISTER what's warm; LOOKUP routes to the freshest worker.
+# ~160 ns/op — faster than Redis GET.
+PREFIX.HASH "You are a helpful assistant. Examples..."
+# → "a3f9e7b22d8c1f04"
+PREFIX.REGISTER a3f9e7b22d8c1f04 worker-7 TTL 600000
+PREFIX.LOOKUP a3f9e7b22d8c1f04
+# [{worker: worker-7, age_ms: 1200}, ...]  ← route to first
+
+# Tool schema registry with semantic capability search — apps
+# register 50+ tools once; SEARCH returns top-K relevant per
+# request, keeping the LLM's function-call manifest slim.
+# 11 µs for 100 tools × 128-dim cosine.
+TOOLBOX.REGISTER get_weather get_weather \
+  "Fetch current weather for a city" \
+  '{"type":"object","properties":{"city":{"type":"string"}}}' \
+  TAGS weather
+TOOLBOX.SEARCH "temperature in paris" K 3
+# top-3 tools by semantic match — only these go into the prompt
+
+# Multi-language translation cache — single sha256 lookup, per-pair
+# stats, bulk MGET for paragraph-level fan-out. Google/DeepL charge
+# $20-25/M chars; this drops every cache hit to $0. ~272 ns/op GET.
+TRANSLATE.SETCOST 0.00002
+TRANSLATE.SET en es "Welcome back!" "¡Bienvenido de nuevo!"
+TRANSLATE.MGET en es "Welcome back!" "Order shipped" "..." \
+# → array with hit flag per text; app fans out only the misses
+
+# Inline embedding matrix with server-side cosine top-K. Beats a
+# roundtrip to Pinecone for sub-100k row matrices. Vectors stored
+# L2-normalised so cosine = dot. 7.77 ms for 10k×768 search.
+EMBED.MAT.SET docs doc-1 0.12,0.45,-0.31,...
+EMBED.MAT.SET docs doc-2 0.05,0.92,-0.18,...
+EMBED.MAT.TOPK docs 0.11,0.44,-0.30,... 5
+# top-5 most similar by cosine
+EMBED.MAT.COSINE docs doc-1 doc-2     # → "0.834102"
+
+# Deterministic LLM op memoisation — exact-match cache for temp=0
+# workloads (code gen, SQL synthesis, NER) where you NEED the same
+# answer. Different from semantic cache which matches paraphrases.
+# ~269 ns/op GET, parallel-safe.
+OPCACHE.SETCOST 0.005
+OPCACHE.SET code_complete "def fibonacci(n):" "<completion>" \
+  MODEL gpt-4 PARAMS '{"temp":0}'
+OPCACHE.GET code_complete "def fibonacci(n):" \
+  MODEL gpt-4 PARAMS '{"temp":0}'
+# → cached completion (exact-match — different model = different entry)
+OPCACHE.STATS                         # per-op hit_rate + saved_usd
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)

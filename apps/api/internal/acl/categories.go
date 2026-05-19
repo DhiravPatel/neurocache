@@ -619,6 +619,62 @@ var registry = map[string]commandInfo{
 	"AGENTLOOP.FORGET": {[]string{CatAI, CatWrite, CatFast}},
 	"AGENTLOOP.ACTIVE": {[]string{CatAI, CatRead, CatFast}},
 	"AGENTLOOP.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// DEDUP.SEM.* — semantic dedup for high-volume streams.
+	"DEDUP.SEM.SEEN":    {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.PEEK":    {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.RECENT":  {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"DEDUP.SEM.BUCKETS": {[]string{CatAI, CatRead, CatFast}},
+	"DEDUP.SEM.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// PREFIX.* — KV-cache-aware prefix routing.
+	"PREFIX.REGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.LOOKUP":   {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.HASH":     {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.EVICT":    {[]string{CatAI, CatWrite, CatFast}},
+	"PREFIX.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"PREFIX.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// TOOLBOX.* — tool schema registry w/ semantic search.
+	"TOOLBOX.REGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLBOX.SEARCH":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.GET":      {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"TOOLBOX.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLBOX.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// TRANSLATE.* — multi-language translation cache.
+	"TRANSLATE.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"TRANSLATE.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"TRANSLATE.MGET":    {[]string{CatAI, CatRead, CatFast}},
+	"TRANSLATE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"TRANSLATE.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"TRANSLATE.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"TRANSLATE.SETCOST": {[]string{CatAI, CatWrite, CatFast}},
+	"TRANSLATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// EMBED.MAT.* — inline embedding matrix + top-K cosine search.
+	"EMBED.MAT.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"EMBED.MAT.DEL":    {[]string{CatAI, CatWrite, CatFast}},
+	"EMBED.MAT.TOPK":   {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.MAT.DOT":    {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.MAT.COSINE": {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.MAT.LEN":    {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.MAT.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"EMBED.MAT.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"EMBED.MAT.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// OPCACHE.* — deterministic LLM op memoisation.
+	"OPCACHE.SET":     {[]string{CatAI, CatWrite, CatFast}},
+	"OPCACHE.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"OPCACHE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"OPCACHE.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"OPCACHE.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"OPCACHE.SETCOST": {[]string{CatAI, CatWrite, CatFast}},
+	"OPCACHE.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
