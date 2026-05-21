@@ -278,6 +278,46 @@ type Engine struct {
 	// from the semantic cache which matches paraphrases.
 	OpCache *llmstack.OpCache
 
+	// Per-list sorted-string prefix completion. Sub-microsecond
+	// SUGGEST for chat suggestion UIs, command palettes, gazetteer
+	// matching, NER lookups. Score-weighted top-K.
+	Autocomplete *llmstack.Autocomplete
+
+	// Multi-step workflow state machine with named artifact storage.
+	// Apps DEFINE a chain, START runs, DONE each step (storing the
+	// artifact); RESUME after a crash returns the next pending step
+	// + every artifact produced so far. Crash-safe agentic
+	// orchestration without losing intermediate work.
+	ChainState *llmstack.ChainStateMgr
+
+	// Mixture-of-Experts router. Routes queries to the right expert
+	// model by combining cosine capability match × live success-
+	// rate health. Atomic counter updates from RECORD; lock-free
+	// ROUTE hot path. Smart model selection without hand-coded
+	// rules.
+	MoE *llmstack.MoERouter
+
+	// Confidence calibration. Tracks (predicted, actual) pairs in a
+	// rolling sample buffer; exposes a reliability curve + Expected
+	// Calibration Error + a CALIBRATE call that maps a raw
+	// confidence to the empirical hit rate the cache has measured
+	// for its bin. Apps use this to gate decisions on true
+	// probability instead of the model's uncalibrated raw output.
+	Confidence *llmstack.ConfidenceCalibrator
+
+	// Input distribution drift detector. Watches a per-tracker
+	// rolling window of text observations against a baseline n-gram
+	// bag; reports drift score (1 - Jaccard) + verdict
+	// (stable/drifting/diverged). Catches silent shifts in prompt
+	// distribution that standard latency/error monitoring misses.
+	Drift *llmstack.DriftDetector
+
+	// AI-generated text detector. Statistical-fingerprint pre-
+	// filter (AI vocabulary, em-dash density, bullet structure,
+	// paragraph uniformity, modifier density) plus operator-added
+	// custom regexes. Fast triage for trust & safety pipelines.
+	Watermark *llmstack.WatermarkDetector
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -446,6 +486,12 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Translate = llmstack.NewTranslateCache()
 	e.EmbedMat = llmstack.NewEmbedMatrix()
 	e.OpCache = llmstack.NewOpCache()
+	e.Autocomplete = llmstack.NewAutocomplete()
+	e.ChainState = llmstack.NewChainStateMgr()
+	e.MoE = llmstack.NewMoERouter()
+	e.Confidence = llmstack.NewConfidenceCalibrator()
+	e.Drift = llmstack.NewDriftDetector()
+	e.Watermark = llmstack.NewWatermarkDetector()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

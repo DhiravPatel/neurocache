@@ -675,6 +675,61 @@ var registry = map[string]commandInfo{
 	"OPCACHE.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
 	"OPCACHE.SETCOST": {[]string{CatAI, CatWrite, CatFast}},
 	"OPCACHE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// AUTOCOMPLETE.* — radix-trie prefix completion.
+	"AUTOCOMPLETE.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"AUTOCOMPLETE.SUGGEST": {[]string{CatAI, CatRead, CatFast}},
+	"AUTOCOMPLETE.DEL":     {[]string{CatAI, CatWrite, CatFast}},
+	"AUTOCOMPLETE.SIZE":    {[]string{CatAI, CatRead, CatFast}},
+	"AUTOCOMPLETE.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"AUTOCOMPLETE.FORGET":  {[]string{CatAI, CatWrite, CatFast}},
+	"AUTOCOMPLETE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CHAINSTATE.* — multi-step workflow state machine.
+	"CHAINSTATE.DEFINE":        {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.START":         {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.DONE":          {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.FAIL":          {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.RESUME":        {[]string{CatAI, CatRead, CatFast}},
+	"CHAINSTATE.ARTIFACT":      {[]string{CatAI, CatRead, CatFast}},
+	"CHAINSTATE.STATUS":        {[]string{CatAI, CatRead, CatFast}},
+	"CHAINSTATE.RUNS":          {[]string{CatAI, CatRead, CatFast}},
+	"CHAINSTATE.FORGET":        {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.FORGET_CHAIN":  {[]string{CatAI, CatWrite, CatFast}},
+	"CHAINSTATE.STATS":         {[]string{CatAI, CatRead, CatFast}},
+
+	// MOE.* — mixture-of-experts router.
+	"MOE.EXPERT.REGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"MOE.ROUTE":           {[]string{CatAI, CatRead, CatFast}},
+	"MOE.RECORD":          {[]string{CatAI, CatWrite, CatFast}},
+	"MOE.EXPERTS":         {[]string{CatAI, CatRead, CatFast}},
+	"MOE.FORGET":          {[]string{CatAI, CatWrite, CatFast}},
+	"MOE.STATS":           {[]string{CatAI, CatRead, CatFast}},
+
+	// CONFIDENCE.* — calibration via reliability bins.
+	"CONFIDENCE.RECORD":    {[]string{CatAI, CatWrite, CatFast}},
+	"CONFIDENCE.CURVE":     {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.ECE":       {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.CALIBRATE": {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONFIDENCE.MODELS":    {[]string{CatAI, CatRead, CatFast}},
+	"CONFIDENCE.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// DRIFT.* — input distribution drift detection.
+	"DRIFT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.OBSERVE":  {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.SCORE":    {[]string{CatAI, CatRead, CatFast}},
+	"DRIFT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"DRIFT.TRACKERS": {[]string{CatAI, CatRead, CatFast}},
+	"DRIFT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// WATERMARK.* — AI-generated text detector.
+	"WATERMARK.SCORE":          {[]string{CatAI, CatRead, CatFast}},
+	"WATERMARK.PATTERN.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"WATERMARK.PATTERN.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"WATERMARK.PATTERN.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"WATERMARK.STATS":          {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
