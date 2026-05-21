@@ -635,6 +635,55 @@ DRIFT.SCORE support                   # → score=0.71 verdict=diverged
 WATERMARK.SCORE "Navigating the intricate tapestry of modern software..."
 # score=0.74  verdict=ai
 WATERMARK.PATTERN.ADD ai-signature "(?i)as an ai" 1.0
+
+# Matryoshka 3-pass hierarchical embedding retrieval — stores
+# 128-dim + 256-dim truncations alongside the full vector. TOPK
+# runs 128-dim full scan → 256-dim refine → full-dim final.
+# 4× faster than EMBED.MAT.TOPK at 10k × 768 dims (2.0 ms vs 8.1 ms).
+MATRYOSHKA.SET docs doc-1 0.12,0.45,-0.31,0.78,...   # 768 dims
+MATRYOSHKA.TOPK docs <query-vec> 10
+# (drop-in faster replacement; same API as EMBED.MAT)
+
+# Int8-quantized embedding matrix — 8× less memory, 2× faster
+# compute. <0.5% recall loss at top-10. 2× faster than EMBED.MAT.TOPK.
+VEC.QUANT.SET docs doc-1 0.12,0.45,-0.31,...
+VEC.QUANT.TOPK docs <query-vec> 10                    # 3.9 ms vs 8.1 ms
+VEC.QUANT.STATS                                       # bytes_per_row=784 (vs 6144)
+
+# Bulk pooling for chunk → doc embeddings — replaces "compute mean
+# in Python" client-side glue. Four strategies: mean / max /
+# weighted / norm-sum. 10.7 µs for 50 × 768-dim mean.
+EMBED.POOL.MEAN "<chunk1>|<chunk2>|<chunk3>"
+EMBED.POOL.WEIGHTED "2.0,1.0,0.5" "<c1>|<c2>|<c3>"   # relevance-weighted
+EMBED.POOL.NORM_SUM "<c1>|<c2>|<c3>"                  # directional sum
+
+# Incremental JSON streaming parser — PUSH chunks as LLM tokens
+# arrive; get back any completed top-level fields immediately so
+# UIs can render before the response finishes. ~822 ns full lifecycle.
+STREAM.PARSE.OPEN req-99
+STREAM.PARSE.PUSH req-99 '{"subject":"Quick question",'
+# → [{key: "subject", value: "Quick question", json_type: "string"}]
+STREAM.PARSE.PUSH req-99 '"body":"Hi Alice..."}'
+# → [{key: "body", value: "Hi Alice...", json_type: "string"}]
+STREAM.PARSE.COMPLETE req-99
+
+# Token-aware sliding-window rate limiter — LLM providers limit on
+# TOKENS not requests (a 32k call blows a request-count budget).
+# RESERVE up front + RECORD actual handles estimate-vs-actual.
+# ~142 ns/op RESERVE.
+LIMITER.LLM.CONFIG openai 100000              # 100k tpm
+LIMITER.LLM.RESERVE openai 5000
+# allowed=1  reserved=5000  remaining=95000  reset_ms=58000
+LIMITER.LLM.RECORD openai 6200 RESERVED 5000  # actual 1200 over estimate
+
+# Three-layer cache lookup (exact → semantic → negative) in ONE
+# round-trip. Replaces apps' typical 3 sequential GETs per request.
+# ~114 ns/op exact-hit hot path — FASTER than Redis GET.
+CACHE.LAYERS.SET exact "what is bitcoin" "Bitcoin is decentralized..."
+CACHE.LAYERS.SET semantic "what is bitcoin" "Bitcoin is decentralized..."
+CACHE.LAYERS.SET negative "weather on mars in 1850" "no data" EX 3600
+CACHE.LAYERS.LOOKUP "tell me about bitcoin"
+# → hit_layer=semantic  value="Bitcoin is..."  score=0.87
 ```
 
 ### NeuroCache-only primitives (no Redis equivalent)
