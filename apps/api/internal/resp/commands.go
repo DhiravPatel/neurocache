@@ -534,6 +534,23 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "CACHE.LAYERS.SET", "CACHE.LAYERS.LOOKUP", "CACHE.LAYERS.FORGET",
 		"CACHE.LAYERS.PURGE", "CACHE.LAYERS.SET_THRESHOLD", "CACHE.LAYERS.STATS":
 		c.cacheLayersCmd(strings.TrimPrefix(cmd, "CACHE.LAYERS."), args)
+	case "CONTRACT.REGISTER", "CONTRACT.UNREGISTER", "CONTRACT.VALIDATE",
+		"CONTRACT.LIST", "CONTRACT.STATS":
+		c.contractCmd(strings.TrimPrefix(cmd, "CONTRACT."), args)
+	case "TIMELINE.APPEND", "TIMELINE.RANGE", "TIMELINE.RECENT",
+		"TIMELINE.LEN", "TIMELINE.FORGET", "TIMELINE.KEYS", "TIMELINE.STATS":
+		c.timelineCmd(strings.TrimPrefix(cmd, "TIMELINE."), args)
+	case "HASH.LSH.CREATE", "HASH.LSH.SET", "HASH.LSH.DEL", "HASH.LSH.SIGN",
+		"HASH.LSH.NEIGHBORS", "HASH.LSH.LEN", "HASH.LSH.FORGET", "HASH.LSH.STATS":
+		c.lshCmd(strings.TrimPrefix(cmd, "HASH.LSH."), args)
+	case "NLI.SET", "NLI.GET", "NLI.CHECK", "NLI.MGET", "NLI.FORGET",
+		"NLI.PURGE", "NLI.STATS":
+		c.nliCmd(strings.TrimPrefix(cmd, "NLI."), args)
+	case "CASCADE.CONFIG", "CASCADE.PICK", "CASCADE.RECORD", "CASCADE.STATUS",
+		"CASCADE.FORGET", "CASCADE.PURGE", "CASCADE.ALL", "CASCADE.STATS":
+		c.cascadeCmd(strings.TrimPrefix(cmd, "CASCADE."), args)
+	case "MASK.REGISTER", "MASK.BUILD", "MASK.UNREGISTER", "MASK.LIST", "MASK.STATS":
+		c.maskCmd(strings.TrimPrefix(cmd, "MASK."), args)
 
 	// ─── aiops families (AGENT/STREAM/COST/SHADOW/PERSONA/SAFE/
 	// LINEAGE/SLO/AB/GRAPH/SCHEDULE/EVENT/POLICY/INFER/MCP) ────────

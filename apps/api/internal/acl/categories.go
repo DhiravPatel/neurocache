@@ -779,6 +779,58 @@ var registry = map[string]commandInfo{
 	"CACHE.LAYERS.PURGE":         {[]string{CatAI, CatWrite, CatFast}},
 	"CACHE.LAYERS.SET_THRESHOLD": {[]string{CatAI, CatWrite, CatFast}},
 	"CACHE.LAYERS.STATS":         {[]string{CatAI, CatRead, CatFast}},
+
+	// CONTRACT.* — LLM tool-call signature validator.
+	"CONTRACT.REGISTER":   {[]string{CatAI, CatWrite, CatFast}},
+	"CONTRACT.UNREGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"CONTRACT.VALIDATE":   {[]string{CatAI, CatRead, CatFast}},
+	"CONTRACT.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"CONTRACT.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// TIMELINE.* — per-key time-windowed event log.
+	"TIMELINE.APPEND": {[]string{CatAI, CatWrite, CatFast}},
+	"TIMELINE.RANGE":  {[]string{CatAI, CatRead, CatFast}},
+	"TIMELINE.RECENT": {[]string{CatAI, CatRead, CatFast}},
+	"TIMELINE.LEN":    {[]string{CatAI, CatRead, CatFast}},
+	"TIMELINE.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"TIMELINE.KEYS":   {[]string{CatAI, CatRead, CatFast}},
+	"TIMELINE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// HASH.LSH.* — random-hyperplane LSH index.
+	"HASH.LSH.CREATE":    {[]string{CatAI, CatWrite, CatFast}},
+	"HASH.LSH.SET":       {[]string{CatAI, CatWrite, CatFast}},
+	"HASH.LSH.DEL":       {[]string{CatAI, CatWrite, CatFast}},
+	"HASH.LSH.SIGN":      {[]string{CatAI, CatRead, CatFast}},
+	"HASH.LSH.NEIGHBORS": {[]string{CatAI, CatRead, CatFast}},
+	"HASH.LSH.LEN":       {[]string{CatAI, CatRead, CatFast}},
+	"HASH.LSH.FORGET":    {[]string{CatAI, CatWrite, CatFast}},
+	"HASH.LSH.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// NLI.* — entailment cache for hallucination detection.
+	"NLI.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"NLI.CHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"NLI.MGET":   {[]string{CatAI, CatRead, CatFast}},
+	"NLI.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"NLI.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// CASCADE.* — cost-tier model fallback ladder with learning.
+	"CASCADE.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.PICK":   {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"CASCADE.ALL":    {[]string{CatAI, CatRead, CatFast}},
+	"CASCADE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// MASK.* — fill-in-the-middle prompt templates.
+	"MASK.REGISTER":   {[]string{CatAI, CatWrite, CatFast}},
+	"MASK.BUILD":      {[]string{CatAI, CatRead, CatFast}},
+	"MASK.UNREGISTER": {[]string{CatAI, CatWrite, CatFast}},
+	"MASK.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"MASK.STATS":      {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

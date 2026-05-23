@@ -276,6 +276,30 @@ var writeCommands = map[string]bool{
 	"CACHE.LAYERS.SET": true, "CACHE.LAYERS.FORGET": true,
 	"CACHE.LAYERS.PURGE": true, "CACHE.LAYERS.SET_THRESHOLD": true,
 
+	// CONTRACT schemas are durable — operator-curated tool defs.
+	"CONTRACT.REGISTER": true, "CONTRACT.UNREGISTER": true,
+
+	// TIMELINE events are durable — context-injection scenarios
+	// expect history to survive deploys/restarts.
+	"TIMELINE.APPEND": true, "TIMELINE.FORGET": true,
+
+	// HASH.LSH bucket definitions + rows are durable; SIGN/
+	// NEIGHBORS/LEN/STATS are reads.
+	"HASH.LSH.CREATE": true, "HASH.LSH.SET": true,
+	"HASH.LSH.DEL": true, "HASH.LSH.FORGET": true,
+
+	// NLI verdicts are durable (apps paid an LLM round-trip to
+	// learn each one).
+	"NLI.SET": true, "NLI.FORGET": true, "NLI.PURGE": true,
+
+	// CASCADE config + learned routings are durable — losing them
+	// would crater the cost-savings on restart.
+	"CASCADE.CONFIG": true, "CASCADE.RECORD": true,
+	"CASCADE.FORGET": true, "CASCADE.PURGE": true,
+
+	// MASK templates are durable; BUILD is pure compute.
+	"MASK.REGISTER": true, "MASK.UNREGISTER": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

@@ -352,6 +352,41 @@ type Engine struct {
 	// 3-sequential-GET RAG hot-path pattern.
 	CacheLayers *llmstack.CacheLayers
 
+	// LLM tool-call signature validator. Validates the call envelope
+	// (name + arguments object) against a registered per-tool args
+	// schema. Catches hallucinated tools, missing required args,
+	// wrong types, unknown extras.
+	Contract *llmstack.ContractValidator
+
+	// Per-key time-windowed event log. Binary-search slicing by
+	// timestamp; optional KIND filter. "What did this user / agent
+	// do in the last N minutes?" for context auto-injection.
+	Timeline *llmstack.TimelineLog
+
+	// Random-hyperplane LSH index for near-duplicate detection at
+	// scale. Bucket vectors by K-bit signature; NEIGHBORS scans
+	// buckets within Hamming radius. O(1+bucket) instead of O(N).
+	LSH *llmstack.LSHIndex
+
+	// Natural-Language-Inference cache. Stores entailment verdicts
+	// (entails / contradicts / neutral) for (premise, hypothesis)
+	// pairs. Apps compute via their own NLI model and cache the
+	// verdict — every claim-level hallucination check is a NLI
+	// query, and pairs repeat across users.
+	NLI *llmstack.NLICache
+
+	// Cost-tier model fallback ladder with learning. Memoises
+	// which tier each input ultimately needed (e.g. "this kind of
+	// prompt always needs gpt-4, skip gpt-3.5"). Skips cheap-tier
+	// failure round-trips on subsequent identical inputs.
+	Cascade *llmstack.CascadeRouter
+
+	// Fill-in-the-middle prompt builder. Each code-completion /
+	// inpainting model expects FIM prompts in a different shape
+	// (StarCoder / DeepSeek / CodeLlama / chat-explain). Register
+	// the template once; BUILD assembles correctly every time.
+	Mask *llmstack.MaskTemplates
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -532,6 +567,12 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.StreamParser = llmstack.NewStreamParser()
 	e.LLMLimiter = llmstack.NewLLMLimiter()
 	e.CacheLayers = llmstack.NewCacheLayers()
+	e.Contract = llmstack.NewContractValidator()
+	e.Timeline = llmstack.NewTimelineLog()
+	e.LSH = llmstack.NewLSHIndex()
+	e.NLI = llmstack.NewNLICache()
+	e.Cascade = llmstack.NewCascadeRouter()
+	e.Mask = llmstack.NewMaskTemplates()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
