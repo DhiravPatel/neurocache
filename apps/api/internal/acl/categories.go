@@ -831,6 +831,186 @@ var registry = map[string]commandInfo{
 	"MASK.UNREGISTER": {[]string{CatAI, CatWrite, CatFast}},
 	"MASK.LIST":       {[]string{CatAI, CatRead, CatFast}},
 	"MASK.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// FACT.* — versioned fact registry + stamp tracking.
+	"FACT.SET":        {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.BUMP":       {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.GET":        {[]string{CatAI, CatRead, CatFast}},
+	"FACT.STAMP":      {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.STALE":      {[]string{CatAI, CatRead, CatFast}},
+	"FACT.STALE_KEYS": {[]string{CatAI, CatRead, CatFast}},
+	"FACT.UNSTAMP":    {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"FACT.FORGET":     {[]string{CatAI, CatWrite, CatFast}},
+	"FACT.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// CACHE.INVALIDATE.* — semantic cache invalidation scan.
+	"CACHE.INVALIDATE.TRACK":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.INVALIDATE.UNTRACK":  {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.INVALIDATE.SEMANTIC": {[]string{CatAI, CatRead, CatSlow}},
+	"CACHE.INVALIDATE.STATS":    {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.INVALIDATE.PURGE":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.STALE.LIST":          {[]string{CatAI, CatRead, CatFast}},
+
+	// BANDIT.* — adaptive multi-armed bandit router.
+	"BANDIT.CREATE":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.PICK":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.RECORD":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.STATS":        {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.ARMS":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.RESET":        {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.FORGET":       {[]string{CatAI, CatWrite, CatFast}},
+	"BANDIT.LIST":         {[]string{CatAI, CatRead, CatFast}},
+	"BANDIT.GLOBAL_STATS": {[]string{CatAI, CatRead, CatFast}},
+
+	// POLICY.SEM.* — semantic firewall by example.
+	"POLICY.SEM.DEFINE": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.ADD":    {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.REMOVE": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.CHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"POLICY.SEM.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"POLICY.SEM.FORGET": {[]string{CatAI, CatWrite, CatFast}},
+	"POLICY.SEM.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// NOVELTY.* — per-query out-of-distribution gate.
+	"NOVELTY.BASELINE":       {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.ADD":            {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.SCORE":          {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.SET_THRESHOLDS": {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.SIZE":           {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.FORGET":         {[]string{CatAI, CatWrite, CatFast}},
+	"NOVELTY.DETECTORS":      {[]string{CatAI, CatRead, CatFast}},
+	"NOVELTY.STATS":          {[]string{CatAI, CatRead, CatFast}},
+
+	// LOCK.SEM.* — semantic dedup-locks.
+	"LOCK.SEM.ACQUIRE":          {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.RELEASE":          {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.STATUS":           {[]string{CatAI, CatRead, CatFast}},
+	"LOCK.SEM.FORGET":           {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.FORGET_NAMESPACE": {[]string{CatAI, CatWrite, CatFast}},
+	"LOCK.SEM.STATS":            {[]string{CatAI, CatRead, CatFast}},
+
+	// GOAL.* — agent objective + stagnation tracking.
+	"GOAL.SET":      {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.PROGRESS": {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.HISTORY":  {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.FORGET":   {[]string{CatAI, CatWrite, CatFast}},
+	"GOAL.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"GOAL.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// LEDGER.* — cost attribution / chargeback.
+	"LEDGER.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.TOP":    {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.SPEND":  {[]string{CatAI, CatRead, CatFast}},
+	"LEDGER.EXPORT": {[]string{CatAI, CatRead, CatSlow}},
+	"LEDGER.PURGE":  {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.SETCAP": {[]string{CatAI, CatWrite, CatFast}},
+	"LEDGER.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// EMB.MIGRATE.* — embedding-model dual-index migration.
+	"EMB.MIGRATE.START":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.WRITE":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"EMB.MIGRATE.COMPARE": {[]string{CatAI, CatRead, CatSlow}},
+	"EMB.MIGRATE.CUTOVER": {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.ABORT":   {[]string{CatAI, CatWrite, CatFast}},
+	"EMB.MIGRATE.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"EMB.MIGRATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CONV.FORK.* — branched conversation tree for agent what-if runs.
+	"CONV.FORK.SEED":   {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.CREATE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.APPEND": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.TREE":   {[]string{CatAI, CatRead, CatFast}},
+	"CONV.FORK.DELETE": {[]string{CatAI, CatWrite, CatFast}},
+	"CONV.FORK.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// SEMDIFF.* — semantic version diff for prompts/RAG docs.
+	"SEMDIFF.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.PUT":     {[]string{CatAI, CatWrite, CatFast}},
+	"SEMDIFF.GET":     {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.COMPARE": {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.HISTORY": {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.LATEST":  {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.DELETE":  {[]string{CatAI, CatWrite, CatFast}},
+	"SEMDIFF.NAMES":   {[]string{CatAI, CatRead, CatFast}},
+	"SEMDIFF.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// RATELIMIT.SEM.* — semantic rate limiter.
+	"RATELIMIT.SEM.CHECK":  {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.PEEK":   {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RATELIMIT.SEM.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.RECENT": {[]string{CatAI, CatRead, CatFast}},
+	"RATELIMIT.SEM.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// TOOLDRIFT.* — tool/API response schema drift watcher.
+	"TOOLDRIFT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.SAMPLE":   {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.RECENT":   {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"TOOLDRIFT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"TOOLDRIFT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// ANSWER.CANARY.* — prompt/model canary A/B with z-test decision.
+	"ANSWER.CANARY.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.ROUTE":  {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"ANSWER.CANARY.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"ANSWER.CANARY.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// RETRIEVAL.LEARN.* — closed-loop retrieval re-rank.
+	"RETRIEVAL.LEARN.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.RERANK": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.WEIGHT": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.TOP":    {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.BOTTOM": {[]string{CatAI, CatRead, CatFast}},
+	"RETRIEVAL.LEARN.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.ALPHA":  {[]string{CatAI, CatWrite, CatFast}},
+	"RETRIEVAL.LEARN.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// SPECDEC.* — speculative-decoding draft cache + acceptance.
+	"SPECDEC.CACHE":  {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.RATE":   {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.STATUS": {[]string{CatAI, CatRead, CatFast}},
+	"SPECDEC.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.SETCAP": {[]string{CatAI, CatWrite, CatFast}},
+	"SPECDEC.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// PREFETCH.PREDICT.* — per-session next-request predictor.
+	"PREFETCH.PREDICT.OBSERVE":  {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.PREDICT":  {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.HIT":      {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"PREFETCH.PREDICT.HORIZON":  {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"PREFETCH.PREDICT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// JURY.* — multi-LLM jury voting + verdict aggregation.
+	"JURY.SUBMIT":  {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.VOTE":    {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.VERDICT": {[]string{CatAI, CatRead, CatFast}},
+	"JURY.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"JURY.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"JURY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"JURY.STATS":   {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

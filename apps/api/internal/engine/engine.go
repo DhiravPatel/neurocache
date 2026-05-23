@@ -387,6 +387,113 @@ type Engine struct {
 	// the template once; BUILD assembles correctly every time.
 	Mask *llmstack.MaskTemplates
 
+	// Versioned-fact registry. Apps SET a fact at v1, BUMP when it
+	// changes; cached entries can be STAMPed with the fact-version
+	// they were derived under, and STALE returns true once the
+	// fact version advances. Pairs with CACHE.INVALIDATE for the
+	// full "this fact changed → kill the cached answers" story.
+	Facts *llmstack.FactRegistry
+
+	// Semantic cache invalidator. Apps TRACK cache entries with
+	// their semantic content; SEMANTIC scans the tracked set for
+	// matches above a threshold and returns the keys to evict.
+	// Closes the "no semantic invalidation" gap that's a
+	// credibility blocker for production semantic caches.
+	Invalidator *llmstack.SemanticInvalidator
+
+	// Adaptive multi-armed bandit router. Thompson-sampling /
+	// UCB1 strategies. Converges traffic onto whichever arm is
+	// actually winning — no manual PROMOTE step like CANARY.
+	// Lock-free posterior updates via atomic float CAS.
+	Bandit *llmstack.BanditRouter
+
+	// Semantic firewall by example. INJECT.* is regex;
+	// POLICY.SEM.* is nearest-neighbour in embedding space.
+	// Define by paste, not by regex authoring. New attack
+	// phrasings → POLICY.SEM.ADD a seed; future paraphrases
+	// catch automatically. (Namespaced under POLICY.SEM to
+	// distinguish from POLICY.SET / POLICY.ALLOW aiops RBAC.)
+	PolicySem *llmstack.PolicyClassifier
+
+	// Per-query out-of-distribution gate. Different from DRIFT.*
+	// (aggregate). Apps use NOVELTY.SCORE per request: if novel,
+	// skip cache + force human review. Pairs with SEMNEG / CACHE
+	// .LAYERS as a front gate.
+	Novelty *llmstack.NoveltyDetector
+
+	// Semantic dedup-locks. LOCK dedupes by key; LOCK.SEM dedupes
+	// by MEANING — prevents semantically equivalent work running
+	// concurrently. Different shape than COALESCE (reject vs
+	// wait-and-share).
+	SemLocks *llmstack.SemLocks
+
+	// Agent objective + stagnation tracker. AGENTLOOP counts
+	// steps/tokens — useful for budgets but blind to "agent is
+	// looping." GOAL tracks semantic progress + recent-update
+	// diversity → catches stalls AND completions early.
+	Goal *llmstack.GoalTracker
+
+	// Double-entry cost attribution ledger. GUARD enforces caps;
+	// LEDGER answers "which feature / tenant / model spent the
+	// money?" Per-call record + REPORT by any dimension + window.
+	// Export CSV/JSON straight into billing.
+	Ledger *llmstack.CostLedger
+
+	// Embedding-model migration. The day you upgrade MiniLM → BGE,
+	// every cached vector and RAG index goes incompatible.
+	// EMB.MIGRATE.* lets apps dual-write during the transition,
+	// COMPARE recall on a held-out set, then atomically CUTOVER.
+	EmbMigrate *llmstack.EmbMigrator
+
+	// Conversation forking. CONV.* gives you one linear history per
+	// session; CONV.FORK.* gives you a full DAG so agents can explore
+	// what-if branches off any prior step without copy-paste plumbing.
+	ConvFork *llmstack.ConvForkManager
+
+	// Semantic version diff for prompts/RAG documents. Byte-diff says
+	// "changed"; SEMDIFF.* tells you whether the change meaningfully
+	// shifted meaning. Stores named versions for regression review.
+	SemDiff *llmstack.SemDiffStore
+
+	// Semantic rate-limiting. Classical N/min misses the same expensive
+	// question paraphrased 8 ways; RATELIMIT.SEM.* denies similar-
+	// embedding bursts inside a per-tenant window.
+	SemRate *llmstack.SemRateLimiter
+
+	// Tool-output drift watcher. Agents call dozens of tools; any one
+	// can silently change response shape (renamed key, new error
+	// envelope, number→string). TOOLDRIFT.* extracts a shape signature
+	// per payload and flips warning → drift when live samples diverge
+	// from baseline.
+	ToolDrift *llmstack.ToolDriftWatcher
+
+	// Canary A/B for prompts/models. Deterministic ROUTE on request
+	// hash, Welford-accumulated quality, two-sample z-test DECIDE.
+	// Replaces the per-team "side-by-side spreadsheet" everyone builds.
+	AnswerCanary *llmstack.AnswerCanary
+
+	// Closed-loop retrieval re-rank. Records whether each retrieved
+	// chunk was actually cited; RERANK applies the learned boost to
+	// new retrievals so the RAG index gets smarter without offline
+	// training pipelines.
+	RetrievalLearn *llmstack.RetrievalLearner
+
+	// Speculative decoding cache + acceptance tracker. Caches the
+	// small "draft" model's tokens by prefix hash AND learns whether
+	// speculative decoding is worth running for each (model,
+	// prefix-class) so the orchestrator can DECIDE.
+	SpecDec *llmstack.SpecDecCache
+
+	// Per-session next-request predictor for cache warming. OBSERVE
+	// records requests; PREDICT returns top-N likely next requests
+	// drawn from prior transitions with similar prefixes.
+	PrefetchPredict *llmstack.PrefetchPredictor
+
+	// Multi-LLM jury voting + verdict aggregation. Self-consistency
+	// runs, LLM-as-judge ensembles, and multi-provider voting all
+	// collapse onto the same SUBMIT / VOTE / VERDICT operations.
+	Jury *llmstack.Jury
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -573,6 +680,24 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.NLI = llmstack.NewNLICache()
 	e.Cascade = llmstack.NewCascadeRouter()
 	e.Mask = llmstack.NewMaskTemplates()
+	e.Facts = llmstack.NewFactRegistry()
+	e.Invalidator = llmstack.NewSemanticInvalidator()
+	e.Bandit = llmstack.NewBanditRouter()
+	e.PolicySem = llmstack.NewPolicyClassifier()
+	e.Novelty = llmstack.NewNoveltyDetector()
+	e.SemLocks = llmstack.NewSemLocks()
+	e.Goal = llmstack.NewGoalTracker()
+	e.Ledger = llmstack.NewCostLedger()
+	e.EmbMigrate = llmstack.NewEmbMigrator()
+	e.ConvFork = llmstack.NewConvForkManager()
+	e.SemDiff = llmstack.NewSemDiffStore()
+	e.SemRate = llmstack.NewSemRateLimiter()
+	e.ToolDrift = llmstack.NewToolDriftWatcher()
+	e.AnswerCanary = llmstack.NewAnswerCanary()
+	e.RetrievalLearn = llmstack.NewRetrievalLearner()
+	e.SpecDec = llmstack.NewSpecDecCache()
+	e.PrefetchPredict = llmstack.NewPrefetchPredictor()
+	e.Jury = llmstack.NewJury()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

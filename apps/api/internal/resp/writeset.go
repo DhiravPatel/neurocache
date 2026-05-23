@@ -300,6 +300,102 @@ var writeCommands = map[string]bool{
 	// MASK templates are durable; BUILD is pure compute.
 	"MASK.REGISTER": true, "MASK.UNREGISTER": true,
 
+	// FACT registry + stamps are durable — the entire point is
+	// surviving restart so cached entries can be invalidated when
+	// the underlying fact changes.
+	"FACT.SET": true, "FACT.BUMP": true, "FACT.STAMP": true,
+	"FACT.UNSTAMP": true, "FACT.FORGET": true,
+
+	// CACHE.INVALIDATE tracked entries are durable — apps stamp
+	// real cache keys; losing the stamps would orphan the
+	// invalidation story.
+	"CACHE.INVALIDATE.TRACK": true, "CACHE.INVALIDATE.UNTRACK": true,
+	"CACHE.INVALIDATE.PURGE": true,
+
+	// BANDIT posteriors are durable — losing the learned alpha/beta
+	// across restart would force the bandit back to uniform-prior
+	// exploration, wasting the accumulated traffic data.
+	"BANDIT.CREATE": true, "BANDIT.RECORD": true,
+	"BANDIT.RESET": true, "BANDIT.FORGET": true,
+
+	// POLICY.SEM seed banks are durable — operator-curated examples
+	// are the whole maintenance burden.
+	"POLICY.SEM.DEFINE": true, "POLICY.SEM.ADD": true,
+	"POLICY.SEM.REMOVE": true, "POLICY.SEM.FORGET": true,
+
+	// NOVELTY baselines are durable; SCORE is pure compute.
+	"NOVELTY.BASELINE": true, "NOVELTY.ADD": true,
+	"NOVELTY.SET_THRESHOLDS": true, "NOVELTY.FORGET": true,
+
+	// LOCK.SEM state is entirely in-flight runtime — held locks
+	// shouldn't survive restart (workers would all reawake from
+	// crashed state holding stale locks). None in writeset.
+
+	// GOAL sessions are durable — agent objectives + progress
+	// history shouldn't vanish on restart (otherwise recovery
+	// loses the "is the agent looping" signal exactly when it's
+	// most needed).
+	"GOAL.SET": true, "GOAL.PROGRESS": true, "GOAL.FORGET": true,
+
+	// LEDGER is durable — it's the billing record. Apps will
+	// chargeback against this; losing records is unacceptable.
+	"LEDGER.RECORD": true, "LEDGER.PURGE": true, "LEDGER.SETCAP": true,
+
+	// EMB.MIGRATE state is durable — dual-write progress survives
+	// restart so a long-running migration can resume.
+	"EMB.MIGRATE.START": true, "EMB.MIGRATE.WRITE": true,
+	"EMB.MIGRATE.CUTOVER": true, "EMB.MIGRATE.ABORT": true,
+
+	// CONV.FORK tree is durable. Agent exploration runs cost real
+	// LLM money; the fork graph should survive crash so callers can
+	// resume mid-explore.
+	"CONV.FORK.SEED": true, "CONV.FORK.CREATE": true,
+	"CONV.FORK.APPEND": true, "CONV.FORK.DELETE": true,
+
+	// SEMDIFF named versions are durable — they're the prompt-history
+	// version-control store. CHECK / COMPARE / GET / HISTORY are reads.
+	"SEMDIFF.PUT": true, "SEMDIFF.DELETE": true,
+
+	// RATELIMIT.SEM CONFIG + RESET are durable; CHECK records into the
+	// in-memory bucket but the bucket itself is rebuilt on restart
+	// (rate-limit windows are seconds-to-minutes, not days), so the
+	// per-tenant config is what we have to persist.
+	"RATELIMIT.SEM.CONFIG": true, "RATELIMIT.SEM.RESET": true,
+
+	// TOOLDRIFT baselines must survive restart — they're the golden
+	// reference for whether tool output has drifted. SAMPLE is also
+	// durable so a 24h+ drift signal can survive a restart. CHECK is
+	// pure read.
+	"TOOLDRIFT.BASELINE": true, "TOOLDRIFT.SAMPLE": true,
+	"TOOLDRIFT.RESET": true,
+
+	// ANSWER.CANARY config + recorded outcomes are durable — the whole
+	// point is statistical decisions over many samples. ROUTE is a
+	// deterministic read; REPORT/DECIDE are aggregations.
+	"ANSWER.CANARY.CONFIG": true, "ANSWER.CANARY.RECORD": true,
+	"ANSWER.CANARY.RESET": true,
+
+	// RETRIEVAL.LEARN per-chunk EMA + chunks-known-to-the-learner
+	// must persist. WEIGHT/RERANK/STATUS/TOP/BOTTOM/STATS are reads.
+	"RETRIEVAL.LEARN.RECORD": true, "RETRIEVAL.LEARN.RESET": true,
+	"RETRIEVAL.LEARN.ALPHA": true,
+
+	// SPECDEC acceptance rates + draft cache must persist — the
+	// whole point of the acceptance EMA is to survive restart so
+	// the orchestrator's DECIDE has continuity. GET/RATE/DECIDE/
+	// STATUS/STATS are reads.
+	"SPECDEC.CACHE": true, "SPECDEC.RECORD": true,
+	"SPECDEC.RESET": true, "SPECDEC.SETCAP": true,
+
+	// PREFETCH.PREDICT session history persists so cache-warming
+	// survives a node bounce. PREDICT is a read.
+	"PREFETCH.PREDICT.OBSERVE": true, "PREFETCH.PREDICT.HIT": true,
+	"PREFETCH.PREDICT.HORIZON": true, "PREFETCH.PREDICT.RESET": true,
+
+	// JURY state — candidate texts and votes — persists. VERDICT /
+	// STATUS / LIST / STATS are reads.
+	"JURY.SUBMIT": true, "JURY.VOTE": true, "JURY.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the
