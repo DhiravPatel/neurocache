@@ -494,6 +494,117 @@ type Engine struct {
 	// collapse onto the same SUBMIT / VOTE / VERDICT operations.
 	Jury *llmstack.Jury
 
+	// Indirect-injection scanner for retrieved content. INJECT guards
+	// the front door (user input); CONTEXT.SCAN guards the back door
+	// where 90% of real agent-stack exploits now come from — malicious
+	// instructions inside RAG hits, tool responses, scraped pages.
+	ContextScan *llmstack.ContextScanner
+
+	// RAG coverage-gap detector. Records (query, best_score) per
+	// retrieval; REPORT clusters low-score queries into a ship-list
+	// for the content team. Turns the vector index into product
+	// analytics.
+	RAGGap *llmstack.RAGGap
+
+	// Deterministic agent record/replay. Captures every step's
+	// input + output keyed by (session, step, kind); REPLAY.NEXT
+	// feeds recorded outputs back so non-deterministic agent runs
+	// are reproducible for debugging.
+	Replay *llmstack.ReplayStore
+
+	// Shadow evaluation — CANARY for the risk-averse. Mirrors 100%
+	// of prod traffic to a candidate variant, serves 0% to users,
+	// scores both and surfaces lift + per-input regressions. Lets
+	// regulated teams learn whether the candidate is better without
+	// exposing a single user. Field is ShadowEval (not Shadow) because
+	// the aiops.Shadow stale-while-revalidate cache already owns that.
+	ShadowEval *llmstack.ShadowEval
+
+	// Micro-batch accumulator for embedding / batch-inference APIs.
+	// Buckets items for MAXWAIT_MS or until MAXSIZE, then FLUSH
+	// hands the caller one batch — directly bankable cost savings
+	// since bulk endpoints are 5-10× cheaper per item.
+	Batch *llmstack.BatchAccumulator
+
+	// Memory contradiction detector. MEMORY.CONSOLIDATE dedups
+	// similar facts; MEMORY.CONFLICT.* catches the harder case
+	// where a new fact contradicts an old one ("user prefers async"
+	// later "user wants daily sync") so long-running agent memory
+	// doesn't rot silently.
+	MemConflicts *llmstack.MemoryConflicts
+
+	// Composed escalation ladder. Takes a request + signals and
+	// returns the tier (cache / cheap / expensive / human) by
+	// composing CONFIDENCE, NOVELTY, CASCADE-style gates that
+	// production teams write by hand. One conductor for instruments
+	// the stack already owns.
+	Escalate *llmstack.EscalationLadder
+
+	// Cost burn-rate forecaster. GUARD enforces caps, LEDGER reports
+	// the past, FORECAST projects forward — "at this rate you breach
+	// the monthly cap on the 19th" — so the orchestrator can act
+	// before the wall, not at it.
+	Forecast *llmstack.CostForecast
+
+	// Streaming generation degeneration detector. Feeds tokens as
+	// they arrive; flips ok → warning → stop when the model loops
+	// (cycle), rambles (n-gram repeat), or collapses diversity. Apps
+	// cancel the upstream stream on stop to save output tokens.
+	StreamWatch *llmstack.StreamWatcher
+
+	// Multi-step agent plan validator. CONTRACT validates one call;
+	// PLAN.VALIDATE.* validates the *plan* (cycles, unsatisfied deps,
+	// unreachable steps) before the executor burns 30 tool calls.
+	PlanValidate *llmstack.PlanValidator
+
+	// Vector-store poison detector. CONTEXT.SCAN guards retrieved
+	// text; VEC.AUDIT guards the index itself — flags vectors that
+	// sit suspiciously close to the centroid or score high against
+	// many recent queries (the classic RAG-poisoning attack).
+	VecAudit *llmstack.VectorAudit
+
+	// Field-level extraction provenance. Required for any audited
+	// extraction pipeline (legal, medical, finance): which source
+	// span substantiates each extracted field. VERIFY catches LLM
+	// hallucinations where the value isn't anywhere in the source.
+	ExtractTrace *llmstack.ExtractTraceStore
+
+	// Versioned golden-set + regression diff. JUDGE runs cases live;
+	// EVALSET.FREEZE pins them so the only variable in a v1 → v2 DIFF
+	// is the model. The CI gate every team rebuilds.
+	EvalSet *llmstack.EvalSetStore
+
+	// Live latency-driven model downgrader. CASCADE picks by input
+	// difficulty; ADAPT.LATENCY downgrades to a faster model when
+	// the expensive tier's p99 breaches the SLO — the lever to pull
+	// during a traffic spike.
+	AdaptLatency *llmstack.AdaptLatency
+
+	// Real-time semantic user cohort analytics. PROMPT.GROUPS clusters
+	// by lexical fingerprint; SESSION.CLUSTER groups requests by
+	// meaning so PMs can see "the top 10 things users are asking
+	// about this week" with member sessions for drill-down.
+	SessionCluster *llmstack.SessionCluster
+
+	// RAG-corpus freshness tracker. FACT.STALE marks stale cached
+	// answers; DOC.FRESH marks stale indexed documents (CMS page
+	// updated, ticket reopened) so retrieval can down-rank a known-
+	// stale chunk on the fly instead of waiting for the nightly
+	// reindex.
+	DocFresh *llmstack.DocFreshTracker
+
+	// Semantic cache warmer. Replays a historical query log to
+	// pre-populate the cache before a launch/region/traffic spike
+	// so cold-start hit-rate isn't 0%. Dedupes paraphrases so apps
+	// don't pay for "summarize the doc" 200 times.
+	CacheWarm *llmstack.CacheWarmer
+
+	// Weighted-fair tenant queue. RATELIMIT *rejects* over-budget
+	// requests (burns the caller); FAIRQUEUE *parks* them by tenant
+	// priority and drains at the system's allowed rate so a free-
+	// tier burst doesn't starve a paid tenant. Stride scheduling.
+	FairQueue *llmstack.FairQueue
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -698,6 +809,24 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.SpecDec = llmstack.NewSpecDecCache()
 	e.PrefetchPredict = llmstack.NewPrefetchPredictor()
 	e.Jury = llmstack.NewJury()
+	e.ContextScan = llmstack.NewContextScanner()
+	e.RAGGap = llmstack.NewRAGGap()
+	e.Replay = llmstack.NewReplayStore()
+	e.ShadowEval = llmstack.NewShadowEval()
+	e.Batch = llmstack.NewBatchAccumulator()
+	e.MemConflicts = llmstack.NewMemoryConflicts()
+	e.Escalate = llmstack.NewEscalationLadder()
+	e.Forecast = llmstack.NewCostForecast()
+	e.StreamWatch = llmstack.NewStreamWatcher()
+	e.PlanValidate = llmstack.NewPlanValidator()
+	e.VecAudit = llmstack.NewVectorAudit()
+	e.ExtractTrace = llmstack.NewExtractTraceStore()
+	e.EvalSet = llmstack.NewEvalSetStore()
+	e.AdaptLatency = llmstack.NewAdaptLatency()
+	e.SessionCluster = llmstack.NewSessionCluster()
+	e.DocFresh = llmstack.NewDocFreshTracker()
+	e.CacheWarm = llmstack.NewCacheWarmer()
+	e.FairQueue = llmstack.NewFairQueue()
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so

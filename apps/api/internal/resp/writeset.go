@@ -396,6 +396,104 @@ var writeCommands = map[string]bool{
 	// STATUS / LIST / STATS are reads.
 	"JURY.SUBMIT": true, "JURY.VOTE": true, "JURY.RESET": true,
 
+	// CONTEXT.SCAN whitelist persists (operator-curated). SCAN itself
+	// is a pure read of incoming text; the recent-buffer is operational
+	// telemetry that can rebuild on restart.
+	"CONTEXT.SCAN.WHITELIST": true, "CONTEXT.SCAN.RESET": true,
+
+	// RAG.GAP observations + resolved set must survive restart — they
+	// ARE the content-team ship-list. REPORT/QUERIES/INDEXES/STATS
+	// are reads.
+	"RAG.GAP.OBSERVE": true, "RAG.GAP.RESOLVE": true,
+	"RAG.GAP.RESET": true, "RAG.GAP.SETCAP": true,
+
+	// REPLAY traces are durable by design — bug reports reference them
+	// for days/weeks. OPEN/CLOSE/NEXT mutate cursor state (in-memory
+	// only); the underlying trace is what persists.
+	"REPLAY.RECORD": true, "REPLAY.RESET": true,
+
+	// SHADOW.EVAL paired outcomes must survive restart — the whole
+	// point of offline evaluation is to accumulate enough samples to
+	// make a confident decision. MIRROR is a reservation; only RECORD
+	// and the structural ones persist.
+	"SHADOW.EVAL.CONFIG": true, "SHADOW.EVAL.RECORD": true,
+	"SHADOW.EVAL.RESET": true,
+
+	// BATCH config is durable; the per-bucket in-flight items are
+	// in-flight by definition and rebuild on restart from upstream
+	// retries. CONFIG/RESET persist; ADD/FLUSH/RESOLVE are operational.
+	"BATCH.CONFIG": true, "BATCH.RESET": true,
+
+	// MEMORY.CONFLICT facts and resolved decisions persist — they're
+	// the canonical record of "what's true for this key now". CHECK,
+	// LIST, KEYS, STATS are reads.
+	"MEMORY.CONFLICT.ADD": true, "MEMORY.CONFLICT.RESOLVE": true,
+	"MEMORY.CONFLICT.PURGE": true,
+
+	// ESCALATE policy expressions + per-tier outcome telemetry persist;
+	// DECIDE is a pure read of those rules.
+	"ESCALATE.CONFIG": true, "ESCALATE.RECORD": true,
+	"ESCALATE.RESET": true,
+
+	// FORECAST spend ticks + alert thresholds persist — the projection
+	// is meaningless without continuity across restarts.
+	"FORECAST.OBSERVE": true, "FORECAST.ALERT": true,
+	"FORECAST.RESET": true, "FORECAST.SETCAP": true,
+
+	// STREAM.WATCH sessions are short-lived (the duration of one
+	// streaming response) so OPEN/CLOSE state is operational rather
+	// than durable. RESET is the only structural mutation we persist
+	// so operator-issued wipes survive.
+	"STREAM.WATCH.RESET": true,
+
+	// PLAN.VALIDATE plans + steps persist — agent runs reference them
+	// across retries and across nodes. CHECK is a pure read.
+	"PLAN.VALIDATE.NEW": true, "PLAN.VALIDATE.ADDSTEP": true,
+	"PLAN.VALIDATE.DROP": true,
+
+	// VEC.AUDIT baselines + recent queries persist — they're the
+	// reference distribution for poisoning detection.
+	"VEC.AUDIT.BASELINE": true, "VEC.AUDIT.ADDQUERY": true,
+	"VEC.AUDIT.RESET": true, "VEC.AUDIT.SETCAP": true,
+
+	// EXTRACT.TRACE records persist — audited extraction pipelines
+	// reference them for compliance review weeks later.
+	"EXTRACT.TRACE.NEW": true, "EXTRACT.TRACE.SET": true,
+	"EXTRACT.TRACE.DROP": true,
+
+	// EVALSET cases + frozen versions + run scores persist — this is
+	// the regression-test record of truth. DIFF is pure read.
+	"EVALSET.CREATE": true, "EVALSET.ADDCASE": true,
+	"EVALSET.FREEZE": true, "EVALSET.RECORD": true,
+	"EVALSET.DROP": true,
+
+	// ADAPT.LATENCY configs persist — latency samples are operational
+	// (in-memory window only). PICK is a read.
+	"ADAPT.LATENCY.CONFIG": true, "ADAPT.LATENCY.OBSERVE": true,
+	"ADAPT.LATENCY.RESET": true,
+
+	// SESSION.CLUSTER observations persist — they're the historical
+	// record PMs query for trend analysis. TOP/MEMBERS/STATUS are reads.
+	"SESSION.CLUSTER.OBSERVE": true, "SESSION.CLUSTER.RESET": true,
+
+	// DOC.FRESH registrations + stamps persist — they're the canonical
+	// freshness state for the RAG corpus. CHECK/BULKCHECK/STALE/LIST
+	// are reads.
+	"DOC.FRESH.REGISTER": true, "DOC.FRESH.STAMP": true,
+	"DOC.FRESH.INVALIDATE": true, "DOC.FRESH.DROP": true,
+
+	// CACHE.WARM plans persist — they're the warming dataset and the
+	// MARK progress record. PLAN/PROGRESS are reads.
+	"CACHE.WARM.RECORD": true, "CACHE.WARM.MARK": true,
+	"CACHE.WARM.MINSIM": true, "CACHE.WARM.RESET": true,
+
+	// FAIRQUEUE config + parked requests persist — the queue is the
+	// source of truth for "what's waiting." DEQUEUE is a structural
+	// mutation; PEEK/LEN/STATS are reads.
+	"FAIRQUEUE.CONFIG": true, "FAIRQUEUE.ENQUEUE": true,
+	"FAIRQUEUE.DEQUEUE": true, "FAIRQUEUE.DROPTENANT": true,
+	"FAIRQUEUE.RESET": true,
+
 	// Phase 11 — every command that mutates aiops manager state.
 	// Reads (AGENT.CALL on a hit, COST.USAGE, SAFE.CHECK on a hit,
 	// AB.ASSIGN, GRAPH.NEIGHBORS, EVENT.READ, etc.) are not in the

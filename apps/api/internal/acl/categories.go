@@ -1011,6 +1011,187 @@ var registry = map[string]commandInfo{
 	"JURY.LIST":    {[]string{CatAI, CatRead, CatFast}},
 	"JURY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
 	"JURY.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// CONTEXT.SCAN.* — indirect-injection scanner for retrieved data.
+	"CONTEXT.SCAN":           {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.BULK":      {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.SANITIZE":  {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.RULES":     {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.WHITELIST": {[]string{CatAI, CatWrite, CatFast}},
+	"CONTEXT.SCAN.RECENT":    {[]string{CatAI, CatRead, CatFast}},
+	"CONTEXT.SCAN.RESET":     {[]string{CatAI, CatWrite, CatFast}},
+	"CONTEXT.SCAN.STATS":     {[]string{CatAI, CatRead, CatFast}},
+
+	// RAG.GAP.* — coverage-gap detection.
+	"RAG.GAP.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.REPORT":  {[]string{CatAI, CatRead, CatSlow}},
+	"RAG.GAP.QUERIES": {[]string{CatAI, CatRead, CatFast}},
+	"RAG.GAP.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.INDEXES": {[]string{CatAI, CatRead, CatFast}},
+	"RAG.GAP.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"RAG.GAP.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// REPLAY.* — deterministic agent record/replay.
+	"REPLAY.RECORD":   {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.OPEN":     {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.NEXT":     {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.CLOSE":    {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.DIFF":     {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.GET":      {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.EXPORT":   {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"REPLAY.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"REPLAY.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// SHADOW.EVAL.* — mirror evaluation (namespaced to avoid the
+	// existing SHADOW.* stale-while-revalidate cache).
+	"SHADOW.EVAL.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.MIRROR":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.REPORT":  {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.PROMOTE": {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"SHADOW.EVAL.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"SHADOW.EVAL.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// BATCH.* — micro-batch accumulator.
+	"BATCH.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.FLUSH":   {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.PEEK":    {[]string{CatAI, CatRead, CatFast}},
+	"BATCH.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.BUCKETS": {[]string{CatAI, CatRead, CatFast}},
+	"BATCH.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"BATCH.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// MEMORY.CONFLICT.* — memory contradiction detection.
+	"MEMORY.CONFLICT.ADD":     {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.RESOLVE": {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.PURGE":   {[]string{CatAI, CatWrite, CatFast}},
+	"MEMORY.CONFLICT.KEYS":    {[]string{CatAI, CatRead, CatFast}},
+	"MEMORY.CONFLICT.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// ESCALATE.* — composed escalation ladder.
+	"ESCALATE.CONFIG": {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.DECIDE": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.RECORD": {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.REPORT": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.POLICY": {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"ESCALATE.RESET":  {[]string{CatAI, CatWrite, CatFast}},
+	"ESCALATE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// FORECAST.* — cost burn-rate forecasting.
+	"FORECAST.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.PROJECT": {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.ALERT":   {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.ALERTS":  {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.TENANTS": {[]string{CatAI, CatRead, CatFast}},
+	"FORECAST.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.SETCAP":  {[]string{CatAI, CatWrite, CatFast}},
+	"FORECAST.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// STREAM.WATCH.* — streaming generation degeneration detector.
+	"STREAM.WATCH.OPEN":     {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.TOKEN":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.WATCH.CLOSE":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.SESSIONS": {[]string{CatAI, CatRead, CatFast}},
+	"STREAM.WATCH.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"STREAM.WATCH.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// PLAN.VALIDATE.* — multi-step agent plan validator.
+	"PLAN.VALIDATE.NEW":     {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.ADDSTEP": {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.CHECK":   {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"PLAN.VALIDATE.DROP":    {[]string{CatAI, CatWrite, CatFast}},
+	"PLAN.VALIDATE.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// VEC.AUDIT.* — RAG index poisoning detector.
+	"VEC.AUDIT.BASELINE": {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.ADDQUERY": {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.CHECK":    {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.STATUS":   {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"VEC.AUDIT.SETCAP":   {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"VEC.AUDIT.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// EXTRACT.TRACE.* — field-level extraction provenance.
+	"EXTRACT.TRACE.NEW":    {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.SET":    {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.GET":    {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.ALL":    {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.VERIFY": {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.LIST":   {[]string{CatAI, CatRead, CatFast}},
+	"EXTRACT.TRACE.DROP":   {[]string{CatAI, CatWrite, CatFast}},
+	"EXTRACT.TRACE.STATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// EVALSET.* — versioned golden set + regression diff.
+	"EVALSET.CREATE":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.ADDCASE": {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.FREEZE":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.RECORD":  {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.DIFF":    {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"EVALSET.DROP":    {[]string{CatAI, CatWrite, CatFast}},
+	"EVALSET.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// ADAPT.LATENCY.* — live latency-driven model downgrader.
+	"ADAPT.LATENCY.CONFIG":  {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.PICK":    {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"ADAPT.LATENCY.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"ADAPT.LATENCY.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// SESSION.CLUSTER.* — semantic user cohort analytics.
+	"SESSION.CLUSTER.OBSERVE": {[]string{CatAI, CatWrite, CatFast}},
+	"SESSION.CLUSTER.TOP":     {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.MEMBERS": {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.STATUS":  {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.LIST":    {[]string{CatAI, CatRead, CatFast}},
+	"SESSION.CLUSTER.RESET":   {[]string{CatAI, CatWrite, CatFast}},
+	"SESSION.CLUSTER.STATS":   {[]string{CatAI, CatRead, CatFast}},
+
+	// DOC.FRESH.* — RAG-corpus freshness tracker.
+	"DOC.FRESH.REGISTER":   {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.STAMP":      {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.CHECK":      {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.INVALIDATE": {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.BULKCHECK":  {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.STALE":      {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"DOC.FRESH.DROP":       {[]string{CatAI, CatWrite, CatFast}},
+	"DOC.FRESH.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// CACHE.WARM.* — semantic cache warmer.
+	"CACHE.WARM.RECORD":   {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.PLAN":     {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.MARK":     {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.PROGRESS": {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.MINSIM":   {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.LIST":     {[]string{CatAI, CatRead, CatFast}},
+	"CACHE.WARM.RESET":    {[]string{CatAI, CatWrite, CatFast}},
+	"CACHE.WARM.STATS":    {[]string{CatAI, CatRead, CatFast}},
+
+	// FAIRQUEUE.* — weighted-fair tenant queue.
+	"FAIRQUEUE.CONFIG":     {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.ENQUEUE":    {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.DEQUEUE":    {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.PEEK":       {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.LEN":        {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.DROPTENANT": {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.LIST":       {[]string{CatAI, CatRead, CatFast}},
+	"FAIRQUEUE.RESET":      {[]string{CatAI, CatWrite, CatFast}},
+	"FAIRQUEUE.STATS":      {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown
