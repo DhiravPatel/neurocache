@@ -30,6 +30,8 @@ const (
 	CatTransaction = "transaction"
 	CatScripting   = "scripting"
 	CatAI          = "ai" // NeuroCache-specific: SEMANTIC_*, CACHE_LLM*, MEMORY_*
+	CatQuota       = "quota"  // QUOTA.* composite admission control
+	CatRembed      = "rembed" // REMBED.* embedding-recompute migration
 )
 
 // AllCategories is the canonical list returned by ACL CAT with no args.
@@ -37,7 +39,7 @@ var AllCategories = []string{
 	CatKeyspace, CatRead, CatWrite, CatSet, CatSortedSet, CatList, CatHash,
 	CatString, CatBitmap, CatHyperLogLog, CatGeo, CatStream, CatPubSub,
 	CatAdmin, CatFast, CatSlow, CatBlocking, CatDangerous, CatConnection,
-	CatTransaction, CatScripting, CatAI,
+	CatTransaction, CatScripting, CatAI, CatQuota, CatRembed,
 }
 
 // commandInfo captures the ACL-relevant metadata for one command: its
@@ -1584,6 +1586,33 @@ var registry = map[string]commandInfo{
 	"AIWAL.LIST":       {[]string{CatAI, CatRead, CatFast}},
 	"AIWAL.FORGET":     {[]string{CatAI, CatWrite, CatDangerous}},
 	"AIWAL.STATS":      {[]string{CatAI, CatRead, CatFast}},
+
+	// Tier 1 — semantic groundedness. VERIFY/VSTATS are pure reads;
+	// REQUIRE debits RISK.BUDGET so it's a write.
+	"GROUND.VERIFY":  {[]string{CatAI, CatRead, CatFast}},
+	"GROUND.REQUIRE": {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.VSTATS":  {[]string{CatAI, CatRead, CatFast}},
+
+	// Tier 1 — QUOTA composite admission control. Dedicated @quota
+	// category (also @ai) so `+@quota` scopes the whole family.
+	"QUOTA.POLICY":   {[]string{CatQuota, CatAI, CatWrite, CatFast}},
+	"QUOTA.GET":      {[]string{CatQuota, CatAI, CatRead, CatFast}},
+	"QUOTA.LIST":     {[]string{CatQuota, CatAI, CatRead, CatFast}},
+	"QUOTA.DELETE":   {[]string{CatQuota, CatAI, CatWrite, CatFast}},
+	"QUOTA.ADMIT":    {[]string{CatQuota, CatAI, CatWrite, CatFast}},
+	"QUOTA.SIMULATE": {[]string{CatQuota, CatAI, CatRead, CatFast}},
+	"QUOTA.STATS":    {[]string{CatQuota, CatAI, CatRead, CatFast}},
+
+	// Tier 1 — REMBED embedding migration. Operational (@admin) + @rembed;
+	// PLAN/START walk the whole keyspace so they're @slow.
+	"REMBED.PLAN":     {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatSlow}},
+	"REMBED.START":    {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatSlow}},
+	"REMBED.PROGRESS": {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
+	"REMBED.STATUS":   {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
+	"REMBED.SWAP":     {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatFast}},
+	"REMBED.ROLLBACK": {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatFast}},
+	"REMBED.LIST":     {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
+	"REMBED.STATS":    {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

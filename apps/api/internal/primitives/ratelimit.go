@@ -36,6 +36,22 @@ func NewRateLimiter() *RateLimiter {
 // events are allowed. Cost == 1 is the typical "one event" call;
 // callers can pass higher costs for batched ops.
 func (r *RateLimiter) Allow(key string, period time.Duration, max int64, cost int64) (bool, int64, int64, int64) {
+	return r.eval(key, period, max, cost, true)
+}
+
+// Peek evaluates the same GCRA decision as Allow but never mutates the
+// bucket — the slot is not consumed. This is the non-destructive gate
+// QUOTA.SIMULATE needs (and QUOTA.ADMIT's first, peek-all phase) so a
+// composite admission check can test the rate gate without spending a
+// token just to find out another gate would have blocked.
+func (r *RateLimiter) Peek(key string, period time.Duration, max int64, cost int64) (bool, int64, int64, int64) {
+	return r.eval(key, period, max, cost, false)
+}
+
+// eval is the shared GCRA core. When commit is false it computes the
+// allow/deny decision and hints exactly as a real call would, but leaves
+// the bucket's theoretical-arrival-time untouched.
+func (r *RateLimiter) eval(key string, period time.Duration, max int64, cost int64, commit bool) (bool, int64, int64, int64) {
 	if max <= 0 {
 		return false, 0, period.Milliseconds(), period.Milliseconds()
 	}
@@ -59,7 +75,9 @@ func (r *RateLimiter) Allow(key string, period time.Duration, max int64, cost in
 		remaining := int64(0)
 		return false, remaining, retry, reset
 	}
-	r.buckets[key] = newTat
+	if commit {
+		r.buckets[key] = newTat
+	}
 	remaining := int64(period-newTat.Sub(now)) / int64(emissionInterval)
 	if remaining < 0 {
 		remaining = 0

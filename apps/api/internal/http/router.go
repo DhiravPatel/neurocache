@@ -250,6 +250,31 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("POST /api/observe/inc", h.observeInc)
 	mux.HandleFunc("POST /api/observe/gauge", h.observeSet)
 
+	// Tier 1: semantic groundedness (GROUND.VERIFY / REQUIRE / VSTATS)
+	mux.HandleFunc("POST /api/ground/verify", h.groundVerify)
+	mux.HandleFunc("POST /api/ground/require", h.groundRequire)
+	mux.HandleFunc("GET /api/ground/vstats", h.groundVStats)
+
+	// Tier 1: composite admission control (QUOTA.*). Literal segments
+	// (stats) outrank the {name} wildcard in Go 1.22's ServeMux.
+	mux.HandleFunc("GET /api/quota", h.quotaList)
+	mux.HandleFunc("GET /api/quota/stats", h.quotaStats)
+	mux.HandleFunc("POST /api/quota/{name}/policy", h.quotaPolicy)
+	mux.HandleFunc("POST /api/quota/{name}/admit", h.quotaAdmit)
+	mux.HandleFunc("POST /api/quota/{name}/simulate", h.quotaSimulate)
+	mux.HandleFunc("GET /api/quota/{name}", h.quotaGet)
+	mux.HandleFunc("DELETE /api/quota/{name}", h.quotaDelete)
+
+	// Tier 1: embedding-recompute migration (REMBED.*)
+	mux.HandleFunc("GET /api/rembed", h.rembedList)
+	mux.HandleFunc("GET /api/rembed/stats", h.rembedStats)
+	mux.HandleFunc("POST /api/rembed/plan", h.rembedPlan)
+	mux.HandleFunc("POST /api/rembed/start", h.rembedStart)
+	mux.HandleFunc("GET /api/rembed/{job}/progress", h.rembedProgress)
+	mux.HandleFunc("GET /api/rembed/{job}/status", h.rembedStatus)
+	mux.HandleFunc("POST /api/rembed/{job}/swap", h.rembedSwap)
+	mux.HandleFunc("POST /api/rembed/{job}/rollback", h.rembedRollback)
+
 	// Raw command (like redis-cli EVAL)
 	mux.HandleFunc("POST /api/exec", h.exec)
 

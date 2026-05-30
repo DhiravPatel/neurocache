@@ -34,6 +34,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/persistence"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/primitives"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/rembed"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/replication"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/retrieval"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/scripting"
@@ -747,6 +748,21 @@ type Engine struct {
 	Sagas    *aiops.Sagas
 	CRDTs    *aiops.CRDTRegistry
 
+	// Tier 1 — semantic groundedness (GROUND.VERIFY/REQUIRE), composite
+	// admission control (QUOTA.*), and embedding-recompute migration
+	// (REMBED.*). GroundVerify is the cosine sentence-to-chunk scorer that
+	// feeds RISK.BUDGET; Quota ANDs the five budget gates; Rembed
+	// re-embeds the vector spaces with dual-read cutover.
+	GroundVerify *llmstack.GroundVerifier
+	Quota        *aiops.QuotaManager
+	Rembed       *rembed.Rembedder
+	// quotaMu serializes QuotaEvaluate so a single admission's peek-all and
+	// commit-all phases are atomic with respect to other admissions — without
+	// it two concurrent ADMITs can both peek-OK then both consume, overshooting
+	// carbon/risk budgets or mis-reporting cost as consumed. Admission is not a
+	// hot path, so a single mutex is the right trade.
+	quotaMu sync.Mutex
+
 	// HotKeys is the runtime top-K access tracker driven by the
 	// keyspace notifier. Replaces the awkward `redis-cli --hotkeys`
 	// scan + LFU-only OBJECT FREQ approach with a HeavyKeeper-backed
@@ -1006,6 +1022,16 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Circuits = aiops.NewCircuits()
 	e.Sagas = aiops.NewSagas()
 	e.CRDTs = aiops.NewCRDTRegistry()
+
+	// Tier 1 — semantic groundedness + composite admission + embedding
+	// migration. GroundVerify shares the embedding dim with the rest of
+	// the semantic layer; Rembed registers every re-embeddable subsystem
+	// as a migration target (must run after Semantic/LLM/Memory/Retrieval
+	// are constructed, which they are by this point).
+	e.GroundVerify = llmstack.NewGroundVerifier(cfg.EmbeddingDim)
+	e.Quota = aiops.NewQuotaManager()
+	e.Rembed = rembed.New()
+	e.registerRembedTargets()
 	// Phase 12 — instantiate the uniqueness primitives. Wire CHURN to
 	// the engine's keyspace deleter so CHURN.INVALIDATE actually
 	// drops keys; default the Audit retention to 1M events.
@@ -1110,10 +1136,17 @@ func (e *Engine) EnablePersistence(run func(cmd string, args []string) error) er
 	switch {
 	case e.Cfg.AOFEnabled:
 		aofPath := filepath.Join(dir, "append.aof")
-		if err := persistence.Replay(aofPath, run); err != nil {
-			e.Log.Warn("aof replay failed", "err", err)
+		// A single un-applicable command (e.g. a runtime-only AI command the
+		// replayer doesn't implement) must not abort the replay and lose the
+		// keyspace writes that follow it — Replay skips those and reports them
+		// here. Only a corrupt/truncated stream returns an error.
+		applied, err := persistence.Replay(aofPath, run, func(cmd string, cerr error) {
+			e.Log.Debug("aof replay skipped command", "cmd", cmd, "err", cerr)
+		})
+		if err != nil {
+			e.Log.Warn("aof replay failed", "err", err, "applied", applied)
 		} else {
-			e.Log.Info("aof replayed", "path", aofPath)
+			e.Log.Info("aof replayed", "path", aofPath, "applied", applied)
 		}
 		aof, err := persistence.OpenAOF(aofPath, parseFsyncPolicy(e.Cfg.AOFFsync))
 		if err != nil {

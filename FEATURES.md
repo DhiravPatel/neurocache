@@ -1655,3 +1655,81 @@ The scope-discipline note from this round: there were other candidates (continua
 
 - NETTING.* / XTXN.* mutating commands are in `internal/resp/writeset.go` for AOF replay. AIWAL.* mutations are also in the writeset; AIWAL is itself a write-ahead log layer, so the engine's AOF effectively logs the log — fine, since AOF replay reconstructs the AIWAL state.
 - ACL: NETTING.APPLY is `@slow` (it posts N SETTLE.TXNs). `*.FORGET` and AIWAL.TRUNCATE are `@dangerous` since they discard durable history.
+
+## Tier 1 — the three structural gaps (REMBED / GROUND / QUOTA)
+
+Three families that close gaps the architecture itself created, rather than another lap around the "command Redis also ships" list. Each composes existing NeuroCache primitives instead of bolting on a new subsystem. State lives in `internal/llmstack/groundverify.go`, `internal/aiops/quota.go`, and `internal/rembed/`; RESP handlers in `internal/resp/commands_tier1.go`; HTTP in `internal/http/tier1.go`.
+
+### REMBED.* — embedding-recompute migration with dual-read cutover
+
+The latent bug REMBED fixes: the entire semantic layer (`SEMANTIC_*`, `MEMORY.*`, `RETRIEVE.*`) is pinned to one embedder at one dimension (`vector.Embed`, default 384). The day that embedder or dimension changes, every stored vector is silently incomparable to new ones — and nothing else in the engine re-embeds them. REMBED is the migration tool: snapshot the source texts, rebuild each space at the target dimension **off the hot path**, optionally serve both spaces during cutover (**dual-read**) so retrieval quality never dips, then commit (`SWAP`) or abort (`ROLLBACK`) atomically.
+
+| Command | What it does | Where |
+|---|---|---|
+| `REMBED.PLAN scope [TO dim]` | Per-target count + byte estimate + dual-read capability. Read-only. | `rembed/rembed.go` + `resp/commands_tier1.go` |
+| `REMBED.START scope [TO dim] [BATCH n] [DUAL_READ 0\|1]` | Kick off a background re-embed job; returns the job id. `TO` defaults to the configured dim. | same |
+| `REMBED.PROGRESS job` | done/total + rps + eta, per target. | same |
+| `REMBED.STATUS job` / `REMBED.LIST` | Full job snapshot / every job newest-first. | same |
+| `REMBED.SWAP job` | Atomically promote every staged space to live. Only from `staged`. | same |
+| `REMBED.ROLLBACK job` | Discard staged shadows (from `staged`) or cancel a running job. | same |
+| `REMBED.STATS` | targets / jobs / total_jobs / active. | same |
+
+**Scope ↔ target map.** `all` = every registered target; or name one of `semantic` / `llm` / `memory` / `retrieve`.
+
+| Target | Re-embeddable? | Dual-read? | Why |
+|---|---|---|---|
+| semantic / llm / memory | ✅ | ✅ | All wrap `vector.Index`, which stores the source text. The shadow + dual-read primitives live in `vector.Index` (one implementation, three beneficiaries). |
+| retrieve | ✅ (dense arm) | ❌ (graceful) | `vectorindex.Index` stores only floats; the text lives in the doc store, so the dense arm is rebuilt + swapped. No query-time dual-read — the BM25 lexical arm keeps serving exact terms during the migration, so retrieval degrades gracefully rather than going dark. |
+| VADD / CFCACHE / ISOLATE | ❌ | — | VADD stores client-supplied raw vectors with no source text; CFCACHE/ISOLATE hold no vectors. Re-embedding is impossible without the original text — these are intentionally out of scope. |
+
+**Dual-read mechanism** (`internal/vector/vector.go`): `AttachShadow` installs a replacement index built at the new dim from the same texts; while `SetDualRead(true)` is on, `Search` scores the query against **both** spaces (each at its own dimension) and unions the hits by id (keeping the higher score) before the top-k cut. `SwapShadow` makes the shadow primary and drops the old space; `DropShadow` discards it. Search recursion terminates after one level (the shadow has no shadow of its own).
+
+**Persistence:** REMBED is deliberately **not** in the writeset — the vectors derive from the entries' own already-persisted writes (`SEMANTIC_SET`, `MEMORY.ADD`, `RETRIEVE.ADD`), so a migration is a live runtime operation, not durable state (same treatment as `HOTKEYS`). Config: `NEUROCACHE_REMBED_BATCH` (default 512).
+
+### GROUND.VERIFY / GROUND.REQUIRE — semantic groundedness that closes the RISK loop
+
+`GROUND.CHECK` (pre-existing) is a **lexical** Jaccard scorer. These add the **semantic** pass — cosine sentence-to-chunk alignment — and, more importantly, `GROUND.REQUIRE` feeds the resulting doc-level support score straight into `RISK.BUDGET.DEBIT`. Before this, `RISK.BUDGET.DEBIT` trusted a score the client computed by hand and nothing in the engine ever checked whether an answer's claims were supported by its context. The loop is now closed inside the cache.
+
+| Command | What it does | Where |
+|---|---|---|
+| `GROUND.VERIFY answer CONTEXT c1 [c2 ...] [MIN_SUPPORT f]` | Per-sentence support score (max cosine to any chunk) + the unsupported-claim list. `doc_score` is the worst sentence (one fabricated sentence drags the answer down). | `llmstack/groundverify.go` |
+| `GROUND.REQUIRE answer CONTEXT c1 [c2 ...] [MIN_SUPPORT f] [SESSION s]` | Boolean `grounded` gate; when `SESSION` is given, auto-debits `RISK.BUDGET` with `doc_score` and returns the new balance/enforce flag. | same |
+| `GROUND.VSTATS` | dim / verify / require / pass / fail counters. | same |
+
+Algorithm: split the answer into sentences (shared `splitClaims`), embed each sentence and each context chunk via `vector.Embed`, support = max cosine to any chunk, `doc_score` = the minimum (worst) sentence support, `grounded` = every sentence clears `MIN_SUPPORT`. NLI cross-encoders are the upgrade path — the command surface doesn't change. Config: `NEUROCACHE_GROUND_MIN_SUPPORT` (default 0.5). `GROUND.REQUIRE` is in the writeset (it debits the persisted risk balance); `GROUND.VERIFY`/`VSTATS` are pure reads.
+
+### QUOTA.* — composite admission control over the five existing budgets
+
+NeuroCache already ships five independent gates — COST (USD, `e.CostBudgets`), CARBON (gCO₂), RISK (hallucination balance), RATELIMIT (rps), MARKET (contention price). A real request must clear all of them, and apps hand-roll the AND across five round-trips — with no way to ask "*would* this be admitted?" without consuming each budget to find out. QUOTA is the single admission decision.
+
+| Command | What it does | Where |
+|---|---|---|
+| `QUOTA.POLICY name REQUIRE g1,g2,... [MODE all\|any]` | Define a composite gate (gates ⊆ `cost,carbon,risk,rate,market`). | `aiops/quota.go` + `resp/commands_tier1.go` |
+| `QUOTA.ADMIT name [COST scope usd] [CARBON tenant tokens model] [RISK session score] [RATE key window-ms max] [MARKET market maxprice]` | Admit + consume. Returns `{admitted, committed, denied_by, retry_after_ms, gates[...]}`. | same |
+| `QUOTA.SIMULATE name ...same dims...` | Dry run — peek every gate, consume nothing. | same |
+| `QUOTA.GET` / `QUOTA.LIST` / `QUOTA.DELETE` / `QUOTA.STATS` | Policy registry + roll-up counters. | same |
+
+**Two-phase by design.** `QUOTA.ADMIT` PEEKS every required gate first (non-mutating), computes the verdict, and only then — if admitted — consumes. So a request that fails the carbon budget never burns a rate-limit token, and `QUOTA.SIMULATE` is a pure dry run. This required adding non-mutating forward-looking peeks that the gates lacked: `CostBudgets.Peek`, `CarbonLedger.Simulate`, `RiskBudgets.Peek`, `RateLimiter.Peek` (the GCRA decision with `commit=false`). COST composes the **same** per-tenant budget operators set via `COST.BUDGET`. MARKET is a signal-only gate — peeked against a price ceiling, never consumed (admission there is an asynchronous auction, not a synchronous debit). Consume rules: ALL mode consumes every required gate; ANY mode consumes only the gates that individually had room. The two-phase evaluator lives in `engine/quota_eval.go` (the only layer holding all five gate handles); `aiops.QuotaManager` stays a pure policy registry. A dedicated `@quota` ACL category scopes the family (`+@quota`); config `NEUROCACHE_QUOTA_DEFAULT_MODE` (default `all`).
+
+### Tier 1 persistence + replication, and a data-loss fix found along the way
+
+- `GROUND.REQUIRE`, `QUOTA.POLICY`, `QUOTA.ADMIT`, `QUOTA.DELETE` are in `internal/resp/writeset.go`; the RESP `execute()` path records writeset members exactly once, so handlers do **not** also call `RecordWrite` (that would double-apply the risk debit / budget charge on replay).
+- **AOF replay is now skip-tolerant.** While wiring this up, the AOF replay was found to *abort on the first command whose `run()` failed* — and since the replayer (`internal/http/dispatch.go`) only implements core Redis verbs, the first AI-family command in the log aborted the entire replay and silently discarded every keyspace write recorded after it. `persistence.Replay` now distinguishes a corrupt/truncated stream (still aborts) from a single un-applicable command (logged + skipped, replay continues), and reports the applied count. Regression test in `internal/persistence/aof_replay_test.go`.
+
+### Concurrency hardening (post-review)
+
+An adversarial multi-agent review of the diff surfaced (and these were then fixed + regression-tested under `-race`) a set of concurrency/correctness defects that single-threaded tests miss:
+
+- **`vector.Index.SwapShadow` map aliasing → process-fatal crash.** The old swap did `ix.items = sh.items`, leaving the live index and a still-reachable (in-flight dual-read) shadow sharing one map under two different mutexes — a `fatal error: concurrent map read and map write` that `recover()` can't catch. Now the swap reconciles the live→shadow delta and promotes into a **fresh map**, so no detached shadow ever shares the live map.
+- **Writes during a migration were silently dropped at swap** (both `vector.Index` and the retrieval dense arm). Entries Upsert'd/added after the shadow was built reached only the live space; the wholesale swap discarded them. Both swap paths now **reconcile against the live set** before promoting (re-embed new/changed ids at the new dim, drop deleted ones).
+- **`rembed` cancel double-close → panic.** Two concurrent `REMBED.ROLLBACK`s on a running job both passed the state check then both `close(j.cancel)`. Guarded with `sync.Once`.
+- **`rembed` lost-rollback race.** A rollback landing in the window between the last `Stage` returning and the worker committing `StateStaged` was silently ignored. The worker now re-checks the cancel signal under the job lock before committing, and unwinds instead.
+- **`rembed` overlapping migrations on one target.** Two jobs staging the same target would overwrite one shadow and could commit the wrong data. `Start` now **reserves** each target and rejects an overlapping migration; multi-target `Swap` **pre-validates** every target is still staged before committing any (all-or-nothing, no split-dimension engine).
+- **QUOTA peek/commit TOCTOU.** Concurrent `QUOTA.ADMIT`s could both peek-OK then both consume — overshooting the carbon/risk ceilings or mis-reporting cost as consumed. Admission is now serialized by an engine mutex so peek-all and commit-all are atomic, and each gate's consume honors its real commit result.
+- **False durability claim.** `GROUND.REQUIRE`/`QUOTA.*` were briefly in the writeset with a comment claiming they replay to reconstruct state — but the AOF replayer implements only core Redis verbs (true of every AI family, including the budgets QUOTA composes), so they'd be appended then silently skipped. Removed from the writeset with an honest note; their state is runtime-only, like the existing budget primitives.
+
+The review also caught a **pre-existing data-loss bug** unrelated to these families (fixed): AOF replay aborted on the first command the replayer couldn't apply, discarding all keyspace writes after it — see the data-loss-safe `persistence.Replay` change above.
+
+### Tests
+
+`internal/vector/vector_rembed_test.go` (dual-read union + swap + rollback, **write-during-migration preservation**, **concurrent Search/Upsert/Swap under `-race`**), `internal/rembed/rembed_test.go` + `rembed_concurrency_test.go` (plan/scope, start→staged→swap, rollback, mid-job failure unwind, stats, **concurrent-rollback no-panic**, **overlap rejection**, **reservation release**), `internal/llmstack/groundverify_test.go` (grounded/ungrounded/empty + the GROUND→RISK enforce loop), `internal/llmstack/gates_peek_test.go` + `internal/primitives/ratelimit_peek_test.go` (peeks don't mutate), `internal/aiops/quota_test.go` (policy validation + lifecycle + counters), `internal/engine/tier1_test.go` (QUOTA two-phase incl. consume-nothing-on-denial, ANY-mode partial consume, **concurrent no-overshoot for cost + carbon**, full semantic REMBED dual-read→swap), `internal/retrieval/retrieval_rembed_test.go` (dense-arm rebuild + **docs-added-during-staging preserved**), `internal/persistence/aof_replay_test.go` (no data loss after a skipped command).

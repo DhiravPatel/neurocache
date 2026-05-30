@@ -1,0 +1,165 @@
+package llmstack
+
+import (
+	"sync/atomic"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/vector"
+)
+
+// GroundVerifier is the SEMANTIC groundedness scorer behind GROUND.VERIFY
+// and GROUND.REQUIRE. It complements the lexical GroundChecker (GROUND.CHECK,
+// Jaccard n-gram overlap): where the lexical pass catches fabricated facts /
+// entity swaps / invented numbers, the semantic pass catches the
+// paraphrase-but-supported case the lexical pass under-scores — and, more
+// importantly, it produces a single doc-level support score that feeds
+// RISK.BUDGET.DEBIT automatically (GROUND.REQUIRE), closing the loop that
+// previously left the risk score for the client to compute by hand.
+//
+// Algorithm — cosine sentence-to-chunk alignment:
+//
+//   1. Split the answer into sentence-sized claims (shared splitClaims).
+//   2. Embed each claim and each context chunk with the project embedder.
+//   3. Each claim's support = its max cosine similarity to any chunk.
+//   4. doc_score = the MIN claim support (worst sentence) — one unsupported
+//      sentence drags the whole answer down, mirroring the lexical checker's
+//      deliberate worst-case philosophy.
+//
+// A claim is "unsupported" when its support falls below the caller's
+// min_support; the answer is "grounded" when every claim clears the bar.
+// NLI cross-encoders are the natural upgrade path — the command surface
+// doesn't change when a stronger scorer is dropped in.
+//
+// All embeddings are non-negative feature-hashed unit vectors, so cosine
+// lands in [0,1]; we clamp defensively regardless.
+type GroundVerifier struct {
+	dim int
+
+	totalVerify  atomic.Int64
+	totalRequire atomic.Int64
+	totalPass    atomic.Int64 // grounded results
+	totalFail    atomic.Int64 // not-grounded results
+}
+
+// NewGroundVerifier builds a verifier embedding at dim (defaults to 384,
+// matching the rest of the semantic layer).
+func NewGroundVerifier(dim int) *GroundVerifier {
+	if dim <= 0 {
+		dim = 384
+	}
+	return &GroundVerifier{dim: dim}
+}
+
+const defaultMinSupport = 0.5
+
+// SentenceSupport is one claim's grounding result.
+type SentenceSupport struct {
+	Sentence  string  `json:"sentence"`
+	Support   float64 `json:"support"`    // max cosine to any chunk, [0,1]
+	BestChunk int     `json:"best_chunk"` // 0-indexed; -1 if no context
+	Supported bool    `json:"supported"`  // support >= min_support
+}
+
+// VerifyResult is the GROUND.VERIFY / GROUND.REQUIRE return.
+type VerifyResult struct {
+	DocScore    float64           `json:"doc_score"`  // worst claim support
+	MeanScore   float64           `json:"mean_score"` // average claim support
+	MinSupport  float64           `json:"min_support"`
+	Grounded    bool              `json:"grounded"` // every claim supported
+	Sentences   []SentenceSupport `json:"sentences"`
+	Unsupported []string          `json:"unsupported"`
+}
+
+// Verify scores answer against context and returns per-claim support. Pure
+// read of the scorer (only counters move). minSupport <= 0 falls back to
+// the default 0.5.
+func (g *GroundVerifier) Verify(answer string, context []string, minSupport float64) VerifyResult {
+	g.totalVerify.Add(1)
+	return g.score(answer, context, minSupport)
+}
+
+// Require runs the same scoring as Verify but is the gate variant: callers
+// treat the Grounded flag as an admit/regenerate decision, and the engine
+// feeds DocScore into RISK.BUDGET.DEBIT. Tracks pass/fail counters.
+func (g *GroundVerifier) Require(answer string, context []string, minSupport float64) VerifyResult {
+	g.totalRequire.Add(1)
+	res := g.score(answer, context, minSupport)
+	if res.Grounded {
+		g.totalPass.Add(1)
+	} else {
+		g.totalFail.Add(1)
+	}
+	return res
+}
+
+func (g *GroundVerifier) score(answer string, context []string, minSupport float64) VerifyResult {
+	if minSupport <= 0 {
+		minSupport = defaultMinSupport
+	}
+	sentences := splitClaims(answer)
+	if len(sentences) == 0 {
+		// Nothing to ground — vacuously grounded. Apps usually short
+		// circuit before this, but be explicit rather than divide by zero.
+		return VerifyResult{DocScore: 1, MeanScore: 1, MinSupport: minSupport, Grounded: true}
+	}
+
+	chunkVecs := make([][]float32, len(context))
+	for i, c := range context {
+		chunkVecs[i] = vector.Embed(c, g.dim)
+	}
+
+	res := VerifyResult{MinSupport: minSupport, Sentences: make([]SentenceSupport, 0, len(sentences))}
+	doc := 1.0
+	sum := 0.0
+	for _, s := range sentences {
+		sv := vector.Embed(s, g.dim)
+		best := -1
+		bestScore := 0.0
+		for i, cv := range chunkVecs {
+			sc := float64(vector.Cosine(sv, cv))
+			if sc > bestScore {
+				bestScore = sc
+				best = i
+			}
+		}
+		if bestScore < 0 {
+			bestScore = 0
+		}
+		if bestScore > 1 {
+			bestScore = 1
+		}
+		supported := bestScore >= minSupport
+		res.Sentences = append(res.Sentences, SentenceSupport{
+			Sentence: s, Support: bestScore, BestChunk: best, Supported: supported,
+		})
+		if !supported {
+			res.Unsupported = append(res.Unsupported, s)
+		}
+		if bestScore < doc {
+			doc = bestScore
+		}
+		sum += bestScore
+	}
+	res.DocScore = doc
+	res.MeanScore = sum / float64(len(sentences))
+	res.Grounded = len(res.Unsupported) == 0
+	return res
+}
+
+// GroundVerifyStats is the GROUND.VSTATS snapshot.
+type GroundVerifyStats struct {
+	Dim          int   `json:"dim"`
+	TotalVerify  int64 `json:"total_verify"`
+	TotalRequire int64 `json:"total_require"`
+	TotalPass    int64 `json:"total_pass"`
+	TotalFail    int64 `json:"total_fail"`
+}
+
+func (g *GroundVerifier) Stats() GroundVerifyStats {
+	return GroundVerifyStats{
+		Dim:          g.dim,
+		TotalVerify:  g.totalVerify.Load(),
+		TotalRequire: g.totalRequire.Load(),
+		TotalPass:    g.totalPass.Load(),
+		TotalFail:    g.totalFail.Load(),
+	}
+}

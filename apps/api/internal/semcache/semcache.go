@@ -54,6 +54,11 @@ func (s *Store) Get(query string, threshold float32) (string, float32, bool) {
 	return v, hits[0].Score, true
 }
 
+// Index exposes the underlying vector index so the REMBED orchestrator can
+// drive an embedding migration (snapshot → shadow → dual-read → swap)
+// without semcache having to re-export the whole staging surface.
+func (s *Store) Index() *vector.Index { return s.ix }
+
 func (s *Store) Del(key string) bool {
 	s.mu.Lock()
 	_, ok := s.values[key]
