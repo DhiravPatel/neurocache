@@ -664,6 +664,39 @@ type Engine struct {
 	Entropy     *llmstack.EntropyMonitor
 	Temporal    *llmstack.TemporalSnapshots
 
+	// Phase 16 — settlement (double-entry bookkeeping with invariant
+	// enforcement), chaos injection, continual-learning guards, DR
+	// drill, plus seven rapid-fire: bargaining, computation proofs,
+	// repro seeds, regwatch, semantic egress DLP, license tracker,
+	// always-on shadow replay.
+	Settlement   *llmstack.Settlement
+	Chaos        *llmstack.ChaosInjector
+	Continual    *llmstack.ContinualLearning
+	DR           *llmstack.DRRegistry
+	Negotiations *llmstack.Negotiations
+	Proofs       *llmstack.ProofRegistry
+	Repro        *llmstack.ReproSeeds
+	RegWatch     *llmstack.RegWatch
+	Egress       *llmstack.EgressGuard
+	License      *llmstack.LicenseTracker
+	ReplayShadow *llmstack.ReplayShadow
+
+	// Phase 17 — three primitives only, each addressing a gap the
+	// prior phases left open:
+	//   NETTING.*  clearing/netting on top of SETTLE — reduces gross
+	//              obligations in a clearing cycle to the minimum
+	//              set of net transfers.
+	//   XTXN.*     cross-primitive two-phase commit coordinator. The
+	//              honest scope: single-process 2PC over registered
+	//              participants. Surfaces "commit_partial" rather
+	//              than hiding it.
+	//   AIWAL.*    per-primitive write-ahead log with checkpoint +
+	//              recover. The protocol layer; on-disk durability
+	//              remains the engine's AOF concern.
+	Netting *llmstack.Netting
+	XTxn    *llmstack.XTxnCoordinator
+	AIWAL   *llmstack.AIWALRegistry
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -923,6 +956,27 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.Carbon = llmstack.NewCarbonLedger()
 	e.Entropy = llmstack.NewEntropyMonitor()
 	e.Temporal = llmstack.NewTemporalSnapshots()
+
+	// Phase 16 — settlement, chaos, continual, DR, plus the seven
+	// rapid-fire ones.
+	e.Settlement = llmstack.NewSettlement()
+	e.Chaos = llmstack.NewChaosInjector()
+	e.Continual = llmstack.NewContinualLearning()
+	e.DR = llmstack.NewDRRegistry()
+	e.Negotiations = llmstack.NewNegotiations()
+	e.Proofs = llmstack.NewProofRegistry()
+	e.Repro = llmstack.NewReproSeeds()
+	e.RegWatch = llmstack.NewRegWatch()
+	e.Egress = llmstack.NewEgressGuard()
+	e.License = llmstack.NewLicenseTracker()
+	e.ReplayShadow = llmstack.NewReplayShadow()
+
+	// Phase 17 — netting, xtxn, aiwal.
+	e.Netting = llmstack.NewNetting()
+	e.Netting.SetExecutor(&nettingExecutorAdapter{e: e})
+	e.XTxn = llmstack.NewXTxnCoordinator()
+	e.AIWAL = llmstack.NewAIWALRegistry()
+
 	// Wire AUTO to read live state from the other Phase 14/15 primitives.
 	e.Auto.SetContext(&autoEvalContextAdapter{e: e})
 
@@ -1909,4 +1963,20 @@ func (a *autoEvalContextAdapter) CFCacheHitRate() (float64, bool) {
 		return 0, false
 	}
 	return s.HitRate, true
+}
+
+// nettingExecutorAdapter satisfies llmstack.NettingExecutor by
+// posting netted transfers through the engine's Settlement primitive.
+// The ledger argument is currently informational — NeuroCache has a
+// single Settlement instance per process — but we keep it in the
+// contract so callers can route per-ledger if a multi-ledger split
+// ever happens.
+type nettingExecutorAdapter struct {
+	e *Engine
+}
+
+func (n *nettingExecutorAdapter) PostTxn(ledger, txnID, memo string, debits, credits []llmstack.SettleLine) error {
+	_ = ledger // single-ledger today; reserved for future routing.
+	_, err := n.e.Settlement.Txn(txnID, memo, debits, credits)
+	return err
 }
