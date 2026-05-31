@@ -178,7 +178,12 @@ func (f *FairQueue) Dequeue(queueID string) (FQDequeueResult, bool) {
 		if len(t.pending) == 0 {
 			continue
 		}
-		if first || t.pass < winnerPass {
+		// Break pass ties by tenant name so the schedule is deterministic
+		// (as the algorithm doc promises) rather than dependent on Go's
+		// randomized map iteration order — equal-weight tenants share the
+		// same pass on every tie, so without this the round-robin order
+		// was nondeterministic run-to-run.
+		if first || t.pass < winnerPass || (t.pass == winnerPass && name < winner) {
 			winner = name
 			winnerPass = t.pass
 			first = false
@@ -238,10 +243,13 @@ func (f *FairQueue) Peek(queueID string, limit int) ([]FQPeekRow, bool) {
 		if len(cursors) == 0 {
 			break
 		}
-		// Find smallest pass
+		// Find smallest pass, breaking ties by tenant name so PEEK
+		// matches DEQUEUE's deterministic order (cursors were built from
+		// randomized map iteration).
 		bestI := 0
 		for i, c := range cursors {
-			if c.pass < cursors[bestI].pass {
+			if c.pass < cursors[bestI].pass ||
+				(c.pass == cursors[bestI].pass && c.tenant < cursors[bestI].tenant) {
 				bestI = i
 			}
 		}

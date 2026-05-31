@@ -1938,18 +1938,32 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeSimple(c.bw, "OK")
 	case "EXEC":
 		c.execCmd()
+		c.syncWatchGauge() // EXEC clears the watched set
 	case "DISCARD":
 		if err := c.tx.Discard(); err != nil {
 			writeError(c.bw, err.Error())
 			return
 		}
+		c.syncWatchGauge() // DISCARD clears the watched set
 		writeSimple(c.bw, "OK")
 	case "WATCH":
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
+		// Raise this conn's watcher-gauge contribution BEFORE reading any
+		// version, so a concurrent write to a watched key starts bumping
+		// immediately and cannot slip through the BumpKey gate between the
+		// version read here and a later EXEC.
+		if !c.watchContributed {
+			c.eng.AddWatcher()
+			c.watchContributed = true
+		}
 		for _, k := range args {
 			if err := c.tx.Watch(k, c.eng.KeyVersion(k)); err != nil {
+				// WATCH inside MULTI errors and leaves the set unchanged;
+				// reconcile the gauge back down if we'd raised it for an
+				// otherwise-empty set.
+				c.syncWatchGauge()
 				writeError(c.bw, err.Error())
 				return
 			}
@@ -1957,6 +1971,7 @@ func (c *conn) dispatch(cmd string, args []string) {
 		writeSimple(c.bw, "OK")
 	case "UNWATCH":
 		c.tx.Unwatch()
+		c.syncWatchGauge()
 		writeSimple(c.bw, "OK")
 
 	// ─── bitmaps ───────────────────────────────────────────────────

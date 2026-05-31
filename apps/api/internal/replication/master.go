@@ -85,6 +85,18 @@ type Master struct {
 	state   *State
 	backlog *Backlog
 
+	// activated latches true the first time a replica begins a PSYNC
+	// handshake. Until then there is provably no consumer of the backlog
+	// or the pending fan-out buffer, so the engine skips Propagate
+	// entirely — every write would otherwise pay to encode a frame, lock
+	// the backlog ring, grow the pending buffer, and wake the fan-out
+	// goroutine for nobody. This mirrors real Redis, which doesn't
+	// allocate or feed its replication backlog until the first replica
+	// attaches. The latch is one-way: once a master has had a replica it
+	// keeps feeding the backlog so a reconnecting replica can partial-
+	// resync, exactly as before.
+	activated atomic.Bool
+
 	pendingMu sync.Mutex
 	pending   []byte // buffered writes awaiting fan-out
 	notify    chan struct{}
@@ -103,6 +115,15 @@ func NewMaster(state *State, backlog *Backlog) *Master {
 
 // Start kicks off the fan-out goroutine. Safe to call once.
 func (m *Master) Start() { go m.fanoutLoop() }
+
+// Activate latches the master into "feeding the backlog" mode. Called
+// when a replica begins its PSYNC handshake. Idempotent and lock-free.
+func (m *Master) Activate() { m.activated.Store(true) }
+
+// Activated reports whether any replica has ever connected. The engine
+// gates Propagate on this so a master with no replicas never pays the
+// replication-stream tax on writes.
+func (m *Master) Activated() bool { return m.activated.Load() }
 
 // Stop closes the fan-out loop.
 func (m *Master) Stop() {

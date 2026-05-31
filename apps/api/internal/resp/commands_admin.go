@@ -532,6 +532,7 @@ func anyStrSlice(xs []string) []any {
 func (c *conn) resetCmd() {
 	c.tx.Discard()
 	c.tx.Unwatch()
+	c.syncWatchGauge() // RESET clears the watched set
 	for ch, sub := range c.subs {
 		sub.Close()
 		delete(c.subs, ch)

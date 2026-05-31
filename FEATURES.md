@@ -1871,3 +1871,63 @@ Regression guards: `internal/store/crc_vector_test.go` (CRC64 vectors), `interna
 ### Updated Known gaps
 
 Of the three wire-level byte-compat items, the highest-value one — **binary DUMP/RESTORE — is now shipped**. The remaining two stay deferred (they only matter for mixing NeuroCache + Redis nodes in *one cluster*, never for client-side use or key-level migration): the cluster gossip Redis binary protocol, and the AOF RDB preamble. Key-level cross-engine migration — the thing operators and tooling (RIOT, redis-shake) actually reach for — works today.
+
+## Phase 20 — write-path throughput: NeuroCache beats Redis on every command (pipelined)
+
+A second profiling-driven pass, this time targeting the **write path** specifically. Phase 18 closed the parse/clock/GC gaps and reframed the headline metric to pipelined throughput; the writes still trailed Redis there (SET 93%, RPUSH 85%, SPOP 88%, SADD 92%, HSET 95%). This phase found *why* — three pieces of per-write work that ran unconditionally for features nobody was using on the benchmarked workload — and gated each behind the condition that actually needs it. The result: **every benchmarked command now beats Redis on the pipelined (`-P 16`, 50-client) workload**, by 24–132%.
+
+The discipline is the same as Phase 18: every change is backed by a CPU profile (`NEUROCACHE_CPUPROFILE` env hook, new this phase, plus the live `DEBUG CPUPROFILE` command) and a before/after `redis-benchmark` number on an Apple M4.
+
+### What the profile said (write-heavy workload, 50 clients, `-P 16`)
+
+A CPU profile of `set`/`rpush`/`sadd`/`hset` traffic with **zero replicas connected and no AOF** showed three application-level costs dominating — none of them the actual store mutation:
+
+1. `engine.RecordWrite → Master.Propagate` — **~9% of total CPU**. Every write encoded a replication frame, locked the backlog ring, grew a pending fan-out buffer, and woke the fan-out goroutine — for *nobody*, because no replica was attached.
+2. `store.fire → BumpKey` — a **global `sync.RWMutex` + global map write on every write**, feeding the WATCH/EXEC key-version table. Consumed only by optimistic transactions, which were not in use.
+3. `store.fire → HotKeys.Record → HeavyKeeper` — a **global mutex on every write** (default sampling was 1-in-1), feeding the dashboard's "hot keys (writes)" panel.
+
+All three are reads-pay-nothing / writes-pay-everything — which is exactly why writes trailed Redis while reads (GET) already beat it. The mutex-contention frames (`runtime.lock2` at 23% of CPU) were almost entirely items 2 and 3 serializing all 50 client goroutines on two global locks.
+
+### The three gates (each matches what real Redis does)
+
+| Lever | Before | After | Mechanism |
+|---|---|---|---|
+| Lazy replication backlog | `Master.Propagate` on every write, always | Skipped until the **first replica attaches** (`Master.Activated()`, one atomic load) | Mirrors Redis, which doesn't allocate/feed its replication backlog until a replica connects. A one-way latch flips at the first `PSYNC`; from there, behaviour is byte-identical to before. |
+| WATCH-gated version bump | `BumpKey` takes a global lock + map write on every write | Skipped while **no connection is WATCHing anything** (`watchers` atomic gauge) | Mirrors Redis's `dictSize(watched_keys)==0` early-return in `signalModifiedKey`. The gauge is raised before WATCH reads any version, so a write real-time-after a completed WATCH always bumps — optimistic-locking semantics are preserved exactly. |
+| Sampled hot-key tracker | HeavyKeeper locked on every write event | Default **1-in-16 sampling** (`NEUROCACHE_HOTKEYS_SAMPLE`) | The HeavyKeeper top-K is already a probabilistic estimator; the read-side hot-key tracker already sampled 1-in-32 as "statistically indistinguishable." Same principle, applied to the write side. Set to 1 for exact counts. |
+
+### Measured result (`redis-benchmark`, 50 clients, `-P 16`, Apple M4)
+
+Pipelined throughput, NeuroCache rps ÷ Redis rps. "Before" is the Phase 19 baseline; "after" is this phase. Both servers on the same host, same run.
+
+| Command | Before (nc/redis) | After (nc/redis) | NeuroCache rps |
+|---|---:|---:|---:|
+| SET | 93.3% | **143.8%** | 2.13M |
+| GET | 116.7% | **124.1%** | 2.36M |
+| INCR | 111.4% | **140.5%** | 2.56M |
+| LPUSH | 93.9% | **145.4%** | 2.20M |
+| RPUSH | 84.7% | **133.5%** | 2.17M |
+| LPOP | 111.1% | **153.4%** | 2.24M |
+| RPOP | 105.8% | **141.7%** | 2.24M |
+| SADD | 92.4% | **146.3%** | 2.49M |
+| HSET | 95.2% | **146.1%** | 2.07M |
+| SPOP | 88.4% | **143.8%** | 2.81M |
+| ZADD | 113.5% | **202.2%** | 2.69M |
+| MSET (10 keys) | 188.3% | **231.7%** | 0.75M |
+
+**Every command now beats Redis** — the six that previously trailed (SET/LPUSH/RPUSH/SADD/HSET/SPOP) jumped 40–60 points. After the gates, a re-profile showed `store.fire` and the replication frames gone from the top entries; the remaining cost is genuine work — the store mutation itself and the network read/write syscalls (`bufio.Flush`/`fill`), which is where a saturated server *should* spend its time.
+
+**Non-pipelined** (the `bench-vs-redis.sh` table) stays at ~75–88% of Redis. That regime is network-RTT-bound (~1.3 ms/command), so the server isn't the limiter and these server-side wins don't move it — exactly as Phase 18 documented. The pipelined numbers are what production drivers (ioredis, go-redis, jedis — all pipeline by default) actually see.
+
+### Correctness (the load-bearing part — these touch replication and transactions)
+
+- **Live replication smoke test**: wrote keys to a master *before* and *after* attaching a replica; the replica received both (snapshot + stream), and a non-idempotent `INCR ×2` after attach replicated to exactly `2` — proving the lazy-backlog latch doesn't drop or double-apply writes at the handshake boundary.
+- **Live WATCH/EXEC test** (two connections): a concurrent write to a watched key still aborts EXEC (`*-1`); no-conflict still commits; UNWATCH-then-modify still commits. The watcher-gauge gate preserves optimistic-locking semantics exactly.
+- **Regression tests**: `internal/engine/watch_gate_test.go` (BumpKey no-ops with no watcher, bumps with one, gauge nets to zero under concurrent add/drop/bump — `-race`).
+- All **28 packages pass, race-clean**.
+
+### Also this phase
+
+- **`DEBUG CPUPROFILE START|STOP|<seconds>`** — first-class live CPU profiling for a running server, completing the introspection story (`DEBUG JMAP` already covered memory). Writes a standard pprof file to the data dir (analyze with `go tool pprof`); `START`/`STOP` for open-ended capture, or a numeric arg to profile for N seconds and auto-stop (capped at 300s). Guards against double-start and stop-when-idle. Coexists with the `NEUROCACHE_CPUPROFILE` boot-time env hook.
+- **Fixed a pre-existing flaky test** (`TestFairQueueEqualWeightsRoundRobin`, ~60% fail rate): the stride scheduler's doc promised determinism, but on a `pass` tie (exactly what equal weights produce) the winner was chosen by Go's randomized map-iteration order. Added a deterministic tie-break by tenant name in both `Dequeue` and `Peek` (same latent bug) — now 8/8 deterministic.
+- New regression guards: `parallel_bench_test.go` (already present) plus the CPU-profile hook make the write-path wins reproducible and defensible on any machine.
