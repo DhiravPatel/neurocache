@@ -433,17 +433,24 @@ func (c *conn) dispatch(cmd string, args []string) {
 	case "GROUND.CHECK", "GROUND.THRESHOLDS",
 		"GROUND.SET_THRESHOLDS", "GROUND.STATS":
 		c.groundCmd(strings.TrimPrefix(cmd, "GROUND."), args)
-	// Tier 1 — semantic groundedness (cosine sentence-to-chunk + RISK loop)
-	case "GROUND.VERIFY", "GROUND.REQUIRE", "GROUND.VSTATS":
+	// Tier 1 — semantic groundedness (cosine sentence-to-chunk + RISK loop);
+	// SCORER/INGEST add the pluggable external-NLI entailment scorer.
+	case "GROUND.VERIFY", "GROUND.REQUIRE", "GROUND.VSTATS",
+		"GROUND.SCORER", "GROUND.INGEST":
 		c.groundVerifyCmd(strings.TrimPrefix(cmd, "GROUND."), args)
 	// Tier 1 — composite admission control across the five budget gates
 	case "QUOTA.POLICY", "QUOTA.GET", "QUOTA.LIST", "QUOTA.DELETE",
 		"QUOTA.ADMIT", "QUOTA.SIMULATE", "QUOTA.STATS":
 		c.quotaCmd(strings.TrimPrefix(cmd, "QUOTA."), args)
-	// Tier 1 — embedding-recompute migration with dual-read cutover
+	// Tier 1 — embedding-recompute migration with dual-read cutover;
+	// EXTERN/INGEST/FINALIZE add the bring-your-own re-embedder flow.
 	case "REMBED.PLAN", "REMBED.START", "REMBED.PROGRESS", "REMBED.STATUS",
-		"REMBED.SWAP", "REMBED.ROLLBACK", "REMBED.LIST", "REMBED.STATS":
+		"REMBED.SWAP", "REMBED.ROLLBACK", "REMBED.LIST", "REMBED.STATS",
+		"REMBED.EXTERN", "REMBED.INGEST", "REMBED.FINALIZE":
 		c.rembedCmd(strings.TrimPrefix(cmd, "REMBED."), args)
+	// Tier 1+ — reversible, provenance-linked memory compaction
+	case "COMPACT.PLAN", "COMPACT.APPLY", "COMPACT.EXPAND", "COMPACT.STATS":
+		c.compactCmd(strings.TrimPrefix(cmd, "COMPACT."), args)
 	case "CANARY.CREATE", "CANARY.PICK", "CANARY.RECORD",
 		"CANARY.STATUS", "CANARY.SET_TRAFFIC",
 		"CANARY.PROMOTE", "CANARY.ROLLBACK",

@@ -74,6 +74,45 @@ func TestGroundRequireFeedsRiskScore(t *testing.T) {
 	}
 }
 
+// TestGroundExternScorer — in extern mode an ingested entailment score
+// overrides the cosine pass: an answer the cosine pass rejects becomes
+// grounded once a high external score is supplied for its sentence.
+func TestGroundExternScorer(t *testing.T) {
+	g := NewGroundVerifier(384)
+	answer := "Bananas orbit Jupiter every spring."
+	ctx := []string{"The capital of France is Paris."}
+
+	if g.Verify(answer, ctx, 0.5).Grounded {
+		t.Fatal("cosine pass should not ground an unrelated answer")
+	}
+
+	if !g.SetScorer(ScorerExtern) {
+		t.Fatal("SetScorer(extern) failed")
+	}
+	g.Ingest(answer, 0, 0.95) // external NLI says sentence 0 is well supported
+
+	res := g.Verify(answer, ctx, 0.5)
+	if !res.Grounded {
+		t.Fatalf("external score 0.95 should ground; doc_score=%v", res.DocScore)
+	}
+	if res.DocScore < 0.9 {
+		t.Fatalf("doc_score=%v, want ~0.95 from the external score", res.DocScore)
+	}
+
+	s := g.Stats()
+	if s.Scorer != ScorerExtern || s.ExternScores != 1 {
+		t.Fatalf("stats=%+v, want scorer=extern extern_scores=1", s)
+	}
+
+	// A sentence with no ingested score falls back to cosine even in extern
+	// mode — switch back to a clean verifier to confirm the fallback path.
+	g2 := NewGroundVerifier(384)
+	g2.SetScorer(ScorerExtern)
+	if g2.Verify("Totally novel claim.", ctx, 0.5).Grounded {
+		t.Fatal("extern mode with no ingested score should fall back to cosine (not grounded)")
+	}
+}
+
 // TestGroundVerifyEmptyAnswer — an empty answer is vacuously grounded.
 func TestGroundVerifyEmptyAnswer(t *testing.T) {
 	g := NewGroundVerifier(384)

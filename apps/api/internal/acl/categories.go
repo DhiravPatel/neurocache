@@ -1613,6 +1613,19 @@ var registry = map[string]commandInfo{
 	"REMBED.ROLLBACK": {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatFast}},
 	"REMBED.LIST":     {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
 	"REMBED.STATS":    {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatFast}},
+	// REMBED bring-your-own re-embedder (EXTERN export / INGEST / FINALIZE).
+	"REMBED.EXTERN":   {[]string{CatRembed, CatAI, CatAdmin, CatRead, CatSlow}},
+	"REMBED.INGEST":   {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatFast}},
+	"REMBED.FINALIZE": {[]string{CatRembed, CatAI, CatAdmin, CatWrite, CatFast}},
+
+	// Tier 1+ — GROUND pluggable external-NLI scorer (SCORER set + INGEST
+	// supply scores) and reversible memory compaction (COMPACT.*).
+	"GROUND.SCORER":  {[]string{CatAI, CatWrite, CatFast}},
+	"GROUND.INGEST":  {[]string{CatAI, CatWrite, CatFast}},
+	"COMPACT.PLAN":   {[]string{CatAI, CatRead, CatSlow}},
+	"COMPACT.APPLY":  {[]string{CatAI, CatWrite, CatSlow}},
+	"COMPACT.EXPAND": {[]string{CatAI, CatWrite, CatFast}},
+	"COMPACT.STATS":  {[]string{CatAI, CatRead, CatFast}},
 }
 
 // CategoriesFor returns the categories a command belongs to. Unknown

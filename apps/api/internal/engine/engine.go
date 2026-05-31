@@ -756,6 +756,9 @@ type Engine struct {
 	GroundVerify *llmstack.GroundVerifier
 	Quota        *aiops.QuotaManager
 	Rembed       *rembed.Rembedder
+	// Compactor folds a user's memory into reversible, provenance-linked
+	// summaries (COMPACT.PLAN/APPLY/EXPAND).
+	Compactor *memory.Compactor
 	// quotaMu serializes QuotaEvaluate so a single admission's peek-all and
 	// commit-all phases are atomic with respect to other admissions — without
 	// it two concurrent ADMITs can both peek-OK then both consume, overshooting
@@ -1030,8 +1033,15 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	// are constructed, which they are by this point).
 	e.GroundVerify = llmstack.NewGroundVerifier(cfg.EmbeddingDim)
 	e.Quota = aiops.NewQuotaManager()
+	e.Compactor = memory.NewCompactor(e.Memory)
 	e.Rembed = rembed.New()
 	e.registerRembedTargets()
+	e.registerRembedResolver()
+	// Make QUOTA admission and GROUND requirement first-class XTXN (2PC)
+	// participants, so "admit + ground + settle + record provenance" can be
+	// one all-or-nothing cross-transaction. (e.XTxn is built above.)
+	e.XTxn.Register("QUOTA", newQuotaParticipant(e))
+	e.XTxn.Register("GROUND", newRiskParticipant(e))
 	// Phase 12 — instantiate the uniqueness primitives. Wire CHURN to
 	// the engine's keyspace deleter so CHURN.INVALIDATE actually
 	// drops keys; default the Audit retention to 1M events.

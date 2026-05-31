@@ -2,9 +2,12 @@ package http
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/aiops"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/memory"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/rembed"
 )
 
 // ─── GROUND.* (semantic groundedness) ────────────────────────────────────
@@ -211,6 +214,7 @@ func (h *handlers) quotaEval(w http.ResponseWriter, r *http.Request, commit bool
 
 type rembedStartReq struct {
 	Scope    string `json:"scope"`
+	Mode     string `json:"mode"` // "" / "embed" / "extern"
 	ToDim    int    `json:"to_dim"`
 	Batch    int    `json:"batch"`
 	DualRead bool   `json:"dual_read"`
@@ -246,7 +250,13 @@ func (h *handlers) rembedStart(w http.ResponseWriter, r *http.Request) {
 	if batch <= 0 {
 		batch = h.eng.Cfg.RembedBatch
 	}
-	id, err := h.eng.Rembed.Start(req.Scope, toDim, batch, req.DualRead)
+	var id string
+	var err error
+	if req.Mode == "extern" {
+		id, err = h.eng.Rembed.StartExtern(req.Scope, toDim)
+	} else {
+		id, err = h.eng.Rembed.Start(req.Scope, toDim, batch, req.DualRead)
+	}
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
@@ -300,4 +310,159 @@ func (h *handlers) rembedList(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) rembedStats(w http.ResponseWriter, r *http.Request) {
 	defer h.record("REMBED.STATS", time.Now())
 	writeJSON(w, 200, h.eng.Rembed.Stats())
+}
+
+// ─── GROUND scorer + extern entailment ──────────────────────────────────
+
+func (h *handlers) groundScorer(w http.ResponseWriter, r *http.Request) {
+	defer h.record("GROUND.SCORER", time.Now())
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Mode == "" {
+		writeJSON(w, 200, map[string]string{"scorer": h.eng.GroundVerify.CurrentScorer()})
+		return
+	}
+	if !h.eng.GroundVerify.SetScorer(req.Mode) {
+		writeErr(w, 400, "scorer must be cosine or extern")
+		return
+	}
+	writeJSON(w, 200, map[string]string{"scorer": h.eng.GroundVerify.CurrentScorer()})
+}
+
+func (h *handlers) groundIngest(w http.ResponseWriter, r *http.Request) {
+	defer h.record("GROUND.INGEST", time.Now())
+	var req struct {
+		Answer string  `json:"answer"`
+		Idx    int     `json:"idx"`
+		Score  float64 `json:"score"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Answer == "" {
+		writeErr(w, 400, "answer + idx + score required")
+		return
+	}
+	h.eng.GroundVerify.Ingest(req.Answer, req.Idx, req.Score)
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// ─── REMBED extern flow ─────────────────────────────────────────────────
+
+func (h *handlers) rembedExport(w http.ResponseWriter, r *http.Request) {
+	defer h.record("REMBED.EXTERN", time.Now())
+	cursor, count := 0, 100
+	if v := r.URL.Query().Get("cursor"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cursor = n
+		}
+	}
+	if v := r.URL.Query().Get("count"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			count = n
+		}
+	}
+	entries, next, err := h.eng.Rembed.Export(r.PathValue("job"), cursor, count)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"cursor": next, "entries": entries})
+}
+
+func (h *handlers) rembedIngest(w http.ResponseWriter, r *http.Request) {
+	defer h.record("REMBED.INGEST", time.Now())
+	var req struct {
+		Entries []rembed.ExternEntry `json:"entries"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.Entries) == 0 {
+		writeErr(w, 400, "entries [{id, vec}] required")
+		return
+	}
+	done, total, err := h.eng.Rembed.Ingest(r.PathValue("job"), req.Entries)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ingested": done, "total": total})
+}
+
+func (h *handlers) rembedFinalize(w http.ResponseWriter, r *http.Request) {
+	defer h.record("REMBED.FINALIZE", time.Now())
+	done, total, err := h.eng.Rembed.Finalize(r.PathValue("job"))
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"state": "staged", "ingested": done, "total": total})
+}
+
+// ─── COMPACT ────────────────────────────────────────────────────────────
+
+type compactReq struct {
+	Layer       string  `json:"layer"`
+	Threshold   float64 `json:"threshold"`
+	MinSize     int     `json:"min_size"`
+	MaxAgeSec   int64   `json:"max_age_sec"`
+	TargetBytes int64   `json:"target_bytes"`
+	Importance  float64 `json:"importance"`
+	Drop        bool    `json:"drop"`
+}
+
+func (req compactReq) opts() memory.CompactOptions {
+	return memory.CompactOptions{
+		Layer:       memory.Layer(req.Layer),
+		Threshold:   req.Threshold,
+		MinSize:     req.MinSize,
+		MaxAgeSec:   req.MaxAgeSec,
+		TargetBytes: req.TargetBytes,
+		Importance:  req.Importance,
+		Drop:        req.Drop,
+	}
+}
+
+func (h *handlers) compactPlan(w http.ResponseWriter, r *http.Request) {
+	defer h.record("COMPACT.PLAN", time.Now())
+	var req compactReq
+	_ = readJSON(r, &req)
+	writeJSON(w, 200, h.eng.Compactor.Plan(r.PathValue("user"), req.opts()))
+}
+
+func (h *handlers) compactApply(w http.ResponseWriter, r *http.Request) {
+	defer h.record("COMPACT.APPLY", time.Now())
+	var req compactReq
+	_ = readJSON(r, &req)
+	user := r.PathValue("user")
+	res := h.eng.Compactor.Apply(user, req.opts())
+	if h.eng.Lineage != nil {
+		for _, s := range res.Summaries {
+			for _, src := range s.SourceIDs {
+				h.eng.Lineage.Record(s.SummaryID, src, "compact", 1.0)
+			}
+		}
+	}
+	writeJSON(w, 200, res)
+}
+
+func (h *handlers) compactExpand(w http.ResponseWriter, r *http.Request) {
+	defer h.record("COMPACT.EXPAND", time.Now())
+	var req struct {
+		SummaryID string `json:"summary_id"`
+	}
+	if err := readJSON(r, &req); err != nil || req.SummaryID == "" {
+		writeErr(w, 400, "summary_id required")
+		return
+	}
+	res, ok := h.eng.Compactor.Expand(r.PathValue("user"), req.SummaryID)
+	if !ok {
+		writeErr(w, 404, "not a known reversible compaction summary")
+		return
+	}
+	if h.eng.Lineage != nil {
+		h.eng.Lineage.Forget(req.SummaryID)
+	}
+	writeJSON(w, 200, res)
+}
+
+func (h *handlers) compactStats(w http.ResponseWriter, r *http.Request) {
+	defer h.record("COMPACT.STATS", time.Now())
+	writeJSON(w, 200, h.eng.Compactor.Stats())
 }

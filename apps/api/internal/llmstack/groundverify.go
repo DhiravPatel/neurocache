@@ -1,6 +1,9 @@
 package llmstack
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"sync"
 	"sync/atomic"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/vector"
@@ -38,6 +41,17 @@ type GroundVerifier struct {
 	totalRequire atomic.Int64
 	totalPass    atomic.Int64 // grounded results
 	totalFail    atomic.Int64 // not-grounded results
+
+	// scorer selects how a claim's support is computed: "cosine" (the
+	// built-in feature-hash alignment) or "extern" (entailment scores an
+	// external NLI model supplies via Ingest). In extern mode a claim with
+	// no ingested score falls back to cosine, so the surface degrades
+	// gracefully and a caller can mix the two. extern maps the answer's
+	// content hash → sentence index → entailment score in [0,1].
+	mu      sync.RWMutex
+	scorer  string
+	extern  map[string]map[int]float64
+	ingests atomic.Int64
 }
 
 // NewGroundVerifier builds a verifier embedding at dim (defaults to 384,
@@ -46,7 +60,75 @@ func NewGroundVerifier(dim int) *GroundVerifier {
 	if dim <= 0 {
 		dim = 384
 	}
-	return &GroundVerifier{dim: dim}
+	return &GroundVerifier{dim: dim, scorer: ScorerCosine, extern: map[string]map[int]float64{}}
+}
+
+// Scorer modes.
+const (
+	ScorerCosine = "cosine"
+	ScorerExtern = "extern"
+)
+
+// SetScorer switches the active scoring mode. Returns false for an unknown
+// mode (the current mode is left unchanged).
+func (g *GroundVerifier) SetScorer(mode string) bool {
+	if mode != ScorerCosine && mode != ScorerExtern {
+		return false
+	}
+	g.mu.Lock()
+	g.scorer = mode
+	g.mu.Unlock()
+	return true
+}
+
+// CurrentScorer returns the active scoring mode.
+func (g *GroundVerifier) CurrentScorer() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.scorer
+}
+
+// Ingest records an external entailment score for one sentence of an answer.
+// The answer is keyed by a stable hash of its text, and idx is the 0-based
+// sentence index (matching the splitClaims order GROUND.VERIFY uses). score
+// is clamped to [0,1].
+func (g *GroundVerifier) Ingest(answer string, idx int, score float64) {
+	if idx < 0 {
+		return
+	}
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	h := answerHash(answer)
+	g.mu.Lock()
+	m := g.extern[h]
+	if m == nil {
+		m = map[int]float64{}
+		g.extern[h] = m
+	}
+	m[idx] = score
+	g.mu.Unlock()
+	g.ingests.Add(1)
+}
+
+// externScores returns (the per-sentence map for answer, true) when extern
+// mode is active and at least one score has been ingested for it.
+func (g *GroundVerifier) externScores(answer string) (map[int]float64, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.scorer != ScorerExtern {
+		return nil, false
+	}
+	m, ok := g.extern[answerHash(answer)]
+	return m, ok && len(m) > 0
+}
+
+func answerHash(s string) string {
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 const defaultMinSupport = 0.5
@@ -107,19 +189,25 @@ func (g *GroundVerifier) score(answer string, context []string, minSupport float
 		chunkVecs[i] = vector.Embed(c, g.dim)
 	}
 
+	// In extern mode, an external NLI model's per-sentence entailment scores
+	// override the cosine pass for any sentence it covers.
+	extern, hasExtern := g.externScores(answer)
+
 	res := VerifyResult{MinSupport: minSupport, Sentences: make([]SentenceSupport, 0, len(sentences))}
 	doc := 1.0
 	sum := 0.0
-	for _, s := range sentences {
-		sv := vector.Embed(s, g.dim)
+	for idx, s := range sentences {
 		best := -1
 		bestScore := 0.0
-		for i, cv := range chunkVecs {
-			sc := float64(vector.Cosine(sv, cv))
-			if sc > bestScore {
-				bestScore = sc
-				best = i
+		if hasExtern {
+			if es, ok := extern[idx]; ok {
+				best = -1 // external score is not tied to a single chunk
+				bestScore = es
+			} else {
+				best, bestScore = bestChunk(vector.Embed(s, g.dim), chunkVecs)
 			}
+		} else {
+			best, bestScore = bestChunk(vector.Embed(s, g.dim), chunkVecs)
 		}
 		if bestScore < 0 {
 			bestScore = 0
@@ -145,21 +233,40 @@ func (g *GroundVerifier) score(answer string, context []string, minSupport float
 	return res
 }
 
+// bestChunk returns the index + cosine score of the chunk most similar to the
+// sentence vector (best=-1 when there are no chunks).
+func bestChunk(sv []float32, chunkVecs [][]float32) (int, float64) {
+	best := -1
+	bestScore := 0.0
+	for i, cv := range chunkVecs {
+		sc := float64(vector.Cosine(sv, cv))
+		if sc > bestScore {
+			bestScore = sc
+			best = i
+		}
+	}
+	return best, bestScore
+}
+
 // GroundVerifyStats is the GROUND.VSTATS snapshot.
 type GroundVerifyStats struct {
-	Dim          int   `json:"dim"`
-	TotalVerify  int64 `json:"total_verify"`
-	TotalRequire int64 `json:"total_require"`
-	TotalPass    int64 `json:"total_pass"`
-	TotalFail    int64 `json:"total_fail"`
+	Dim          int    `json:"dim"`
+	Scorer       string `json:"scorer"`
+	TotalVerify  int64  `json:"total_verify"`
+	TotalRequire int64  `json:"total_require"`
+	TotalPass    int64  `json:"total_pass"`
+	TotalFail    int64  `json:"total_fail"`
+	ExternScores int64  `json:"extern_scores"`
 }
 
 func (g *GroundVerifier) Stats() GroundVerifyStats {
 	return GroundVerifyStats{
 		Dim:          g.dim,
+		Scorer:       g.CurrentScorer(),
 		TotalVerify:  g.totalVerify.Load(),
 		TotalRequire: g.totalRequire.Load(),
 		TotalPass:    g.totalPass.Load(),
 		TotalFail:    g.totalFail.Load(),
+		ExternScores: g.ingests.Load(),
 	}
 }

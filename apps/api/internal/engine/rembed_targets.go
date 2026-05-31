@@ -2,9 +2,15 @@ package engine
 
 import (
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 
+	"github.com/dhiravpatel/neurocache/apps/api/internal/rembed"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/retrieval"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/vector"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/vectorindex"
 )
 
 // registerRembedTargets wires the engine's vector-bearing subsystems into the
@@ -203,6 +209,162 @@ func (t *retrievalTarget) Rollback() error {
 		if ix, ok := t.mgr.Get(name); ok {
 			ix.RollbackRembed()
 		}
+	}
+	return nil
+}
+
+// registerRembedResolver lets REMBED address a single VADD key as
+// "vector:<key>", resolved on demand to a vaddTarget. This is what enables
+// REMBED.EXTERN on a client-vector store.
+func (e *Engine) registerRembedResolver() {
+	if e.Rembed == nil {
+		return
+	}
+	e.Rembed.SetResolver(func(scope string) (rembed.Target, error) {
+		if !strings.HasPrefix(scope, "vector:") {
+			return nil, nil // not handled here
+		}
+		key := strings.TrimPrefix(scope, "vector:")
+		if key == "" {
+			return nil, errors.New("vector scope needs a key: vector:<key>")
+		}
+		if _, ok, err := e.KV.VInfo(key); err != nil || !ok {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("no vector set at key %q", key)
+		}
+		return &vaddTarget{store: e.KV, key: key}, nil
+	})
+}
+
+// vaddTarget adapts one VADD key (a store.VectorSet) to rembed's ExternTarget.
+// VADD keys store client-supplied raw vectors with no source text, so they
+// can't be re-embedded internally — only via the bring-your-own-re-embedder
+// (EXTERN) flow. The shadow lives here until SWAP atomically replaces the
+// key's live index.
+type vaddTarget struct {
+	store *store.Store
+	key   string
+
+	mu        sync.Mutex
+	shadow    *vectorindex.Index
+	shadowDim int
+	attrs     map[string]string // id → original attr, carried into the shadow on ingest
+}
+
+func (t *vaddTarget) Name() string           { return "vector:" + t.key }
+func (t *vaddTarget) SupportsDualRead() bool { return false }
+
+func (t *vaddTarget) Count() int {
+	n, _ := t.store.VCard(t.key)
+	return n
+}
+
+func (t *vaddTarget) Bytes() int64 {
+	n, _ := t.store.VCard(t.key)
+	d, _, _ := t.store.VDim(t.key)
+	return int64(n) * int64(d) * 4
+}
+
+func (t *vaddTarget) Dim() int {
+	d, _, _ := t.store.VDim(t.key)
+	return d
+}
+
+// Stage (embed mode) is unsupported — VADD has no source text.
+func (t *vaddTarget) Stage(dim, batch int, dualRead bool, progress func(done, total int), cancel <-chan struct{}) error {
+	return errors.New("vector sets require MODE extern (no source text to re-embed internally)")
+}
+
+func (t *vaddTarget) Staged() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.shadow != nil
+}
+
+func (t *vaddTarget) Swap() error {
+	t.mu.Lock()
+	sh := t.shadow
+	t.mu.Unlock()
+	if sh == nil {
+		return errors.New("no staged index to swap")
+	}
+	ok, err := t.store.VReplaceIndex(t.key, sh)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("vector key vanished before swap")
+	}
+	t.mu.Lock()
+	t.shadow, t.shadowDim, t.attrs = nil, 0, nil
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *vaddTarget) Rollback() error {
+	t.mu.Lock()
+	t.shadow, t.shadowDim, t.attrs = nil, 0, nil
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *vaddTarget) ExportEntries() ([]rembed.ExternEntry, error) {
+	exp, _, ok, err := t.store.VExport(t.key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("vector key not found")
+	}
+	out := make([]rembed.ExternEntry, 0, len(exp))
+	for _, e := range exp {
+		out = append(out, rembed.ExternEntry{ID: e.ID, Vec: e.Vec, Attr: e.Attr})
+	}
+	return out, nil
+}
+
+func (t *vaddTarget) StageExtern(dim int) error {
+	exp, opts, ok, err := t.store.VExport(t.key)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("vector key not found")
+	}
+	idx, err := vectorindex.New(vectorindex.Options{
+		Algo: opts.Algo, Metric: opts.Metric, Dim: dim,
+		M: opts.M, EFC: opts.EFC, EFR: opts.EFR,
+	})
+	if err != nil {
+		return err
+	}
+	attrs := make(map[string]string, len(exp))
+	for _, e := range exp {
+		if e.Attr != "" {
+			attrs[e.ID] = e.Attr
+		}
+	}
+	t.mu.Lock()
+	t.shadow, t.shadowDim, t.attrs = idx, dim, attrs
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *vaddTarget) IngestVector(id string, vec []float32) error {
+	t.mu.Lock()
+	sh := t.shadow
+	attr := t.attrs[id]
+	t.mu.Unlock()
+	if sh == nil {
+		return errors.New("no staged index; STAGE first")
+	}
+	if err := sh.Set(id, vec); err != nil { // rejects a dimension mismatch
+		return err
+	}
+	if attr != "" {
+		sh.SetAttr(id, attr)
 	}
 	return nil
 }

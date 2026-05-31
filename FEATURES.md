@@ -1733,3 +1733,59 @@ The review also caught a **pre-existing data-loss bug** unrelated to these famil
 ### Tests
 
 `internal/vector/vector_rembed_test.go` (dual-read union + swap + rollback, **write-during-migration preservation**, **concurrent Search/Upsert/Swap under `-race`**), `internal/rembed/rembed_test.go` + `rembed_concurrency_test.go` (plan/scope, start→staged→swap, rollback, mid-job failure unwind, stats, **concurrent-rollback no-panic**, **overlap rejection**, **reservation release**), `internal/llmstack/groundverify_test.go` (grounded/ungrounded/empty + the GROUND→RISK enforce loop), `internal/llmstack/gates_peek_test.go` + `internal/primitives/ratelimit_peek_test.go` (peeks don't mutate), `internal/aiops/quota_test.go` (policy validation + lifecycle + counters), `internal/engine/tier1_test.go` (QUOTA two-phase incl. consume-nothing-on-denial, ANY-mode partial consume, **concurrent no-overshoot for cost + carbon**, full semantic REMBED dual-read→swap), `internal/retrieval/retrieval_rembed_test.go` (dense-arm rebuild + **docs-added-during-staging preserved**), `internal/persistence/aof_replay_test.go` (no data loss after a skipped command).
+
+## Tier 1 extensions — closing the seams (REMBED.EXTERN / XTXN participants / GROUND scorer / COMPACT)
+
+Four follow-ups that close gaps the Tier 1 primitives themselves opened — three extend documented limitations, one is a small new family. Same wiring as Tier 1 (RESP + HTTP + ACL + dispatch + tests).
+
+### REMBED.EXTERN / INGEST / FINALIZE — bring-your-own re-embedder (unlocks VADD)
+
+The base REMBED re-embeds internally with `vector.Embed`, so it marked VADD (and any client-vector store) "intentionally out of scope" — those keep no source text the engine could re-embed. The EXTERN flow removes that limitation with a client-supplied re-embed hook: export the key's vectors, the client re-embeds them with whatever model produced the originals, posts the new vectors back, and the engine stages them into a shadow at the new dimension and atomically swaps. VADD is the clean fit because VSIM already takes a client-supplied query vector — so externally-computed stored vectors actually work end-to-end (unlike semantic/memory, whose queries are server-embedded).
+
+| Command | What it does | Where |
+|---|---|---|
+| `REMBED.START vector:<key> TO dim MODE extern` | Open an external re-embed job; stages an empty shadow at `dim` and snapshots the source set. Parks in `awaiting_ingest`. | `rembed/rembed.go::StartExtern` |
+| `REMBED.EXTERN job [CURSOR c] [COUNT n] [WITHVEC]` | Page the export set — `(id, attr)` (and the current vector with `WITHVEC`) for the client to re-embed. | same |
+| `REMBED.INGEST job id vec [id vec ...]` | Stage externally-computed vectors (FP32 or CSV); a dimension mismatch is rejected. Returns `(ingested, total)`. | same |
+| `REMBED.FINALIZE job` | `awaiting_ingest → staged`. Reports `(ingested, total)` so the caller can refuse an incomplete swap. | same |
+| `REMBED.SWAP job` | Atomically replace the key's live index with the shadow (`Store.VReplaceIndex`, under the shard write lock). | `engine/rembed_targets.go::vaddTarget` |
+
+Scope `vector:<key>` is resolved on demand by a `Rembedder` resolver (the engine wires `registerRembedResolver`), creating a `vaddTarget` that satisfies the new `rembed.ExternTarget` interface. Reservation + overlap-rejection from the Tier 1 hardening apply: a second migration on the same key is refused until the first swaps or rolls back. New store helpers: `Store.VExport` (id/vec/attr + index geometry) and `Store.VReplaceIndex` (atomic swap).
+
+### XTXN participants for QUOTA + GROUND — admission/grounding join 2PC
+
+Phase 17's XTXN had no real participants (only a test fake). QUOTA.ADMIT and GROUND.REQUIRE — the two newest state-mutating commands — are now first-class participants, so "admit the request, ground the answer, settle the cost — all or nothing" is one cross-transaction. Each separates `Prepare` (peek the budgets / score the answer; **fail to abort the whole txn**) from `Commit` (charge / debit), with `Abort` discarding the staged op.
+
+```
+XTXN.STAGE tx QUOTA  admit   ARG policy p ARG cost_scope acme ARG cost_usd 0.5
+XTXN.STAGE tx GROUND require ARG answer "..." ARG context "..." ARG session s ARG min_support 0.9
+XTXN.PREPARE tx   # an ungrounded answer or a denied admission aborts here — nothing is charged
+XTXN.COMMIT  tx   # cost is charged AND risk debited together, or neither
+```
+
+Participants are `quotaParticipant` / `riskParticipant` in package `engine` (they hold `*Engine` to reach `QuotaEvaluate` / `GroundVerify` / `RiskBudgets`), registered at boot as `QUOTA` and `GROUND`. The quota participant reuses the two-phase `QuotaEvaluate` (peek on Prepare, commit on Commit); the ground participant fails Prepare for an ungrounded answer so the cost is never settled for an answer you can't support.
+
+### GROUND.SCORER / GROUND.INGEST — pluggable external-NLI scorer
+
+The base GROUND.VERIFY uses cosine sentence-to-chunk alignment and named NLI cross-encoders as "the upgrade path — the command surface doesn't change." This adds the plumbing: `GROUND.SCORER cosine|extern` switches the active scorer, and `GROUND.INGEST answer sentence-idx score` supplies an external model's per-sentence entailment scores (keyed by a stable hash of the answer + sentence index). In extern mode a sentence with an ingested score uses it; one without falls back to cosine, so the two mix gracefully and the same RISK loop runs on real entailment instead of lexical-adjacent cosine.
+
+### COMPACT.PLAN / APPLY / EXPAND / STATS — reversible, provenance-linked memory compaction
+
+The gap between MEMORY.CONSOLIDATE (clusters + synthesizes, discards originals irrecoverably) and RECALL (only flags staleness): nothing produced a bounded, **auditable, reversible** summary of a growing store. COMPACT folds similar memories into a semantic summary that records its folded source ids (`Entry.SourceIDs`) AND retains the originals' payloads, so EXPAND can restore them; each fold is also recorded in LINEAGE for the audit trail.
+
+| Command | What it does | Where |
+|---|---|---|
+| `COMPACT.PLAN user [LAYER l] [THRESHOLD f] [MINSIZE n] [MAXAGE s] [TARGET_BYTES n]` | Read-only proposal: which entries fold, bytes folded vs summary bytes, net savings. | `memory/compact.go` |
+| `COMPACT.APPLY user [...] [DROP 0\|1]` | Write a semantic summary per cluster (SourceIDs + retained payloads + LINEAGE), optionally delete the originals. | same + `resp/commands_compact.go` |
+| `COMPACT.EXPAND user summary-id` | Restore the retained originals and drop the summary. | same |
+| `COMPACT.STATS` | reversible_summaries / applied / folded / expanded. | same |
+
+`memory.Compactor` keeps the folded payloads in a side store (the store only persists ids in SourceIDs, never the originals' content — a Compactor that wants true reversibility must retain them itself). Clustering reuses the `vector.Embed` + `Cosine` greedy recipe; `TARGET_BYTES` caps how much is folded. Like the other AI families, COMPACT state is runtime-only.
+
+### Persistence note
+
+GROUND.SCORER/INGEST, COMPACT.*, and REMBED.EXTERN/INGEST/FINALIZE are **not** in the writeset — consistent with the Tier 1 decision (the AOF replayer implements only core Redis verbs, so no AI family replays). Their state is runtime-only; the keyspace data they derive from (VADD vectors, MEMORY entries) is what persists.
+
+### Tests
+
+`internal/llmstack/groundverify_test.go` (external scorer overrides cosine + falls back when unscored), `internal/memory/compact_test.go` (full plan→apply→expand reversibility + below-MinSize no-op), `internal/engine/tier1plus_test.go` (QUOTA/RISK XTXN participants: Prepare peeks, Commit charges, Abort discards, ungrounded/over-budget Prepare aborts; **full REMBED.EXTERN VADD migration** export→ingest→finalize→swap with wrong-dim rejection + reservation release; extern rejected on embed-only targets).

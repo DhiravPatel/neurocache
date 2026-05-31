@@ -7,6 +7,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/aiops"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/llmstack"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/rembed"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/vectorindex"
 )
 
 // ─── GROUND.VERIFY / GROUND.REQUIRE / GROUND.VSTATS ──────────────────────
@@ -79,11 +80,46 @@ func (c *conn) groundVerifyCmd(sub string, args []string) {
 		s := c.eng.GroundVerify.Stats()
 		writeValue(c.bw, []any{
 			"dim", int64(s.Dim),
+			"scorer", s.Scorer,
 			"total_verify", s.TotalVerify,
 			"total_require", s.TotalRequire,
 			"total_pass", s.TotalPass,
 			"total_fail", s.TotalFail,
+			"extern_scores", s.ExternScores,
 		})
+
+	case "SCORER":
+		// GROUND.SCORER            → read current mode
+		// GROUND.SCORER cosine|extern → switch the per-sentence scorer
+		if len(args) < 1 {
+			writeBulk(c.bw, c.eng.GroundVerify.CurrentScorer())
+			return
+		}
+		if !c.eng.GroundVerify.SetScorer(strings.ToLower(args[0])) {
+			writeError(c.bw, "ERR scorer must be cosine or extern")
+			return
+		}
+		writeSimple(c.bw, "OK")
+
+	case "INGEST":
+		// GROUND.INGEST answer sentence-idx score — supply an external NLI
+		// entailment score for one sentence (used when scorer=extern).
+		if len(args) < 3 {
+			writeError(c.bw, "ERR GROUND.INGEST answer sentence-idx score")
+			return
+		}
+		idx, err := strconv.Atoi(args[1])
+		if err != nil || idx < 0 {
+			writeError(c.bw, "ERR sentence-idx must be a non-negative integer")
+			return
+		}
+		score, err := strconv.ParseFloat(args[2], 64)
+		if err != nil {
+			writeError(c.bw, "ERR score must be a float in [0,1]")
+			return
+		}
+		c.eng.GroundVerify.Ingest(args[0], idx, score)
+		writeSimple(c.bw, "OK")
 
 	default:
 		writeError(c.bw, "ERR unknown GROUND subcommand "+sub)
@@ -440,9 +476,17 @@ func (c *conn) rembedCmd(sub string, args []string) {
 		toDim := c.eng.Cfg.EmbeddingDim
 		batch := 0
 		dualRead := false
+		mode := "embed"
 		i := 1
 		for i < len(args) {
 			switch strings.ToUpper(args[i]) {
+			case "MODE":
+				if i+1 >= len(args) {
+					writeError(c.bw, "ERR MODE needs a value (embed|extern)")
+					return
+				}
+				mode = strings.ToLower(args[i+1])
+				i += 2
 			case "TO":
 				if i+1 >= len(args) {
 					writeError(c.bw, "ERR TO needs a value")
@@ -482,12 +526,109 @@ func (c *conn) rembedCmd(sub string, args []string) {
 		if batch <= 0 {
 			batch = c.eng.Cfg.RembedBatch
 		}
-		id, err := c.eng.Rembed.Start(scope, toDim, batch, dualRead)
+		var id string
+		var err error
+		switch mode {
+		case "extern":
+			// Bring-your-own re-embedder: stage an empty shadow, hand the
+			// client the source set via REMBED.EXTERN, accept vectors back via
+			// REMBED.INGEST, then REMBED.FINALIZE → REMBED.SWAP.
+			id, err = c.eng.Rembed.StartExtern(scope, toDim)
+		case "embed", "":
+			id, err = c.eng.Rembed.Start(scope, toDim, batch, dualRead)
+		default:
+			writeError(c.bw, "ERR MODE must be embed or extern")
+			return
+		}
 		if err != nil {
 			writeError(c.bw, "ERR "+err.Error())
 			return
 		}
 		writeBulk(c.bw, id)
+
+	case "EXTERN":
+		// REMBED.EXTERN job [CURSOR c] [COUNT n] [WITHVEC]
+		if len(args) < 1 {
+			writeError(c.bw, "ERR REMBED.EXTERN job [CURSOR c] [COUNT n] [WITHVEC]")
+			return
+		}
+		cursor, count, withVec := 0, 100, false
+		for i := 1; i < len(args); i++ {
+			switch strings.ToUpper(args[i]) {
+			case "CURSOR":
+				if i+1 >= len(args) {
+					writeError(c.bw, "ERR CURSOR needs a value")
+					return
+				}
+				cursor, _ = strconv.Atoi(args[i+1])
+				i++
+			case "COUNT":
+				if i+1 >= len(args) {
+					writeError(c.bw, "ERR COUNT needs a value")
+					return
+				}
+				count, _ = strconv.Atoi(args[i+1])
+				i++
+			case "WITHVEC":
+				withVec = true
+			default:
+				writeError(c.bw, "ERR unexpected token "+args[i])
+				return
+			}
+		}
+		entries, next, err := c.eng.Rembed.Export(args[0], cursor, count)
+		if err != nil {
+			writeError(c.bw, "ERR "+err.Error())
+			return
+		}
+		rows := make([]any, 0, len(entries))
+		for _, e := range entries {
+			row := []any{"id", e.ID, "attr", e.Attr}
+			if withVec {
+				row = append(row, "vec", formatFloat32CSV(e.Vec))
+			}
+			rows = append(rows, row)
+		}
+		writeValue(c.bw, []any{"cursor", int64(next), "entries", rows})
+
+	case "INGEST":
+		// REMBED.INGEST job id vec [id vec ...] — vec is FP32 binary or CSV.
+		if len(args) < 3 || (len(args)-1)%2 != 0 {
+			writeError(c.bw, "ERR REMBED.INGEST job id vec [id vec ...]")
+			return
+		}
+		st, ok := c.eng.Rembed.Status(args[0])
+		if !ok {
+			writeError(c.bw, "ERR unknown rembed job")
+			return
+		}
+		pairs := make([]rembed.ExternEntry, 0, (len(args)-1)/2)
+		for i := 1; i+1 < len(args); i += 2 {
+			vec, verr := vectorindex.ParseVector(args[i+1], st.ToDim)
+			if verr != nil {
+				writeError(c.bw, "ERR bad vector for id "+args[i]+": "+verr.Error())
+				return
+			}
+			pairs = append(pairs, rembed.ExternEntry{ID: args[i], Vec: vec})
+		}
+		done, total, err := c.eng.Rembed.Ingest(args[0], pairs)
+		if err != nil {
+			writeError(c.bw, "ERR "+err.Error())
+			return
+		}
+		writeValue(c.bw, []any{"ingested", int64(done), "total", int64(total)})
+
+	case "FINALIZE":
+		if len(args) < 1 {
+			writeError(c.bw, "ERR REMBED.FINALIZE job")
+			return
+		}
+		done, total, err := c.eng.Rembed.Finalize(args[0])
+		if err != nil {
+			writeError(c.bw, "ERR "+err.Error())
+			return
+		}
+		writeValue(c.bw, []any{"state", "staged", "ingested", int64(done), "total", int64(total)})
 
 	case "PROGRESS":
 		if len(args) < 1 {
