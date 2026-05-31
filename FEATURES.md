@@ -1845,3 +1845,29 @@ The honest, production-ready conclusion: the existing 256-shard lock model alrea
 | HSET, non-pipelined | ~141k rps (the 59%-of-Redis outlier) | **~180k rps** | on par with SET |
 
 Non-pipelined throughput is network-RTT-bound (~1.3 ms avg), so the server isn't the limiter there; the wins show up under pipelining, where server CPU is the constraint. Full pipelined line at 500 clients: GET 2.40M / INCR 2.12M / SET 1.48M / HSET 1.46M rps. All 28 packages pass, race-clean; TTL/expiry verified correct under the cached clock (a 50 ms TTL expires within ~100 µs of its deadline). New regression guards: `parse_bench_test.go`, `parallel_bench_test.go`.
+
+## Phase 19 — Redis-wire DUMP/RESTORE (the migration story)
+
+The one feature-shaped item with a concretely blocked user (it sat in "Known gaps" through 18 phases): cross-engine migration. NeuroCache's `DUMP`/`RESTORE` previously used an internal gob+gzip blob — fine for NeuroCache↔NeuroCache, useless for moving data to or from Redis. Now `DUMP` emits, and `RESTORE` accepts, the **exact Redis wire payload**: `[1-byte RDB type][RDB-encoded value][2-byte version, LE][8-byte CRC64 footer]`. That makes NeuroCache a drop-in migration source/target for `redis-cli`, RIOT, and redis-shake (all of which move keys via DUMP/RESTORE).
+
+### What's implemented (`internal/store/rdb.go`)
+
+- **CRC64** — the exact Redis variant (reflected, poly `0xad93d23594c935a9` → reflected `0x95ac9329ac4bc9b5`, init 0). Verified against Redis' own check value `crc64("123456789") == 0xe9c6d914c4b8d9ca`.
+- **DUMP (encode)** — emits the legacy "plain" RDB types every modern Redis still loads: STRING (0), LIST (1), SET (2, hashtable), HASH (4, hashtable), ZSET_2 (5, binary doubles). No listpack *encoder* needed; Redis re-compacts on load.
+- **RESTORE (decode)** — reads the **compact encodings real Redis emits**, which is the harder half: listpack (hash/zset/set), intset, ziplist (pre-7.0), quicklist v1 (ziplist nodes) and v2 (listpack nodes), plus int-encoded (INT8/16/32) and LZF-compressed strings, and both binary- and string-form zset scores. So a dump taken from Redis 6/7/8 restores faithfully.
+- **Auto-detection** — `RESTORE` validates the CRC64 footer first; a valid footer means a real RDB payload, anything else falls back to the internal gob format. So NeuroCache's own legacy dumps and the non-Redis types (stream, the vector set) still round-trip. Stream/vector keep gob on `DUMP` (no standard RDB representation).
+
+### Verification (this is the load-bearing part)
+
+Round-tripped against a real **redis-server 8.6** in both directions for all five core types (`internal/store/rdb_redis_test.go`, gated on `REDIS_ADDR`):
+
+- **Redis → NeuroCache**: `redis-server` produces the DUMP (using its compact listpack/intset/quicklist_2/int-string encodings); `rdbDeserialize` reads every type back correctly.
+- **NeuroCache → Redis**: `rdbSerialize` produces the DUMP; real `redis-server` RESTOREs it and reads the value back correctly — proving our output is genuinely Redis-loadable.
+
+And an end-to-end **live cross-engine migration** through the actual server command handlers (NeuroCache server ↔ redis-server 8.6, both directions, string/list/set/hash/zset) — DUMP on one engine, RESTORE on the other, value verified on the far side. A NeuroCache string migrates into Redis and reads back as `migrated string`; a Redis zset migrates into NeuroCache and `ZSCORE` returns `9.9`.
+
+Regression guards: `internal/store/crc_vector_test.go` (CRC64 vectors), `internal/store/rdb_redis_test.go` (real-redis round-trip, skipped without `REDIS_ADDR`). All 28 packages pass, race-clean.
+
+### Updated Known gaps
+
+Of the three wire-level byte-compat items, the highest-value one — **binary DUMP/RESTORE — is now shipped**. The remaining two stay deferred (they only matter for mixing NeuroCache + Redis nodes in *one cluster*, never for client-side use or key-level migration): the cluster gossip Redis binary protocol, and the AOF RDB preamble. Key-level cross-engine migration — the thing operators and tooling (RIOT, redis-shake) actually reach for — works today.
