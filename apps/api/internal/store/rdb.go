@@ -299,6 +299,13 @@ func (r *rdbReader) loadStringDouble() (float64, error) {
 
 // lzfDecompress expands an LZF-compressed buffer to ulen bytes.
 func lzfDecompress(in []byte, ulen int) ([]byte, error) {
+	// ulen is the attacker-controlled decompressed-length header from a
+	// RESTORE payload. Bound it before pre-allocating, or a tiny
+	// compressed blob claiming a 2 GB output would OOM the server
+	// (decompression bomb).
+	if ulen < 0 || ulen > maxStringBytes {
+		return nil, errRDB
+	}
 	out := make([]byte, 0, ulen)
 	i := 0
 	for i < len(in) {
@@ -449,7 +456,15 @@ func intsetDecode(b []byte) ([]string, error) {
 	}
 	enc := binary.LittleEndian.Uint32(b[0:4])
 	n := binary.LittleEndian.Uint32(b[4:8])
-	out := make([]string, 0, n)
+	// n is an untrusted count from the payload. Cap the pre-allocation
+	// against the bytes actually present (smallest element is 2 bytes) so
+	// a crafted "count = 4 billion" header can't allocate a 64 GB slice
+	// before the per-element bounds checks below would bail.
+	capHint := int(n)
+	if max := (len(b)-8)/2 + 1; capHint > max {
+		capHint = max
+	}
+	out := make([]string, 0, capHint)
 	p := 8
 	for i := uint32(0); i < n; i++ {
 		switch enc {

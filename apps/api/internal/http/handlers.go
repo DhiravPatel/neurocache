@@ -338,12 +338,26 @@ type execReq struct {
 // Redis-style commands like {"command":"SET","args":["k","v"]}.
 func (h *handlers) exec(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	// Same auth posture as the RESP port: when protected mode is on, the
+	// HTTP command channel must authenticate. Closes the unauthenticated
+	// arbitrary-command-execution hole on /api/exec.
+	if !h.httpAuthed(r) {
+		writeErr(w, 401, "NOAUTH Authentication required")
+		return
+	}
 	var req execReq
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, "invalid json")
 		return
 	}
 	cmd := strings.ToUpper(req.Command)
+	// Refuse admin/replication/cluster verbs over HTTP regardless of auth
+	// — they can pivot the server outbound (SSRF) or load code, and have
+	// no place on a browser-reachable endpoint.
+	if httpDangerousCmd[cmd] {
+		writeErr(w, 403, "command '"+strings.ToLower(cmd)+"' is not allowed over the HTTP API; use the RESP interface")
+		return
+	}
 	result, err := h.dispatch(cmd, req.Args)
 	h.record(cmd, start)
 	if err != nil {

@@ -1959,3 +1959,42 @@ The subtle part is concurrency safety, and it rests on one property: **append on
 - **Regression tests** (`internal/store/append_test.go`): exact value across repeated appends; the self-correcting path (SET / SETRANGE between appends); `STRLEN`/`GETRANGE` over an appended value; 100k single-byte appends complete in ~70 ms (the old form was quadratic) and yield exactly 100k bytes; **concurrent appender + 6 readers under `-race`** asserting readers never observe a corrupted (non-`a`) byte — the proof that the in-place growth is safe for aliased readers.
 - **Live**: APPEND interleaved with GET/STRLEN/GETRANGE/SETRANGE builds the right value; INCR after APPEND on a numeric string re-parses correctly (105 → 106); DUMP + DEBUG RELOAD preserve the appended value.
 - All **28 packages pass, race-clean**.
+
+## Phase 22 — security hardening (multi-agent audit → fixes, attack-verified)
+
+A fan-out security audit (8 vulnerability-class finders, every candidate adversarially re-verified for real reachability) surfaced **39 candidates, 30 confirmed**. All confirmed issues were fixed and each fix was **reproduced as a live attack** against a running server before/after. No throughput regression (still 128–230% of Redis pipelined).
+
+### The headline: a critical pre-existing AUTH bypass
+
+The audit's PSYNC finding led to the worst bug: **`requirepass` was not enforced at all on the RESP port.** Every connection started as the fully-privileged `default` user (`c.user = DefaultUser()`), whose `AllowsEverything()` short-circuited the ACL gate — so the `c.user == nil` NOAUTH check could never fire. With `requirepass=secret` *and* protected mode on, an unauthenticated client could `SET`/`GET` the whole keyspace and `PSYNC` a full snapshot.
+
+**Fix:** `ACL.InitialUser()` returns `nil` (unauthenticated) when the default user has a password, so a fresh connection must `AUTH` first; the dispatch gate now denies on `c.user == nil` regardless of protected mode; `RESET`/`HELLO`/`PSYNC` all respect it. Added a protected-mode safety net (refuse non-loopback clients when no password is set). **Verified live:** unauth `GET`/`SET`/`PSYNC`/`HELLO` → `NOAUTH`; correct password → works; wrong password → `WRONGPASS`; and the no-password dev default still works unchanged.
+
+### Fix groups (all confirmed, all fixed)
+
+| # | Class | Fix | Verified |
+|---|---|---|---|
+| 1 | **Unbounded RESP allocation** (`$N`/`*N` → OOM off one packet) | `proto-max-bulk-len` (512 MiB) + multibulk (1M) caps; `readRESPInt` overflow-bounded | raw socket: `$2000000000` → conn closed, RSS flat |
+| 2 | **Full-server crash** (panic in a parser kills *all* clients) | `recover()` in the per-connection goroutine | malformed `RESTORE` → graceful error, 0 panics, server stays up |
+| 3 | **Offset-driven OOM** (SETBIT/SETRANGE/BITFIELD huge offset) | 512 MiB string ceiling + overflow-safe offset checks | `SETBIT k 9e13 1` → "out of range", no alloc |
+| 4 | **AUTH bypass** (requirepass unenforced) | `InitialUser` + gate on `c.user==nil` (above) | unauth → NOAUTH |
+| 5 | **PSYNC keyspace exfiltration** | auth+ACL gate in `psyncCmd` | unauth PSYNC → NOAUTH |
+| 6 | **Unauthenticated HTTP `/api/exec`** (arbitrary command exec) | HTTP auth posture mirrors RESP (`httpAuthed`); 401 when protected | unauth POST → 401, authed → 200 |
+| 7 | **SSRF via HTTP** (REPLICAOF / CLUSTER MEET → cloud metadata) | dangerous admin/replication verbs refused over HTTP entirely | `REPLICAOF` over HTTP → 403 |
+| 8 | **Info disclosure** (key names via metrics endpoints) | `requireAuth` wrapper on hot-keys / vector-set endpoints | 401 when protected |
+| 9 | **Path traversal** (`DEBUG CPUPROFILE START <path>` → arbitrary file write) | confined to a bare filename under the data dir | `../../evil` → rejected |
+| 10 | **Decompression bomb / RDB bounds** (LZF `ulen`, intset count) | bound decompressed length + cap pre-allocation against bytes present | unit tests |
+| 11 | **AOF replay OOM** (oversized bulk on boot) | 512 MiB cap | unit guard |
+| 12 | **Secret logging** (AUTH password in MONITOR / SLOWLOG) | `redactSecrets` masks AUTH / HELLO AUTH before both sinks | unit test |
+| 13 | **Timing attack** (password compared with `==`) | `crypto/subtle.ConstantTimeCompare` | — |
+| 14 | **EXPIRE overflow** (`n*1e9` wraps int64 → garbage TTL) | overflow-bounded; GETRANGE rejects non-integer args | `EXPIRE k 9e17` → "invalid expire time" |
+| 15 | **KEYS/SCAN ReDoS** (exponential glob backtracking) | linear single-pass matcher (proven equivalent over 200k fuzzed cases) | pathological `*a*a*…*b` returns instantly |
+| 16 | **Slowloris** (no read deadline) | Redis-compatible `NEUROCACHE_CLIENT_TIMEOUT_SEC` idle timeout (exempts pub/sub) | config |
+
+### Regression guards
+
+`internal/resp/codec_security_test.go` (oversized headers rejected, normal 1 MiB value still parses, secret redaction), `internal/store/limits_test.go` (SETBIT/SETRANGE/LCS caps, LZF/intset bounds), `internal/store/glob_equiv_test.go` (linear matcher ≡ old matcher over 200k cases + no-blowup), `internal/acl/initialuser_test.go` (requirepass enforcement). **28 packages pass, race-clean.**
+
+### Honestly out of scope this pass
+
+The protected-mode safety net uses a peer-address loopback check (not a full bind-interface model); SSRF to *private* IPs via authenticated RESP `REPLICAOF` is intentionally allowed (private IPs are the normal replication target) — the control there is auth, not IP filtering. Multi-key transaction ACL is checked at queue time, not per-replayed-command.
