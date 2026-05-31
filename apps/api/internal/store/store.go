@@ -66,10 +66,20 @@ type Entry struct {
 	Key  string
 	Type ValueType
 
-	Str     string
-	List    *qlist.QList // elements are strings
-	Hash    map[string]string
-	HashTTL map[string]time.Time // optional per-field expiries (Redis 7.4)
+	Str string
+	// appendBuf is the over-allocated backing buffer for an APPEND-heavy
+	// string. When the most recent write to this entry was an APPEND, Str
+	// is an unsafe view over appendBuf's first len(Str) bytes, and
+	// appendBuf carries spare capacity so the next APPEND writes in place
+	// (amortized O(1)) instead of reallocating + copying the whole value
+	// (the O(N²) trap of `Str += value`). It is lazily (re)built by Append
+	// whenever Str no longer aliases it, so every other writer of Str can
+	// stay oblivious to it. nil for the overwhelmingly common non-APPEND
+	// string. See (*Store).Append.
+	appendBuf []byte
+	List      *qlist.QList // elements are strings
+	Hash      map[string]string
+	HashTTL   map[string]time.Time // optional per-field expiries (Redis 7.4)
 	Set     map[string]struct{}
 	ZSet    *ZSet
 	Stream  *Stream

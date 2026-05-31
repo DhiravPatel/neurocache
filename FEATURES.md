@@ -1931,3 +1931,31 @@ Pipelined throughput, NeuroCache rps ÷ Redis rps. "Before" is the Phase 19 base
 - **`DEBUG CPUPROFILE START|STOP|<seconds>`** — first-class live CPU profiling for a running server, completing the introspection story (`DEBUG JMAP` already covered memory). Writes a standard pprof file to the data dir (analyze with `go tool pprof`); `START`/`STOP` for open-ended capture, or a numeric arg to profile for N seconds and auto-stop (capped at 300s). Guards against double-start and stop-when-idle. Coexists with the `NEUROCACHE_CPUPROFILE` boot-time env hook.
 - **Fixed a pre-existing flaky test** (`TestFairQueueEqualWeightsRoundRobin`, ~60% fail rate): the stride scheduler's doc promised determinism, but on a `pass` tie (exactly what equal weights produce) the winner was chosen by Go's randomized map-iteration order. Added a deterministic tie-break by tenant name in both `Dequeue` and `Peek` (same latent bug) — now 8/8 deterministic.
 - New regression guards: `parallel_bench_test.go` (already present) plus the CPU-profile hook make the write-path wins reproducible and defensible on any machine.
+
+## Phase 21 — extended-command sweep: the APPEND O(N²) cliff
+
+With the core 12 commands beating Redis (Phase 20), the next question is the *rest* of the surface. A measurement pass over ~28 commands beyond the `redis-benchmark` default set (`STRLEN`, `GETRANGE`, `MGET`, `HMGET`, `HGETALL`, `LRANGE`, `SMEMBERS`, `ZRANGE`, `ZSCORE`, `SETEX`, `EXPIRE`, …) found NeuroCache beating Redis on **every one of them by 25–100%** — except a single dramatic outlier:
+
+| Command | Before | Redis | Ratio |
+|---|---:|---:|---:|
+| **APPEND** | **153k rps** | 1.60M rps | **9%** |
+
+That's the signature of an O(N²) bug — the same class as the historical LPUSH `recomputeBytes` regression. `redis-benchmark APPEND` (no `-r`) hammers **one** key, so the value grows unboundedly; `Store.Append` did `e.Str += value`, and because Go strings are immutable that reallocates and **copies the entire current value on every call** — quadratic total work plus a garbage storm of every intermediate string. Redis is amortized O(1) here via its capacity-doubling SDS. A client appending in a loop could also walk the server off a latency cliff (an accidental DoS), so this is a robustness fix as much as a throughput one.
+
+### The fix (amortized O(1), zero reader churn)
+
+`Store.Append` now keeps an over-allocated backing buffer (`Entry.appendBuf`) and lets Go's `append()` write into its spare capacity in place — amortized O(1), exactly like SDS. `e.Str` is re-published as an `unsafe.String` view over the buffer.
+
+The subtle part is concurrency safety, and it rests on one property: **append only ever writes at index ≥ the current length, or reallocates and leaves the old array untouched.** So a reader that took the shard `RLock`, copied the `e.Str` header (`ptr,len`), and released the lock is looking at `bytes[0:len]` — a region a later in-place append (which writes at `bytes[len:]`) never disturbs, and a reallocating append abandons entirely. Every published `e.Str` of length L therefore has its first L bytes frozen forever, honoring the `unsafe.String` immutability contract. Because `e.Str` stays a valid view, **every existing reader works unchanged** — no accessor, no 50-site refactor. `Append` is self-correcting: if any other command (`SET`/`SETRANGE`/`GETSET`/`SETBIT`/…) replaced `e.Str`, the buffer no longer aliases it, so the next `Append` rebuilds from the current value first. Only `Append` and a one-line buffer-release in `Set` changed.
+
+### Result
+
+| Command | Before | After | vs Redis |
+|---|---:|---:|---:|
+| APPEND | 153k rps (9%) | **2.31M rps** | **144%** — **15× faster, now beats Redis** |
+
+### Correctness
+
+- **Regression tests** (`internal/store/append_test.go`): exact value across repeated appends; the self-correcting path (SET / SETRANGE between appends); `STRLEN`/`GETRANGE` over an appended value; 100k single-byte appends complete in ~70 ms (the old form was quadratic) and yield exactly 100k bytes; **concurrent appender + 6 readers under `-race`** asserting readers never observe a corrupted (non-`a`) byte — the proof that the in-place growth is safe for aliased readers.
+- **Live**: APPEND interleaved with GET/STRLEN/GETRANGE/SETRANGE builds the right value; INCR after APPEND on a numeric string re-parses correctly (105 → 106); DUMP + DEBUG RELOAD preserve the appended value.
+- All **28 packages pass, race-clean**.
