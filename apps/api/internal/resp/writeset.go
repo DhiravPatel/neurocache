@@ -556,6 +556,61 @@ var writeCommands = map[string]bool{
 	"TRACE.START": true, "TRACE.END": true, "TRACE.ANNOTATE": true, "TRACE.FORGET": true,
 	"DOC.INIT": true, "DOC.APPLY": true, "DOC.FORGET": true,
 	"OBSERVE.REGISTER": true, "OBSERVE.INC": true, "OBSERVE.SET": true,
+
+	// Phase 14 — multi-agent coordination + governance + ML feedback
+	// + incident response. Pure reads (READ/STATUS/SCORE/CHECK/
+	// SIMULATE/COMPARE/STATS/LIST/PERMITS/ANSWER/WHY/IMPACT/REPORT
+	// /HAPPENS_BEFORE/CLOCK/VARIANTS/DIFF/GET/PROGRESS/EXPIRING/
+	// SOURCES/AGENTS/PENDING/CLAIMS/HEALTH/RANK) are not in the
+	// writeset.
+	"AGENT.BB.POST": true, "AGENT.BB.CLAIM": true,
+	"AGENT.BB.RELEASE": true, "AGENT.BB.DROP": true,
+	"AGENT.BUS.REGISTER": true, "AGENT.BUS.UNREGISTER": true,
+	"AGENT.BUS.SEND": true, "AGENT.BUS.ACK": true, "AGENT.BUS.RESET": true,
+	"PROV.BEGIN": true, "PROV.NODE": true, "PROV.FORGET": true,
+	"TRUST.RECORD": true, "TRUST.DECAY": true, "TRUST.RESET": true,
+	"ISOLATE.BIND": true, "ISOLATE.UNBIND": true, "ISOLATE.EXPECT": true,
+	"VECSPACE.SAMPLE": true, "VECSPACE.RESET": true,
+	"PREF.RECORD": true, "PREF.RESET": true,
+	"HANDOFF.SPAWN": true, "HANDOFF.REPORT_USAGE": true,
+	"HANDOFF.RETURN": true, "HANDOFF.CANCEL": true, "HANDOFF.FORGET": true,
+	"RISK.BUDGET.SET": true, "RISK.BUDGET.DEBIT": true, "RISK.BUDGET.RESET": true,
+	"CFCACHE.PUT": true, "CFCACHE.FORGET": true,
+	"BLAST.SET": true, "BLAST.RECORD": true, "BLAST.REVERT": true, "BLAST.FORGET": true,
+	"CAUSAL.APPEND": true, "CAUSAL.FORGET": true,
+	"SCHEMA.REGISTER": true, "SCHEMA.FORGET": true,
+	"WHATIF.OBSERVE": true, "WHATIF.FORGET": true,
+	"CONSENT.GRANT": true, "CONSENT.REVOKE": true, "CONSENT.WITHDRAW": true,
+	"GRAPH.EXTRACT.RUN": true, "GRAPH.EXTRACT.FORGET": true,
+
+	// Phase 15 — provenance, markets, autonomous rules, self-tuning,
+	// federated learning, deliberation, approval gates, replay,
+	// watermark, recall, carbon, mode-collapse, time-travel.
+	// Reads (ROOT/PROVE/VERIFY/RECEIPT/VERIFY_SIG/SCAN/HEAD/STATUS/
+	// EVALUATE/DRYRUN/FIRES/SUGGEST/STATUS/HISTORY/EXPORT/GET/PEERS/
+	// PRICE/STARVED/STATUS/RULES/SIZE/REPLAY/DETECT/KEYS/SCAN/
+	// AGGREGATE/OVER/REPORT/AT/GET/DIFF/LIST/STATS) excluded.
+	"ATTEST.LOG": true, "ATTEST.SEAL": true, "ATTEST.SIGN": true,
+	"ATTEST.FORGET": true,
+	"MARKET.CREATE": true, "MARKET.BID": true, "MARKET.CLEAR": true,
+	"MARKET.LEASE": true, "MARKET.RELEASE": true, "MARKET.FORGET": true,
+	"AUTO.RULE": true, "AUTO.UNRULE": true, "AUTO.PAUSE": true, "AUTO.RESUME": true,
+	"TUNE.KNOB": true, "TUNE.OBJECTIVE": true, "TUNE.OBSERVE": true, "TUNE.FORGET": true,
+	"FED.NODE": true, "FED.MERGE": true, "FED.SIGNAL": true, "FED.FORGET": true,
+	"DEBATE.START": true, "DEBATE.CRITIQUE": true, "DEBATE.REVISE": true,
+	"DEBATE.VOTE": true, "DEBATE.RESOLVE": true, "DEBATE.FORGET": true,
+	"QUORUM.PROPOSE": true, "QUORUM.APPROVE": true, "QUORUM.REJECT": true,
+	"QUORUM.COMMIT": true, "QUORUM.FORGET": true,
+	"SANDBOX.RECORD": true, "SANDBOX.SET_ROUTE": true, "SANDBOX.UNSET_ROUTE": true,
+	"SANDBOX.SET_PROJECTION": true, "SANDBOX.FORGET": true,
+	"WMARK.KEY": true, "WMARK.DROPKEY": true,
+	"RECALL.REGISTER": true, "RECALL.MARK": true,
+	"RECALL.FORGET": true, "RECALL.UNMARK": true,
+	"CARBON.INTENSITY": true, "CARBON.REGION": true, "CARBON.CHARGE": true,
+	"CARBON.BUDGET": true, "CARBON.RESET": true,
+	"ENTROPY.OBSERVE": true, "ENTROPY.RESET": true,
+	"TEMPORAL.SNAPSHOT": true, "TEMPORAL.CONTRIBUTE": true,
+	"TEMPORAL.CLOSE": true, "TEMPORAL.FORGET": true,
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

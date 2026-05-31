@@ -605,6 +605,65 @@ type Engine struct {
 	// tier burst doesn't starve a paid tenant. Stride scheduling.
 	FairQueue *llmstack.FairQueue
 
+	// Phase 14 — multi-agent coordination, governance, ML feedback,
+	// and incident-response primitives. The set Redis genuinely
+	// doesn't ship (and the part of the AI stack that's no longer
+	// "one agent, one request").
+	//
+	// AgentBB: shared blackboard so agents post findings semantically.
+	// AgentBus: a-to-a message bus with semantic routing by capability.
+	// Provenance: answer-DAG for "why did we say this" + IMPACT reverse-lookup.
+	// Trust: Bayesian source/tool reputation; retrieval down-weights bad sources.
+	// Isolation: hard tenant boundary on vector retrieval (fail-closed).
+	// VecSpace: embedding-space collapse health-check (silent failure detector).
+	// Preferences: turns thumbs/jury/canary signals into DPO/RLHF JSONL.
+	// Handoffs: typed subagent spawn/join with budget + deadline.
+	// RiskBudgets: per-session hallucination-risk accumulator.
+	// CFCache: counterfactual RAG cache keyed by (query, context-hash).
+	// Blast: incident-response kill switch with exposure accounting.
+	// Causal: vector-clock-ordered distributed event log.
+	// ContractEvolve: classifies schema changes breaking|risky|safe + hint.
+	// WhatIf: dry-run cost/quality/latency simulator over telemetry.
+	// Consent: GDPR per-user data-use grants with enforced expiry.
+	// GraphExtract: auto-extract (s,r,o) triples from text into the KG.
+	AgentBB         *llmstack.AgentBlackboard
+	AgentBus        *llmstack.AgentBus
+	Provenance      *llmstack.Provenance
+	Trust           *llmstack.TrustRegistry
+	Isolation       *llmstack.Isolation
+	VecSpace        *llmstack.VecSpaceHealth
+	Preferences     *llmstack.Preferences
+	Handoffs        *llmstack.Handoffs
+	RiskBudgets     *llmstack.RiskBudgets
+	CFCache         *llmstack.CounterfactualCache
+	Blast           *llmstack.BlastRadius
+	Causal          *llmstack.CausalLog
+	ContractEvolve  *llmstack.ContractEvolve
+	WhatIf          *llmstack.WhatIfSimulator
+	Consent         *llmstack.ConsentLedger
+	GraphExtract    *llmstack.GraphExtractor
+
+	// Phase 15 — the categories absent from earlier phases. Four
+	// load-bearing primitives (cryptographic provenance, agent
+	// resource market, autonomous rules, self-tuning) plus nine
+	// rapid-fire ones (federated meta-learning, deliberation,
+	// approval gates, traffic replay, text watermarking,
+	// drift invalidation, carbon accounting, mode collapse,
+	// unified time-travel).
+	Attestation *llmstack.Attestation
+	Market      *llmstack.Market
+	Auto        *llmstack.AutoRules
+	Tune        *llmstack.TuneRegistry
+	Fed         *llmstack.FedRegistry
+	Debate      *llmstack.Debates
+	Quorum      *llmstack.QuorumGates
+	Sandbox     *llmstack.SandboxReplay
+	WmarkEmbed  *llmstack.WatermarkEmbedder
+	Recall      *llmstack.RecallStore
+	Carbon      *llmstack.CarbonLedger
+	Entropy     *llmstack.EntropyMonitor
+	Temporal    *llmstack.TemporalSnapshots
+
 	// Phase 11 — extended AI-ops primitives. Each replaces a layer
 	// every team rebuilds: agent tool caches, streaming-replay,
 	// per-tenant cost budgets, stale-while-revalidate, multi-persona
@@ -827,6 +886,45 @@ func New(cfg config.Config, log *slog.Logger) *Engine {
 	e.DocFresh = llmstack.NewDocFreshTracker()
 	e.CacheWarm = llmstack.NewCacheWarmer()
 	e.FairQueue = llmstack.NewFairQueue()
+
+	// Phase 14 — multi-agent coordination + governance + feedback
+	// primitives. All in-memory state managers; no background workers.
+	e.AgentBB = llmstack.NewAgentBlackboard()
+	e.AgentBus = llmstack.NewAgentBus()
+	e.Provenance = llmstack.NewProvenance()
+	e.Trust = llmstack.NewTrustRegistry()
+	e.Isolation = llmstack.NewIsolation()
+	e.VecSpace = llmstack.NewVecSpaceHealth()
+	e.Preferences = llmstack.NewPreferences()
+	e.Handoffs = llmstack.NewHandoffs()
+	e.RiskBudgets = llmstack.NewRiskBudgets()
+	e.CFCache = llmstack.NewCounterfactualCache()
+	e.Blast = llmstack.NewBlastRadius()
+	e.Causal = llmstack.NewCausalLog()
+	e.ContractEvolve = llmstack.NewContractEvolve()
+	e.WhatIf = llmstack.NewWhatIfSimulator()
+	e.Consent = llmstack.NewConsentLedger()
+	e.GraphExtract = llmstack.NewGraphExtractor()
+
+	// Phase 15 — cryptographic provenance, resource markets,
+	// autonomous rules, self-tuning, federated learning, deliberation,
+	// approval gates, traffic replay, watermark embed, recall,
+	// carbon ledger, entropy monitor, temporal snapshots.
+	e.Attestation = llmstack.NewAttestation()
+	e.Market = llmstack.NewMarket()
+	e.Auto = llmstack.NewAutoRules()
+	e.Tune = llmstack.NewTuneRegistry()
+	e.Fed = llmstack.NewFedRegistry()
+	e.Debate = llmstack.NewDebates()
+	e.Quorum = llmstack.NewQuorumGates()
+	e.Sandbox = llmstack.NewSandboxReplay()
+	e.WmarkEmbed = llmstack.NewWatermarkEmbedder()
+	e.Recall = llmstack.NewRecallStore()
+	e.Carbon = llmstack.NewCarbonLedger()
+	e.Entropy = llmstack.NewEntropyMonitor()
+	e.Temporal = llmstack.NewTemporalSnapshots()
+	// Wire AUTO to read live state from the other Phase 14/15 primitives.
+	e.Auto.SetContext(&autoEvalContextAdapter{e: e})
 
 	// Phase 11 — instantiate every AI-ops manager. Schedulers and the
 	// inference proxy take engine-level wiring after construction so
@@ -1741,4 +1839,74 @@ func newLatencyMonitorWithDefault(maxLen int) *introspect.LatencyMonitor {
 	lm := introspect.NewLatencyMonitor(maxLen)
 	lm.SetThreshold(time.Millisecond)
 	return lm
+}
+
+// autoEvalContextAdapter satisfies llmstack.AutoEvalContext by
+// reading live state from the engine's Phase-14/15 primitives. This
+// adapter is what turns AUTO rules from "polled by app" into
+// "evaluated by engine" — the engine has direct access to every
+// store and can answer "is this metric in this range" without a
+// round-trip.
+type autoEvalContextAdapter struct {
+	e *Engine
+}
+
+func (a *autoEvalContextAdapter) VecSpaceVerdict(space string) (string, bool) {
+	r, ok := a.e.VecSpace.Health(space, 0, 0)
+	if !ok {
+		return "", false
+	}
+	return r.Verdict, true
+}
+
+func (a *autoEvalContextAdapter) VecSpaceMeanCosine(space string) (float64, bool) {
+	r, ok := a.e.VecSpace.Health(space, 0, 0)
+	if !ok {
+		return 0, false
+	}
+	return r.MeanPairwiseCosine, true
+}
+
+func (a *autoEvalContextAdapter) TrustScore(entity string) (float64, int64, bool) {
+	s := a.e.Trust.Score(entity)
+	if s.N == 0 {
+		return 0, 0, false
+	}
+	return s.Trust, s.N, true
+}
+
+func (a *autoEvalContextAdapter) RiskEnforce(session string) (bool, bool) {
+	st, ok := a.e.RiskBudgets.Status(session)
+	if !ok {
+		return false, false
+	}
+	return st.Enforce, true
+}
+
+func (a *autoEvalContextAdapter) RiskBalance(session string) (float64, bool) {
+	st, ok := a.e.RiskBudgets.Status(session)
+	if !ok {
+		return 0, false
+	}
+	return st.Balance, true
+}
+
+func (a *autoEvalContextAdapter) MarketPrice(market string) (float64, bool) {
+	return a.e.Market.Price(market)
+}
+
+func (a *autoEvalContextAdapter) MarketStarvedCount(market string) (int, bool) {
+	rows, ok := a.e.Market.Starved(market, 1)
+	if !ok {
+		return 0, false
+	}
+	return len(rows), true
+}
+
+func (a *autoEvalContextAdapter) CFCacheHitRate() (float64, bool) {
+	s := a.e.CFCache.Stats()
+	if s.TotalHits+s.TotalMisses == 0 {
+		return 0, false
+	}
+	return s.HitRate, true
 }
