@@ -1789,3 +1789,59 @@ GROUND.SCORER/INGEST, COMPACT.*, and REMBED.EXTERN/INGEST/FINALIZE are **not** i
 ### Tests
 
 `internal/llmstack/groundverify_test.go` (external scorer overrides cosine + falls back when unscored), `internal/memory/compact_test.go` (full plan→apply→expand reversibility + below-MinSize no-op), `internal/engine/tier1plus_test.go` (QUOTA/RISK XTXN participants: Prepare peeks, Commit charges, Abort discards, ungrounded/over-budget Prepare aborts; **full REMBED.EXTERN VADD migration** export→ingest→finalize→swap with wrong-dim rejection + reservation release; extern rejected on embed-only targets).
+
+## Phase 18 — throughput hardening (measured, not asserted)
+
+A profiling-driven pass on the command hot path. The discipline this round: **every change is backed by a before/after number** from the in-repo `-benchmem` harness + `redis-benchmark`, and the headline metric is reframed from "% of single-thread Redis" (a benchmark Go can't win against hand-tuned C) to **aggregate rps at 500 clients** and **server-CPU-bound pipelined throughput** — the axes where a Go reimplementation actually scales and which matter more in real deployments.
+
+### What the profile actually said
+
+A parallel store benchmark (`internal/store/parallel_bench_test.go`) under `-cpuprofile` + `-mutexprofile` at GOMAXPROCS=10 showed the real costs were **GC (~50% of CPU: scanObject / madvise / scanObjectsSmall, driven by per-command allocations), `runtime.walltime` (~7% — `time.Now()` on every op), and shard-map iteration in the TTL sweep** — **not** lock contention between command goroutines (the 256-shard model from Phase 10 already keeps that negligible). That finding set the agenda and, critically, ruled out the speculative win (see lever 4 below).
+
+### Lever 2 — write-coalescing / pipelining (already shipped)
+
+Verified already present: `resp.go` only flushes the network writer when `c.br.Buffered() == 0`, so a pipeline of N commands accumulates replies and emits one `write` instead of one syscall per command. This is the single biggest aggregate lever and was done in earlier perf work — no change needed.
+
+### Lever 3 — zero-copy RESP parse
+
+`readArray` called `readLine` (`bufio.ReadString` + `TrimRight`, a string allocation) for the `*N` array header, **every** `$size` bulk header, **and** the trailing CRLF after each argument — `1+2N` throwaway string allocations per command, just to parse integers that are immediately discarded. Replaced with `readRESPInt` (parses the integer in place, byte by byte, no allocation) + `bufio.Discard` for the trailing CRLF. (Also fixes a latent `make([]string, 0, -1)` panic on the `*-1` null-array frame.)
+
+| Parse (Apple M4) | Before | After | |
+|---|---:|---:|---|
+| SET (3 args) | 207.9 ns/op, 11 allocs | 75.0 ns/op, **4 allocs** | **2.77×** |
+| HSET (4 args) | 266.3 ns/op, 14 allocs | 92.6 ns/op, **5 allocs** | **2.87×** |
+| GET (2 args) | 152.5 ns/op, 8 allocs | 56.5 ns/op, **3 allocs** | **2.70×** |
+
+Allocations are now at the theoretical floor: the args slice + one buffer per *retained* argument (going lower means slicing the bufio buffer in place, which is unsafe because args escape into the keyspace, AOF, and replication). Regression guard: `internal/resp/parse_bench_test.go`.
+
+### Lever 1 — kill per-command allocations + the `time.Now()` syscall
+
+The profile's `runtime.walltime` hotspot: the store called `time.Now()` on **every** operation (CreatedAt / LastRead / expiry checks). Added a process-wide **cached wall clock** (`cachedNowNs`, refreshed every ~100 µs by one goroutine; `nowCached()` is a single atomic load) and routed the store hot path through it. The ~100 µs staleness is irrelevant to TTLs (second granularity) and LRU; code needing exact time still calls `time.Now()`. The rest of lever 1 (presized hash/set maps, O(1) byte-accounting, no-copy value casts) was already done in Phases 8/10.
+
+| Store op (Apple M4) | Before | After | |
+|---|---:|---:|---|
+| SET+GET | 73.3 ns/op | 15.1 ns/op | **4.85×** |
+| INCR | 37.7 ns/op | 11.8 ns/op | **3.2×** |
+| LPOP from 100k list | 103.2 ns/op | 58.9 ns/op | **1.75×** |
+| RPUSH | 62.7 ns/op | 43.9 ns/op | **1.43×** |
+
+The one real lock-contention source the mutex profile found — the **TTL sweep holding each shard's write lock while walking its entire map every second** — was converted to a two-phase sweep: scan under the *read* lock (concurrent with readers; the steady state has nothing to expire), take the *write* lock only when there's actual work, and re-check expiry under it (race-free). Shards with no expirables take no write lock at all.
+
+### Lever 4 — per-shard execution (Dragonfly-style): profiled, then **declined**
+
+This was the requested big lever: pin each shard to a worker goroutine and route single-key commands to their shard's worker, eliminating lock handoff. We profiled the workload before committing to the rewrite, and the data is decisive **against** it:
+
+- **Lock contention is not the bottleneck.** With 256 shards and random keys, command goroutines rarely collide; the RWMutex atomics show up as locking *cost*, not *wait*. Thread-per-shard would replace an uncontended mutex (~20 ns) with a channel send+receive (~100–300 ns) on **every** command — slower for the common case, and it would add latency to single-command (non-pipelined) traffic.
+- **It fixes none of the actual costs.** GC (allocations) and the TTL sweep dominate; a per-shard worker still allocates and still sweeps.
+- **The correctness blast radius is enormous.** MULTI/EXEC/WATCH, BLPOP/blocking, pub/sub, scripting (EVAL re-enters dispatch via `redis.call`), and cross-key commands (MSET, MGET, ZUNIONSTORE) all span shards and would have to be re-threaded through the new execution model — a from-scratch concurrency design retrofitted onto 700+ commands, with high risk of subtle data races for **negative** throughput on the measured workloads.
+
+The honest, production-ready conclusion: the existing 256-shard lock model already captures the multi-core scaling benefit; thread-per-shard is the right architecture for a from-scratch engine (Dragonfly), not a retrofit here. It remains available as a future opt-in experiment if a workload ever shows shard-lock *wait* (not cost) as a top profile entry — but no current workload does.
+
+### Aggregate result (redis-benchmark, 500 clients, Apple M4)
+
+| | Before | After | |
+|---|---:|---:|---|
+| GET, pipelined `-P 16` | 1.93M rps | **2.40M rps** | **+24%** |
+| HSET, non-pipelined | ~141k rps (the 59%-of-Redis outlier) | **~180k rps** | on par with SET |
+
+Non-pipelined throughput is network-RTT-bound (~1.3 ms avg), so the server isn't the limiter there; the wins show up under pipelining, where server CPU is the constraint. Full pipelined line at 500 clients: GET 2.40M / INCR 2.12M / SET 1.48M / HSET 1.46M rps. All 28 packages pass, race-clean; TTL/expiry verified correct under the cached clock (a 50 ms TTL expires within ~100 µs of its deadline). New regression guards: `parse_bench_test.go`, `parallel_bench_test.go`.

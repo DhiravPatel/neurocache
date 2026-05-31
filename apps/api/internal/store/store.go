@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -121,7 +122,39 @@ type Store struct {
 	notify func(event, key string)
 }
 
+// cachedNowNs is a process-wide cached wall clock (unix nanos), refreshed
+// every ~100 µs by a single background goroutine. Hot paths read it via
+// nowCached() with one atomic load instead of paying the ~30 ns vDSO cost of
+// time.Now() on every command — profiling under load put time.Now() at ~7%
+// of CPU (CreatedAt / LastRead / expiry checks fire on every operation). The
+// ~100 µs staleness is irrelevant to TTLs (second granularity) and LRU. It's
+// package-level so both Store and shard methods can read it, and so the
+// updater goroutine is started exactly once regardless of how many Store
+// instances exist (tests create many).
+var (
+	cachedNowNs atomic.Int64
+	clockOnce   sync.Once
+)
+
+func startCachedClock() {
+	clockOnce.Do(func() {
+		cachedNowNs.Store(time.Now().UnixNano())
+		go func() {
+			t := time.NewTicker(100 * time.Microsecond)
+			defer t.Stop()
+			for range t.C {
+				cachedNowNs.Store(time.Now().UnixNano())
+			}
+		}()
+	})
+}
+
+// nowCached returns the cached wall clock — cheap (one atomic load) and
+// precise enough for TTL/LRU; code needing exact time still calls time.Now().
+func nowCached() time.Time { return time.Unix(0, cachedNowNs.Load()) }
+
 func New() *Store {
+	startCachedClock()
 	s := &Store{}
 	for i := 0; i < numShards; i++ {
 		s.shards[i] = &shard{data: make(map[string]*Entry), idx: i}
@@ -129,6 +162,9 @@ func New() *Store {
 	go s.ttlLoop()
 	return s
 }
+
+// now returns the cached wall clock (Store-method convenience wrapper).
+func (s *Store) now() time.Time { return nowCached() }
 
 // SetNotifier wires a keyspace callback (used by pub/sub's __keyspace__).
 // Call at most once during engine bootstrap. Callers must not block.
@@ -152,16 +188,41 @@ func (s *Store) ttlLoop() {
 		// Sweep each shard independently — never holds more than one
 		// shard lock at a time, so the loop doesn't block writers on
 		// the other 255 shards.
+		//
+		// Two-phase per shard: scan under the READ lock (concurrent with
+		// readers; the common steady state has nothing to expire), then
+		// take the WRITE lock only when there's actual work. The old code
+		// held the write lock for the whole map walk every second,
+		// blocking every reader+writer of that shard — profiling under a
+		// write-heavy load showed that sweep as the dominant lock-wait and
+		// maps.Iter.Next CPU. Deletes re-check expiry under the write lock,
+		// so the brief unlocked gap is race-free.
 		for _, sh := range s.shards {
-			sh.mu.Lock()
+			var cand []string
+			needHash := false
+			sh.mu.RLock()
 			for k, e := range sh.data {
 				if e.expired(now) {
+					cand = append(cand, k)
+				} else if e.Type == TypeHash && len(e.HashTTL) > 0 {
+					needHash = true
+				}
+			}
+			sh.mu.RUnlock()
+			if len(cand) == 0 && !needHash {
+				continue // nothing to expire in this shard — no write lock
+			}
+			sh.mu.Lock()
+			for _, k := range cand {
+				if e, ok := sh.data[k]; ok && e.expired(now) { // re-check
 					s.bytes.Add(-int64(e.Bytes))
 					delete(sh.data, k)
 					expired = append(expired, k)
 				}
 			}
-			s.sweepHashFieldsShard(sh, now)
+			if needHash {
+				s.sweepHashFieldsShard(sh, now)
+			}
 			sh.mu.Unlock()
 		}
 		for _, k := range expired {
@@ -178,7 +239,7 @@ func (s *Store) Type(key string) ValueType {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(s.now()) {
 		return TypeNone
 	}
 	return e.Type
@@ -192,7 +253,7 @@ func (s *Store) Type(key string) ValueType {
 // before every DEL/EXPIRE on a missing-key check), so eliminating the
 // map[*shard][]string allocation matters.
 func (s *Store) Exists(keys ...string) int {
-	now := time.Now()
+	now := s.now()
 	if len(keys) == 1 {
 		sh := s.shardForKey(keys[0])
 		sh.mu.RLock()
@@ -265,7 +326,7 @@ func (s *Store) Expire(key string, ttl time.Duration) bool {
 		sh.mu.Unlock()
 		return false
 	}
-	e.ExpireAt = time.Now().Add(ttl)
+	e.ExpireAt = s.now().Add(ttl)
 	sh.mu.Unlock()
 	s.fire("expire", key)
 	return true
@@ -321,7 +382,7 @@ func (s *Store) TTL(key string) time.Duration {
 // Keys returns all live, non-expired keys matching an optional glob
 // pattern ("*" matches everything). Pass "" or "*" for a full list.
 func (s *Store) Keys(pattern string) []string {
-	now := time.Now()
+	now := s.now()
 	out := []string{}
 	for _, sh := range s.shards {
 		sh.mu.RLock()
@@ -344,7 +405,7 @@ func (s *Store) Rename(src, dst string) bool {
 	shS, shD, unlock := s.lockTwoW(src, dst)
 	defer unlock()
 	e, ok := shS.data[src]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(s.now()) {
 		return false
 	}
 	if old, ok := shD.data[dst]; ok {
@@ -365,7 +426,7 @@ func (s *Store) RenameNX(src, dst string) bool {
 		return false
 	}
 	e, ok := shS.data[src]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(s.now()) {
 		return false
 	}
 	delete(shS.data, src)
@@ -402,7 +463,7 @@ func (s *Store) FlushAll() {
 // Snapshot copies every live entry. Eviction reads scoring fields only, so
 // sharing pointers for list/hash/set is safe (they are never mutated).
 func (s *Store) Snapshot() []Entry {
-	now := time.Now()
+	now := s.now()
 	out := []Entry{}
 	for _, sh := range s.shards {
 		sh.mu.RLock()
@@ -434,7 +495,7 @@ func (sh *shard) get(key string, want ValueType) (*Entry, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	if e.expired(time.Now()) {
+	if e.expired(nowCached()) {
 		return nil, false, nil
 	}
 	if want != TypeNone && e.Type != want {
@@ -449,7 +510,7 @@ func (sh *shard) get(key string, want ValueType) (*Entry, bool, error) {
 // touch the global byte counter (the caller orchestrates via Store.addBytes).
 func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) {
 	e, ok := sh.data[key]
-	if ok && !e.expired(time.Now()) {
+	if ok && !e.expired(s.now()) {
 		if e.Type != t {
 			return nil, ErrWrongType
 		}
@@ -458,7 +519,7 @@ func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) 
 	if ok {
 		s.bytes.Add(-int64(e.Bytes))
 	}
-	e = &Entry{Key: key, Type: t, CreatedAt: time.Now(), LastRead: time.Now()}
+	e = &Entry{Key: key, Type: t, CreatedAt: s.now(), LastRead: s.now()}
 	switch t {
 	case TypeList:
 		e.List = qlist.New()
@@ -665,7 +726,7 @@ func (s *Store) PeekTouchState(key string) (uint64, time.Time, bool) {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(s.now()) {
 		return 0, time.Time{}, false
 	}
 	return atomic.LoadUint64(&e.Hits), e.LastRead, true

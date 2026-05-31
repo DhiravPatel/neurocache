@@ -16,7 +16,7 @@ import (
 // 80-byte Entry copy per call. New keys still allocate (one-time cost).
 func (s *Store) Set(key, value string, ttl time.Duration) {
 	sh := s.shardForKey(key)
-	now := time.Now()
+	now := s.now()
 	sh.mu.Lock()
 	if old, ok := sh.data[key]; ok && old.Type == TypeString {
 		// In-place update — same key, same type, just rewrite the
@@ -66,11 +66,11 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 func (s *Store) SetNX(key, value string, ttl time.Duration) bool {
 	sh := s.shardForKey(key)
 	sh.mu.Lock()
-	if e, ok := sh.data[key]; ok && !e.expired(time.Now()) {
+	if e, ok := sh.data[key]; ok && !e.expired(s.now()) {
 		sh.mu.Unlock()
 		return false
 	}
-	now := time.Now()
+	now := s.now()
 	e := &Entry{
 		Key:       key,
 		Type:      TypeString,
@@ -99,7 +99,7 @@ func (s *Store) Get(key string) (string, bool) {
 		return "", false
 	}
 	e.Hits++
-	e.LastRead = time.Now()
+	e.LastRead = s.now()
 	if e.IsInt {
 		// IntAtomic may be ahead of e.Str (lock-free INCR path).
 		// Format on demand to return the authoritative value.
@@ -121,7 +121,7 @@ func (s *Store) GetTyped(key string) (string, bool, error) {
 		return "", false, nil
 	}
 	e.Hits++
-	e.LastRead = time.Now()
+	e.LastRead = s.now()
 	if e.IsInt {
 		return strconv.FormatInt(e.IntAtomic.Load(), 10), true, nil
 	}
@@ -135,7 +135,7 @@ func (s *Store) GetSet(key, value string) (string, bool, error) {
 	defer sh.mu.Unlock()
 	prev := ""
 	had := false
-	if e, ok := sh.data[key]; ok && !e.expired(time.Now()) {
+	if e, ok := sh.data[key]; ok && !e.expired(s.now()) {
 		if e.Type != TypeString {
 			return "", false, ErrWrongType
 		}
@@ -143,7 +143,7 @@ func (s *Store) GetSet(key, value string) (string, bool, error) {
 		had = true
 		s.bytes.Add(-int64(e.Bytes))
 	}
-	now := time.Now()
+	now := s.now()
 	e := &Entry{
 		Key:       key,
 		Type:      TypeString,
@@ -163,7 +163,7 @@ func (s *Store) MSet(pairs ...string) error {
 	if len(pairs)%2 != 0 {
 		return errors.New("MSET requires an even argument count")
 	}
-	now := time.Now()
+	now := s.now()
 	type kv struct{ k, v string }
 	bucket := map[*shard][]kv{}
 	for i := 0; i < len(pairs); i += 2 {
@@ -196,7 +196,7 @@ func (s *Store) MSetNX(pairs ...string) (bool, error) {
 	if len(pairs)%2 != 0 {
 		return false, errors.New("MSETNX requires an even argument count")
 	}
-	now := time.Now()
+	now := s.now()
 	keys := make([]string, 0, len(pairs)/2)
 	for i := 0; i < len(pairs); i += 2 {
 		keys = append(keys, pairs[i])
@@ -228,7 +228,7 @@ func (s *Store) MSetNX(pairs ...string) (bool, error) {
 func (s *Store) MGet(keys ...string) ([]string, []bool, error) {
 	vals := make([]string, len(keys))
 	hits := make([]bool, len(keys))
-	now := time.Now()
+	now := s.now()
 	// Bucket by shard, take one read lock per shard.
 	type pos struct {
 		i int
@@ -268,7 +268,7 @@ func (s *Store) Append(key, value string) (int, error) {
 		return 0, err
 	}
 	if !ok {
-		now := time.Now()
+		now := s.now()
 		e = &Entry{Key: key, Type: TypeString, Str: value, CreatedAt: now, LastRead: now, Bytes: len(key) + len(value)}
 		sh.data[key] = e
 		s.bytes.Add(int64(e.Bytes))
@@ -346,7 +346,7 @@ func (s *Store) SetRange(key string, offset int, value string) (int, error) {
 	copy(cur[offset:], value)
 	newStr := string(cur)
 	if !ok {
-		now := time.Now()
+		now := s.now()
 		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
 		sh.data[key] = e
 	} else {
@@ -389,7 +389,7 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 	// ── lock-free hot path ────────────────────────────────────────
 	sh.mu.RLock()
 	e, ok := sh.data[key]
-	if ok && e.Type == TypeString && e.IsInt && !e.expired(time.Now()) {
+	if ok && e.Type == TypeString && e.IsInt && !e.expired(s.now()) {
 		newVal := e.IntAtomic.Add(delta)
 		sh.mu.RUnlock()
 		return newVal, nil
@@ -418,7 +418,7 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 	cur += delta
 	v := strconv.FormatInt(cur, 10)
 	if !ok {
-		now := time.Now()
+		now := s.now()
 		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
 		sh.data[key] = e
 	} else {
@@ -452,7 +452,7 @@ func (s *Store) IncrByFloat(key string, delta float64) (float64, error) {
 	cur += delta
 	v := strconv.FormatFloat(cur, 'f', -1, 64)
 	if !ok {
-		now := time.Now()
+		now := s.now()
 		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
 		sh.data[key] = e
 	} else {
