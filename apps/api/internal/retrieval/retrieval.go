@@ -78,6 +78,15 @@ type Index struct {
 	totLen int64
 
 	dense *vectorindex.Index
+	algo  vectorindex.Algo // remembered so a REMBED rebuild stays faithful
+
+	// shadowDense + shadowDim stage a REMBED rebuild of the dense arm at a
+	// new embedding dimension. Unlike the vector.Index path there is no
+	// query-time dual-read here (the BM25 lexical arm keeps serving exact
+	// terms during the migration, so retrieval degrades gracefully rather
+	// than going dark); SwapRembed installs the rebuilt dense index.
+	shadowDense *vectorindex.Index
+	shadowDim   int
 }
 
 var defaultStopwords = []string{
@@ -127,6 +136,7 @@ func New(opts Options) (*Index, error) {
 		postings:  map[string]map[string]int{},
 		docLen:    map[string]int{},
 		dense:     dense,
+		algo:      algo,
 	}, nil
 }
 
@@ -216,6 +226,123 @@ func (ix *Index) Get(id string) (*Document, bool) {
 	}
 	cp := *d
 	return &cp, true
+}
+
+// ─── REMBED dense-arm rebuild ────────────────────────────────────────────
+
+// RembedStat reports the document count and current dense dimension —
+// feeds REMBED.PLAN.
+func (ix *Index) RembedStat() (docs int, dim int) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return len(ix.docs), ix.dim
+}
+
+// StageRembed builds a replacement dense index at newDim by re-embedding
+// every document's text, off the live index. progress(done,total) is
+// called after each batch; cancel aborts cleanly. The built index is held
+// aside until SwapRembed commits it. A prior staged shadow is discarded.
+func (ix *Index) StageRembed(newDim, batch int, progress func(done, total int), cancel <-chan struct{}) error {
+	if newDim <= 0 {
+		return errors.New("rembed dim must be positive")
+	}
+	if batch <= 0 {
+		batch = 256
+	}
+	// Snapshot (id, text) under the read lock so the build doesn't pin the
+	// index while it runs.
+	ix.mu.RLock()
+	type doc struct{ id, text string }
+	snap := make([]doc, 0, len(ix.docs))
+	for id, d := range ix.docs {
+		snap = append(snap, doc{id: id, text: d.Text})
+	}
+	algo := ix.algo
+	ix.mu.RUnlock()
+
+	shadow, err := vectorindex.New(vectorindex.Options{
+		Algo:   algo,
+		Dim:    newDim,
+		Metric: vectorindex.MetricCosine,
+	})
+	if err != nil {
+		return err
+	}
+	total := len(snap)
+	for i, d := range snap {
+		select {
+		case <-cancel:
+			return errors.New("rembed cancelled")
+		default:
+		}
+		if err := shadow.Set(d.id, vector.Embed(d.text, newDim)); err != nil {
+			return err
+		}
+		if progress != nil && ((i+1)%batch == 0 || i+1 == total) {
+			progress(i+1, total)
+		}
+	}
+	if progress != nil && total == 0 {
+		progress(0, 0)
+	}
+	ix.mu.Lock()
+	ix.shadowDense = shadow
+	ix.shadowDim = newDim
+	ix.mu.Unlock()
+	return nil
+}
+
+// RembedStaged reports whether a rebuilt dense index is staged and its dim.
+func (ix *Index) RembedStaged() (bool, int) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.shadowDense != nil, ix.shadowDim
+}
+
+// SwapRembed commits the staged dense index: it becomes the live dense arm
+// and the index's dimension updates. Returns false if nothing was staged.
+//
+// Before promoting, the shadow dense index is reconciled against the live
+// document set: docs added during staging (which only reached the live dense
+// arm) are embedded into the shadow at the new dim, and ids deleted since the
+// snapshot are dropped — otherwise the wholesale swap would make those docs
+// silently vector-unsearchable. (A doc whose text changed in place during the
+// window keeps its staged vector; that narrower case is re-embedded on the
+// next ordinary Add.)
+func (ix *Index) SwapRembed() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.shadowDense == nil {
+		return false
+	}
+	for id, d := range ix.docs {
+		if _, ok := ix.shadowDense.Get(id); !ok {
+			_ = ix.shadowDense.Set(id, vector.Embed(d.Text, ix.shadowDim))
+		}
+	}
+	for _, id := range ix.shadowDense.IDs() {
+		if _, ok := ix.docs[id]; !ok {
+			ix.shadowDense.Del(id)
+		}
+	}
+	ix.dense = ix.shadowDense
+	ix.dim = ix.shadowDim
+	ix.shadowDense = nil
+	ix.shadowDim = 0
+	return true
+}
+
+// RollbackRembed discards the staged dense index, leaving the live arm
+// untouched. Returns false if nothing was staged.
+func (ix *Index) RollbackRembed() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.shadowDense == nil {
+		return false
+	}
+	ix.shadowDense = nil
+	ix.shadowDim = 0
+	return true
 }
 
 // Size reports the indexed document count.

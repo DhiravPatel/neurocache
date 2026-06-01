@@ -1655,3 +1655,219 @@ The scope-discipline note from this round: there were other candidates (continua
 
 - NETTING.* / XTXN.* mutating commands are in `internal/resp/writeset.go` for AOF replay. AIWAL.* mutations are also in the writeset; AIWAL is itself a write-ahead log layer, so the engine's AOF effectively logs the log — fine, since AOF replay reconstructs the AIWAL state.
 - ACL: NETTING.APPLY is `@slow` (it posts N SETTLE.TXNs). `*.FORGET` and AIWAL.TRUNCATE are `@dangerous` since they discard durable history.
+
+## Tier 1 — the three structural gaps (REMBED / GROUND / QUOTA)
+
+Three families that close gaps the architecture itself created, rather than another lap around the "command Redis also ships" list. Each composes existing NeuroCache primitives instead of bolting on a new subsystem. State lives in `internal/llmstack/groundverify.go`, `internal/aiops/quota.go`, and `internal/rembed/`; RESP handlers in `internal/resp/commands_tier1.go`; HTTP in `internal/http/tier1.go`.
+
+### REMBED.* — embedding-recompute migration with dual-read cutover
+
+The latent bug REMBED fixes: the entire semantic layer (`SEMANTIC_*`, `MEMORY.*`, `RETRIEVE.*`) is pinned to one embedder at one dimension (`vector.Embed`, default 384). The day that embedder or dimension changes, every stored vector is silently incomparable to new ones — and nothing else in the engine re-embeds them. REMBED is the migration tool: snapshot the source texts, rebuild each space at the target dimension **off the hot path**, optionally serve both spaces during cutover (**dual-read**) so retrieval quality never dips, then commit (`SWAP`) or abort (`ROLLBACK`) atomically.
+
+| Command | What it does | Where |
+|---|---|---|
+| `REMBED.PLAN scope [TO dim]` | Per-target count + byte estimate + dual-read capability. Read-only. | `rembed/rembed.go` + `resp/commands_tier1.go` |
+| `REMBED.START scope [TO dim] [BATCH n] [DUAL_READ 0\|1]` | Kick off a background re-embed job; returns the job id. `TO` defaults to the configured dim. | same |
+| `REMBED.PROGRESS job` | done/total + rps + eta, per target. | same |
+| `REMBED.STATUS job` / `REMBED.LIST` | Full job snapshot / every job newest-first. | same |
+| `REMBED.SWAP job` | Atomically promote every staged space to live. Only from `staged`. | same |
+| `REMBED.ROLLBACK job` | Discard staged shadows (from `staged`) or cancel a running job. | same |
+| `REMBED.STATS` | targets / jobs / total_jobs / active. | same |
+
+**Scope ↔ target map.** `all` = every registered target; or name one of `semantic` / `llm` / `memory` / `retrieve`.
+
+| Target | Re-embeddable? | Dual-read? | Why |
+|---|---|---|---|
+| semantic / llm / memory | ✅ | ✅ | All wrap `vector.Index`, which stores the source text. The shadow + dual-read primitives live in `vector.Index` (one implementation, three beneficiaries). |
+| retrieve | ✅ (dense arm) | ❌ (graceful) | `vectorindex.Index` stores only floats; the text lives in the doc store, so the dense arm is rebuilt + swapped. No query-time dual-read — the BM25 lexical arm keeps serving exact terms during the migration, so retrieval degrades gracefully rather than going dark. |
+| VADD / CFCACHE / ISOLATE | ❌ | — | VADD stores client-supplied raw vectors with no source text; CFCACHE/ISOLATE hold no vectors. Re-embedding is impossible without the original text — these are intentionally out of scope. |
+
+**Dual-read mechanism** (`internal/vector/vector.go`): `AttachShadow` installs a replacement index built at the new dim from the same texts; while `SetDualRead(true)` is on, `Search` scores the query against **both** spaces (each at its own dimension) and unions the hits by id (keeping the higher score) before the top-k cut. `SwapShadow` makes the shadow primary and drops the old space; `DropShadow` discards it. Search recursion terminates after one level (the shadow has no shadow of its own).
+
+**Persistence:** REMBED is deliberately **not** in the writeset — the vectors derive from the entries' own already-persisted writes (`SEMANTIC_SET`, `MEMORY.ADD`, `RETRIEVE.ADD`), so a migration is a live runtime operation, not durable state (same treatment as `HOTKEYS`). Config: `NEUROCACHE_REMBED_BATCH` (default 512).
+
+### GROUND.VERIFY / GROUND.REQUIRE — semantic groundedness that closes the RISK loop
+
+`GROUND.CHECK` (pre-existing) is a **lexical** Jaccard scorer. These add the **semantic** pass — cosine sentence-to-chunk alignment — and, more importantly, `GROUND.REQUIRE` feeds the resulting doc-level support score straight into `RISK.BUDGET.DEBIT`. Before this, `RISK.BUDGET.DEBIT` trusted a score the client computed by hand and nothing in the engine ever checked whether an answer's claims were supported by its context. The loop is now closed inside the cache.
+
+| Command | What it does | Where |
+|---|---|---|
+| `GROUND.VERIFY answer CONTEXT c1 [c2 ...] [MIN_SUPPORT f]` | Per-sentence support score (max cosine to any chunk) + the unsupported-claim list. `doc_score` is the worst sentence (one fabricated sentence drags the answer down). | `llmstack/groundverify.go` |
+| `GROUND.REQUIRE answer CONTEXT c1 [c2 ...] [MIN_SUPPORT f] [SESSION s]` | Boolean `grounded` gate; when `SESSION` is given, auto-debits `RISK.BUDGET` with `doc_score` and returns the new balance/enforce flag. | same |
+| `GROUND.VSTATS` | dim / verify / require / pass / fail counters. | same |
+
+Algorithm: split the answer into sentences (shared `splitClaims`), embed each sentence and each context chunk via `vector.Embed`, support = max cosine to any chunk, `doc_score` = the minimum (worst) sentence support, `grounded` = every sentence clears `MIN_SUPPORT`. NLI cross-encoders are the upgrade path — the command surface doesn't change. Config: `NEUROCACHE_GROUND_MIN_SUPPORT` (default 0.5). `GROUND.REQUIRE` is in the writeset (it debits the persisted risk balance); `GROUND.VERIFY`/`VSTATS` are pure reads.
+
+### QUOTA.* — composite admission control over the five existing budgets
+
+NeuroCache already ships five independent gates — COST (USD, `e.CostBudgets`), CARBON (gCO₂), RISK (hallucination balance), RATELIMIT (rps), MARKET (contention price). A real request must clear all of them, and apps hand-roll the AND across five round-trips — with no way to ask "*would* this be admitted?" without consuming each budget to find out. QUOTA is the single admission decision.
+
+| Command | What it does | Where |
+|---|---|---|
+| `QUOTA.POLICY name REQUIRE g1,g2,... [MODE all\|any]` | Define a composite gate (gates ⊆ `cost,carbon,risk,rate,market`). | `aiops/quota.go` + `resp/commands_tier1.go` |
+| `QUOTA.ADMIT name [COST scope usd] [CARBON tenant tokens model] [RISK session score] [RATE key window-ms max] [MARKET market maxprice]` | Admit + consume. Returns `{admitted, committed, denied_by, retry_after_ms, gates[...]}`. | same |
+| `QUOTA.SIMULATE name ...same dims...` | Dry run — peek every gate, consume nothing. | same |
+| `QUOTA.GET` / `QUOTA.LIST` / `QUOTA.DELETE` / `QUOTA.STATS` | Policy registry + roll-up counters. | same |
+
+**Two-phase by design.** `QUOTA.ADMIT` PEEKS every required gate first (non-mutating), computes the verdict, and only then — if admitted — consumes. So a request that fails the carbon budget never burns a rate-limit token, and `QUOTA.SIMULATE` is a pure dry run. This required adding non-mutating forward-looking peeks that the gates lacked: `CostBudgets.Peek`, `CarbonLedger.Simulate`, `RiskBudgets.Peek`, `RateLimiter.Peek` (the GCRA decision with `commit=false`). COST composes the **same** per-tenant budget operators set via `COST.BUDGET`. MARKET is a signal-only gate — peeked against a price ceiling, never consumed (admission there is an asynchronous auction, not a synchronous debit). Consume rules: ALL mode consumes every required gate; ANY mode consumes only the gates that individually had room. The two-phase evaluator lives in `engine/quota_eval.go` (the only layer holding all five gate handles); `aiops.QuotaManager` stays a pure policy registry. A dedicated `@quota` ACL category scopes the family (`+@quota`); config `NEUROCACHE_QUOTA_DEFAULT_MODE` (default `all`).
+
+### Tier 1 persistence + replication, and a data-loss fix found along the way
+
+- `GROUND.REQUIRE`, `QUOTA.POLICY`, `QUOTA.ADMIT`, `QUOTA.DELETE` are in `internal/resp/writeset.go`; the RESP `execute()` path records writeset members exactly once, so handlers do **not** also call `RecordWrite` (that would double-apply the risk debit / budget charge on replay).
+- **AOF replay is now skip-tolerant.** While wiring this up, the AOF replay was found to *abort on the first command whose `run()` failed* — and since the replayer (`internal/http/dispatch.go`) only implements core Redis verbs, the first AI-family command in the log aborted the entire replay and silently discarded every keyspace write recorded after it. `persistence.Replay` now distinguishes a corrupt/truncated stream (still aborts) from a single un-applicable command (logged + skipped, replay continues), and reports the applied count. Regression test in `internal/persistence/aof_replay_test.go`.
+
+### Concurrency hardening (post-review)
+
+An adversarial multi-agent review of the diff surfaced (and these were then fixed + regression-tested under `-race`) a set of concurrency/correctness defects that single-threaded tests miss:
+
+- **`vector.Index.SwapShadow` map aliasing → process-fatal crash.** The old swap did `ix.items = sh.items`, leaving the live index and a still-reachable (in-flight dual-read) shadow sharing one map under two different mutexes — a `fatal error: concurrent map read and map write` that `recover()` can't catch. Now the swap reconciles the live→shadow delta and promotes into a **fresh map**, so no detached shadow ever shares the live map.
+- **Writes during a migration were silently dropped at swap** (both `vector.Index` and the retrieval dense arm). Entries Upsert'd/added after the shadow was built reached only the live space; the wholesale swap discarded them. Both swap paths now **reconcile against the live set** before promoting (re-embed new/changed ids at the new dim, drop deleted ones).
+- **`rembed` cancel double-close → panic.** Two concurrent `REMBED.ROLLBACK`s on a running job both passed the state check then both `close(j.cancel)`. Guarded with `sync.Once`.
+- **`rembed` lost-rollback race.** A rollback landing in the window between the last `Stage` returning and the worker committing `StateStaged` was silently ignored. The worker now re-checks the cancel signal under the job lock before committing, and unwinds instead.
+- **`rembed` overlapping migrations on one target.** Two jobs staging the same target would overwrite one shadow and could commit the wrong data. `Start` now **reserves** each target and rejects an overlapping migration; multi-target `Swap` **pre-validates** every target is still staged before committing any (all-or-nothing, no split-dimension engine).
+- **QUOTA peek/commit TOCTOU.** Concurrent `QUOTA.ADMIT`s could both peek-OK then both consume — overshooting the carbon/risk ceilings or mis-reporting cost as consumed. Admission is now serialized by an engine mutex so peek-all and commit-all are atomic, and each gate's consume honors its real commit result.
+- **False durability claim.** `GROUND.REQUIRE`/`QUOTA.*` were briefly in the writeset with a comment claiming they replay to reconstruct state — but the AOF replayer implements only core Redis verbs (true of every AI family, including the budgets QUOTA composes), so they'd be appended then silently skipped. Removed from the writeset with an honest note; their state is runtime-only, like the existing budget primitives.
+
+The review also caught a **pre-existing data-loss bug** unrelated to these families (fixed): AOF replay aborted on the first command the replayer couldn't apply, discarding all keyspace writes after it — see the data-loss-safe `persistence.Replay` change above.
+
+### Tests
+
+`internal/vector/vector_rembed_test.go` (dual-read union + swap + rollback, **write-during-migration preservation**, **concurrent Search/Upsert/Swap under `-race`**), `internal/rembed/rembed_test.go` + `rembed_concurrency_test.go` (plan/scope, start→staged→swap, rollback, mid-job failure unwind, stats, **concurrent-rollback no-panic**, **overlap rejection**, **reservation release**), `internal/llmstack/groundverify_test.go` (grounded/ungrounded/empty + the GROUND→RISK enforce loop), `internal/llmstack/gates_peek_test.go` + `internal/primitives/ratelimit_peek_test.go` (peeks don't mutate), `internal/aiops/quota_test.go` (policy validation + lifecycle + counters), `internal/engine/tier1_test.go` (QUOTA two-phase incl. consume-nothing-on-denial, ANY-mode partial consume, **concurrent no-overshoot for cost + carbon**, full semantic REMBED dual-read→swap), `internal/retrieval/retrieval_rembed_test.go` (dense-arm rebuild + **docs-added-during-staging preserved**), `internal/persistence/aof_replay_test.go` (no data loss after a skipped command).
+
+## Tier 1 extensions — closing the seams (REMBED.EXTERN / XTXN participants / GROUND scorer / COMPACT)
+
+Four follow-ups that close gaps the Tier 1 primitives themselves opened — three extend documented limitations, one is a small new family. Same wiring as Tier 1 (RESP + HTTP + ACL + dispatch + tests).
+
+### REMBED.EXTERN / INGEST / FINALIZE — bring-your-own re-embedder (unlocks VADD)
+
+The base REMBED re-embeds internally with `vector.Embed`, so it marked VADD (and any client-vector store) "intentionally out of scope" — those keep no source text the engine could re-embed. The EXTERN flow removes that limitation with a client-supplied re-embed hook: export the key's vectors, the client re-embeds them with whatever model produced the originals, posts the new vectors back, and the engine stages them into a shadow at the new dimension and atomically swaps. VADD is the clean fit because VSIM already takes a client-supplied query vector — so externally-computed stored vectors actually work end-to-end (unlike semantic/memory, whose queries are server-embedded).
+
+| Command | What it does | Where |
+|---|---|---|
+| `REMBED.START vector:<key> TO dim MODE extern` | Open an external re-embed job; stages an empty shadow at `dim` and snapshots the source set. Parks in `awaiting_ingest`. | `rembed/rembed.go::StartExtern` |
+| `REMBED.EXTERN job [CURSOR c] [COUNT n] [WITHVEC]` | Page the export set — `(id, attr)` (and the current vector with `WITHVEC`) for the client to re-embed. | same |
+| `REMBED.INGEST job id vec [id vec ...]` | Stage externally-computed vectors (FP32 or CSV); a dimension mismatch is rejected. Returns `(ingested, total)`. | same |
+| `REMBED.FINALIZE job` | `awaiting_ingest → staged`. Reports `(ingested, total)` so the caller can refuse an incomplete swap. | same |
+| `REMBED.SWAP job` | Atomically replace the key's live index with the shadow (`Store.VReplaceIndex`, under the shard write lock). | `engine/rembed_targets.go::vaddTarget` |
+
+Scope `vector:<key>` is resolved on demand by a `Rembedder` resolver (the engine wires `registerRembedResolver`), creating a `vaddTarget` that satisfies the new `rembed.ExternTarget` interface. Reservation + overlap-rejection from the Tier 1 hardening apply: a second migration on the same key is refused until the first swaps or rolls back. New store helpers: `Store.VExport` (id/vec/attr + index geometry) and `Store.VReplaceIndex` (atomic swap).
+
+### XTXN participants for QUOTA + GROUND — admission/grounding join 2PC
+
+Phase 17's XTXN had no real participants (only a test fake). QUOTA.ADMIT and GROUND.REQUIRE — the two newest state-mutating commands — are now first-class participants, so "admit the request, ground the answer, settle the cost — all or nothing" is one cross-transaction. Each separates `Prepare` (peek the budgets / score the answer; **fail to abort the whole txn**) from `Commit` (charge / debit), with `Abort` discarding the staged op.
+
+```
+XTXN.STAGE tx QUOTA  admit   ARG policy p ARG cost_scope acme ARG cost_usd 0.5
+XTXN.STAGE tx GROUND require ARG answer "..." ARG context "..." ARG session s ARG min_support 0.9
+XTXN.PREPARE tx   # an ungrounded answer or a denied admission aborts here — nothing is charged
+XTXN.COMMIT  tx   # cost is charged AND risk debited together, or neither
+```
+
+Participants are `quotaParticipant` / `riskParticipant` in package `engine` (they hold `*Engine` to reach `QuotaEvaluate` / `GroundVerify` / `RiskBudgets`), registered at boot as `QUOTA` and `GROUND`. The quota participant reuses the two-phase `QuotaEvaluate` (peek on Prepare, commit on Commit); the ground participant fails Prepare for an ungrounded answer so the cost is never settled for an answer you can't support.
+
+### GROUND.SCORER / GROUND.INGEST — pluggable external-NLI scorer
+
+The base GROUND.VERIFY uses cosine sentence-to-chunk alignment and named NLI cross-encoders as "the upgrade path — the command surface doesn't change." This adds the plumbing: `GROUND.SCORER cosine|extern` switches the active scorer, and `GROUND.INGEST answer sentence-idx score` supplies an external model's per-sentence entailment scores (keyed by a stable hash of the answer + sentence index). In extern mode a sentence with an ingested score uses it; one without falls back to cosine, so the two mix gracefully and the same RISK loop runs on real entailment instead of lexical-adjacent cosine.
+
+### COMPACT.PLAN / APPLY / EXPAND / STATS — reversible, provenance-linked memory compaction
+
+The gap between MEMORY.CONSOLIDATE (clusters + synthesizes, discards originals irrecoverably) and RECALL (only flags staleness): nothing produced a bounded, **auditable, reversible** summary of a growing store. COMPACT folds similar memories into a semantic summary that records its folded source ids (`Entry.SourceIDs`) AND retains the originals' payloads, so EXPAND can restore them; each fold is also recorded in LINEAGE for the audit trail.
+
+| Command | What it does | Where |
+|---|---|---|
+| `COMPACT.PLAN user [LAYER l] [THRESHOLD f] [MINSIZE n] [MAXAGE s] [TARGET_BYTES n]` | Read-only proposal: which entries fold, bytes folded vs summary bytes, net savings. | `memory/compact.go` |
+| `COMPACT.APPLY user [...] [DROP 0\|1]` | Write a semantic summary per cluster (SourceIDs + retained payloads + LINEAGE), optionally delete the originals. | same + `resp/commands_compact.go` |
+| `COMPACT.EXPAND user summary-id` | Restore the retained originals and drop the summary. | same |
+| `COMPACT.STATS` | reversible_summaries / applied / folded / expanded. | same |
+
+`memory.Compactor` keeps the folded payloads in a side store (the store only persists ids in SourceIDs, never the originals' content — a Compactor that wants true reversibility must retain them itself). Clustering reuses the `vector.Embed` + `Cosine` greedy recipe; `TARGET_BYTES` caps how much is folded. Like the other AI families, COMPACT state is runtime-only.
+
+### Persistence note
+
+GROUND.SCORER/INGEST, COMPACT.*, and REMBED.EXTERN/INGEST/FINALIZE are **not** in the writeset — consistent with the Tier 1 decision (the AOF replayer implements only core Redis verbs, so no AI family replays). Their state is runtime-only; the keyspace data they derive from (VADD vectors, MEMORY entries) is what persists.
+
+### Tests
+
+`internal/llmstack/groundverify_test.go` (external scorer overrides cosine + falls back when unscored), `internal/memory/compact_test.go` (full plan→apply→expand reversibility + below-MinSize no-op), `internal/engine/tier1plus_test.go` (QUOTA/RISK XTXN participants: Prepare peeks, Commit charges, Abort discards, ungrounded/over-budget Prepare aborts; **full REMBED.EXTERN VADD migration** export→ingest→finalize→swap with wrong-dim rejection + reservation release; extern rejected on embed-only targets).
+
+## Phase 18 — throughput hardening (measured, not asserted)
+
+A profiling-driven pass on the command hot path. The discipline this round: **every change is backed by a before/after number** from the in-repo `-benchmem` harness + `redis-benchmark`, and the headline metric is reframed from "% of single-thread Redis" (a benchmark Go can't win against hand-tuned C) to **aggregate rps at 500 clients** and **server-CPU-bound pipelined throughput** — the axes where a Go reimplementation actually scales and which matter more in real deployments.
+
+### What the profile actually said
+
+A parallel store benchmark (`internal/store/parallel_bench_test.go`) under `-cpuprofile` + `-mutexprofile` at GOMAXPROCS=10 showed the real costs were **GC (~50% of CPU: scanObject / madvise / scanObjectsSmall, driven by per-command allocations), `runtime.walltime` (~7% — `time.Now()` on every op), and shard-map iteration in the TTL sweep** — **not** lock contention between command goroutines (the 256-shard model from Phase 10 already keeps that negligible). That finding set the agenda and, critically, ruled out the speculative win (see lever 4 below).
+
+### Lever 2 — write-coalescing / pipelining (already shipped)
+
+Verified already present: `resp.go` only flushes the network writer when `c.br.Buffered() == 0`, so a pipeline of N commands accumulates replies and emits one `write` instead of one syscall per command. This is the single biggest aggregate lever and was done in earlier perf work — no change needed.
+
+### Lever 3 — zero-copy RESP parse
+
+`readArray` called `readLine` (`bufio.ReadString` + `TrimRight`, a string allocation) for the `*N` array header, **every** `$size` bulk header, **and** the trailing CRLF after each argument — `1+2N` throwaway string allocations per command, just to parse integers that are immediately discarded. Replaced with `readRESPInt` (parses the integer in place, byte by byte, no allocation) + `bufio.Discard` for the trailing CRLF. (Also fixes a latent `make([]string, 0, -1)` panic on the `*-1` null-array frame.)
+
+| Parse (Apple M4) | Before | After | |
+|---|---:|---:|---|
+| SET (3 args) | 207.9 ns/op, 11 allocs | 75.0 ns/op, **4 allocs** | **2.77×** |
+| HSET (4 args) | 266.3 ns/op, 14 allocs | 92.6 ns/op, **5 allocs** | **2.87×** |
+| GET (2 args) | 152.5 ns/op, 8 allocs | 56.5 ns/op, **3 allocs** | **2.70×** |
+
+Allocations are now at the theoretical floor: the args slice + one buffer per *retained* argument (going lower means slicing the bufio buffer in place, which is unsafe because args escape into the keyspace, AOF, and replication). Regression guard: `internal/resp/parse_bench_test.go`.
+
+### Lever 1 — kill per-command allocations + the `time.Now()` syscall
+
+The profile's `runtime.walltime` hotspot: the store called `time.Now()` on **every** operation (CreatedAt / LastRead / expiry checks). Added a process-wide **cached wall clock** (`cachedNowNs`, refreshed every ~100 µs by one goroutine; `nowCached()` is a single atomic load) and routed the store hot path through it. The ~100 µs staleness is irrelevant to TTLs (second granularity) and LRU; code needing exact time still calls `time.Now()`. The rest of lever 1 (presized hash/set maps, O(1) byte-accounting, no-copy value casts) was already done in Phases 8/10.
+
+| Store op (Apple M4) | Before | After | |
+|---|---:|---:|---|
+| SET+GET | 73.3 ns/op | 15.1 ns/op | **4.85×** |
+| INCR | 37.7 ns/op | 11.8 ns/op | **3.2×** |
+| LPOP from 100k list | 103.2 ns/op | 58.9 ns/op | **1.75×** |
+| RPUSH | 62.7 ns/op | 43.9 ns/op | **1.43×** |
+
+The one real lock-contention source the mutex profile found — the **TTL sweep holding each shard's write lock while walking its entire map every second** — was converted to a two-phase sweep: scan under the *read* lock (concurrent with readers; the steady state has nothing to expire), take the *write* lock only when there's actual work, and re-check expiry under it (race-free). Shards with no expirables take no write lock at all.
+
+### Lever 4 — per-shard execution (Dragonfly-style): profiled, then **declined**
+
+This was the requested big lever: pin each shard to a worker goroutine and route single-key commands to their shard's worker, eliminating lock handoff. We profiled the workload before committing to the rewrite, and the data is decisive **against** it:
+
+- **Lock contention is not the bottleneck.** With 256 shards and random keys, command goroutines rarely collide; the RWMutex atomics show up as locking *cost*, not *wait*. Thread-per-shard would replace an uncontended mutex (~20 ns) with a channel send+receive (~100–300 ns) on **every** command — slower for the common case, and it would add latency to single-command (non-pipelined) traffic.
+- **It fixes none of the actual costs.** GC (allocations) and the TTL sweep dominate; a per-shard worker still allocates and still sweeps.
+- **The correctness blast radius is enormous.** MULTI/EXEC/WATCH, BLPOP/blocking, pub/sub, scripting (EVAL re-enters dispatch via `redis.call`), and cross-key commands (MSET, MGET, ZUNIONSTORE) all span shards and would have to be re-threaded through the new execution model — a from-scratch concurrency design retrofitted onto 700+ commands, with high risk of subtle data races for **negative** throughput on the measured workloads.
+
+The honest, production-ready conclusion: the existing 256-shard lock model already captures the multi-core scaling benefit; thread-per-shard is the right architecture for a from-scratch engine (Dragonfly), not a retrofit here. It remains available as a future opt-in experiment if a workload ever shows shard-lock *wait* (not cost) as a top profile entry — but no current workload does.
+
+### Aggregate result (redis-benchmark, 500 clients, Apple M4)
+
+| | Before | After | |
+|---|---:|---:|---|
+| GET, pipelined `-P 16` | 1.93M rps | **2.40M rps** | **+24%** |
+| HSET, non-pipelined | ~141k rps (the 59%-of-Redis outlier) | **~180k rps** | on par with SET |
+
+Non-pipelined throughput is network-RTT-bound (~1.3 ms avg), so the server isn't the limiter there; the wins show up under pipelining, where server CPU is the constraint. Full pipelined line at 500 clients: GET 2.40M / INCR 2.12M / SET 1.48M / HSET 1.46M rps. All 28 packages pass, race-clean; TTL/expiry verified correct under the cached clock (a 50 ms TTL expires within ~100 µs of its deadline). New regression guards: `parse_bench_test.go`, `parallel_bench_test.go`.
+
+## Phase 19 — Redis-wire DUMP/RESTORE (the migration story)
+
+The one feature-shaped item with a concretely blocked user (it sat in "Known gaps" through 18 phases): cross-engine migration. NeuroCache's `DUMP`/`RESTORE` previously used an internal gob+gzip blob — fine for NeuroCache↔NeuroCache, useless for moving data to or from Redis. Now `DUMP` emits, and `RESTORE` accepts, the **exact Redis wire payload**: `[1-byte RDB type][RDB-encoded value][2-byte version, LE][8-byte CRC64 footer]`. That makes NeuroCache a drop-in migration source/target for `redis-cli`, RIOT, and redis-shake (all of which move keys via DUMP/RESTORE).
+
+### What's implemented (`internal/store/rdb.go`)
+
+- **CRC64** — the exact Redis variant (reflected, poly `0xad93d23594c935a9` → reflected `0x95ac9329ac4bc9b5`, init 0). Verified against Redis' own check value `crc64("123456789") == 0xe9c6d914c4b8d9ca`.
+- **DUMP (encode)** — emits the legacy "plain" RDB types every modern Redis still loads: STRING (0), LIST (1), SET (2, hashtable), HASH (4, hashtable), ZSET_2 (5, binary doubles). No listpack *encoder* needed; Redis re-compacts on load.
+- **RESTORE (decode)** — reads the **compact encodings real Redis emits**, which is the harder half: listpack (hash/zset/set), intset, ziplist (pre-7.0), quicklist v1 (ziplist nodes) and v2 (listpack nodes), plus int-encoded (INT8/16/32) and LZF-compressed strings, and both binary- and string-form zset scores. So a dump taken from Redis 6/7/8 restores faithfully.
+- **Auto-detection** — `RESTORE` validates the CRC64 footer first; a valid footer means a real RDB payload, anything else falls back to the internal gob format. So NeuroCache's own legacy dumps and the non-Redis types (stream, the vector set) still round-trip. Stream/vector keep gob on `DUMP` (no standard RDB representation).
+
+### Verification (this is the load-bearing part)
+
+Round-tripped against a real **redis-server 8.6** in both directions for all five core types (`internal/store/rdb_redis_test.go`, gated on `REDIS_ADDR`):
+
+- **Redis → NeuroCache**: `redis-server` produces the DUMP (using its compact listpack/intset/quicklist_2/int-string encodings); `rdbDeserialize` reads every type back correctly.
+- **NeuroCache → Redis**: `rdbSerialize` produces the DUMP; real `redis-server` RESTOREs it and reads the value back correctly — proving our output is genuinely Redis-loadable.
+
+And an end-to-end **live cross-engine migration** through the actual server command handlers (NeuroCache server ↔ redis-server 8.6, both directions, string/list/set/hash/zset) — DUMP on one engine, RESTORE on the other, value verified on the far side. A NeuroCache string migrates into Redis and reads back as `migrated string`; a Redis zset migrates into NeuroCache and `ZSCORE` returns `9.9`.
+
+Regression guards: `internal/store/crc_vector_test.go` (CRC64 vectors), `internal/store/rdb_redis_test.go` (real-redis round-trip, skipped without `REDIS_ADDR`). All 28 packages pass, race-clean.
+
+### Updated Known gaps
+
+Of the three wire-level byte-compat items, the highest-value one — **binary DUMP/RESTORE — is now shipped**. The remaining two stay deferred (they only matter for mixing NeuroCache + Redis nodes in *one cluster*, never for client-side use or key-level migration): the cluster gossip Redis binary protocol, and the AOF RDB preamble. Key-level cross-engine migration — the thing operators and tooling (RIOT, redis-shake) actually reach for — works today.

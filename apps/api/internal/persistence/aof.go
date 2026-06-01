@@ -194,30 +194,48 @@ func (a *AOF) Rewrite(build func(*bufio.Writer) error) error {
 
 // Replay walks a file at path and feeds each command through run. This
 // is called once at engine startup before any clients connect.
-func Replay(path string, run func(cmd string, args []string) error) error {
+// Replay applies every command in the AOF at path via run, returning the
+// number successfully applied.
+//
+// Error policy distinguishes two failure kinds:
+//
+//   - A structural/parse error from readCommand means the AOF stream is
+//     corrupt or truncated — there's no safe way to continue, so it aborts
+//     and returns the error.
+//   - A run() error means one specific command couldn't be applied (e.g. a
+//     runtime-only command the replayer doesn't implement). That MUST NOT
+//     abort the whole replay — doing so would silently discard every
+//     keyspace write recorded after it. Such commands are reported via
+//     onSkip (when non-nil) and skipped; replay continues.
+//
+// onSkip may be nil.
+func Replay(path string, run func(cmd string, args []string) error, onSkip func(cmd string, err error)) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 	defer f.Close()
 
 	br := bufio.NewReaderSize(f, 64*1024)
-	count := 0
+	applied := 0
 	for {
 		cmd, args, err := readCommand(br)
 		if errors.Is(err, io.EOF) {
-			return nil
+			return applied, nil
 		}
 		if err != nil {
-			return fmt.Errorf("replay at entry %d: %w", count, err)
+			return applied, fmt.Errorf("replay at entry %d: %w", applied, err)
 		}
 		if err := run(cmd, args); err != nil {
-			return fmt.Errorf("replay of %s failed: %w", cmd, err)
+			if onSkip != nil {
+				onSkip(cmd, err)
+			}
+			continue
 		}
-		count++
+		applied++
 	}
 }
 

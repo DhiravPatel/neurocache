@@ -186,6 +186,10 @@ func Synthesize(hits []QueryHit) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// Index exposes the underlying vector index so the REMBED orchestrator can
+// drive an embedding migration over the memory space.
+func (s *Store) Index() *vector.Index { return s.ix }
+
 func (s *Store) Size() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

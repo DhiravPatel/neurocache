@@ -71,6 +71,11 @@ type Config struct {
 	// HotKeys runtime tracker (HOTKEYS / HOTKEYS RESET / ...)
 	HotKeysK      int    // size of the heavy-keeper top-K (default 128)
 	HotKeysSample uint64 // 1-in-N event sampling rate (default 1 = sample everything)
+
+	// Tier 1 — groundedness / composite admission / embedding migration
+	GroundMinSupport float64 // default min support for GROUND.VERIFY/REQUIRE (0.5)
+	QuotaDefaultMode string  // default QUOTA.POLICY mode when MODE omitted (all|any)
+	RembedBatch      int     // default REMBED.START batch size (512)
 }
 
 func Load() Config {
@@ -128,6 +133,10 @@ func Load() Config {
 
 		HotKeysK:      envInt("NEUROCACHE_HOTKEYS_K", 128),
 		HotKeysSample: uint64(envInt("NEUROCACHE_HOTKEYS_SAMPLE", 1)),
+
+		GroundMinSupport: envFloat("NEUROCACHE_GROUND_MIN_SUPPORT", 0.5),
+		QuotaDefaultMode: strings.ToLower(env("NEUROCACHE_QUOTA_DEFAULT_MODE", "all")),
+		RembedBatch:      envInt("NEUROCACHE_REMBED_BATCH", 512),
 	}
 }
 

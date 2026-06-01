@@ -76,6 +76,30 @@ func (b *CostBudgets) Charge(tenant string, usd float64) (bool, float64, error) 
 	return true, t.maxUSD - (used + usd), nil
 }
 
+// Peek reports whether a usd charge WOULD be allowed for tenant, without
+// recording it — the forward-looking, non-consuming gate QUOTA needs (for
+// SIMULATE, and for ADMIT's peek-all-then-commit-all first phase). It mirrors
+// Charge's decision exactly. hasBudget is false when no budget is configured
+// for the tenant (the caller decides whether that means allow or fail-closed;
+// QUOTA treats it as allow, matching Charge's "no budget = unlimited").
+func (b *CostBudgets) Peek(tenant string, usd float64) (allowed bool, remaining float64, hasBudget bool) {
+	if usd < 0 {
+		return false, 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	t, ok := b.tenants[tenant]
+	if !ok {
+		return true, 0, false // no budget configured = unlimited
+	}
+	t.compact()
+	used := t.spent()
+	if t.maxUSD > 0 && used+usd > t.maxUSD {
+		return false, t.maxUSD - used, true
+	}
+	return true, t.maxUSD - (used + usd), true
+}
+
 // Usage returns (used, remaining, max, windowMs) for a tenant.
 func (b *CostBudgets) Usage(tenant string) (float64, float64, float64, int64) {
 	b.mu.Lock()

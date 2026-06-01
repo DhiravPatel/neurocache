@@ -230,6 +230,13 @@ func (s *Store) Dump(key string) (string, bool, error) {
 		}
 	}
 	sh.mu.RUnlock()
+	// Redis-wire DUMP for the five core types, so the blob round-trips
+	// through real Redis (RESTORE / RIOT / redis-shake). Stream and the
+	// NeuroCache-only vector type have no standard RDB form and fall back to
+	// the internal gob encoding (RESTORE auto-detects via the CRC64 footer).
+	if blob, ok := rdbSerialize(exp); ok {
+		return string(blob), true, nil
+	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	enc := gob.NewEncoder(gz)
@@ -252,14 +259,19 @@ func (s *Store) RestoreKey(key string, ttlMs int64, blob string, replace bool) e
 	if _, exists := sh.data[key]; exists && !replace {
 		return errors.New("BUSYKEY Target key name already exists.")
 	}
-	gz, err := gzip.NewReader(bytes.NewReader([]byte(blob)))
-	if err != nil {
-		return errors.New("DUMP payload version or checksum are wrong")
-	}
-	defer gz.Close()
-	var exp ExportEntry
-	if err := gob.NewDecoder(gz).Decode(&exp); err != nil {
-		return errors.New("DUMP payload version or checksum are wrong")
+	// Try the Redis-wire RDB format first (a valid CRC64 footer both
+	// authenticates it and distinguishes it from the internal gob blob);
+	// fall back to gob for stream/vector dumps and legacy NeuroCache dumps.
+	exp, rerr := rdbDeserialize([]byte(blob))
+	if rerr != nil {
+		gz, err := gzip.NewReader(bytes.NewReader([]byte(blob)))
+		if err != nil {
+			return errors.New("DUMP payload version or checksum are wrong")
+		}
+		defer gz.Close()
+		if err := gob.NewDecoder(gz).Decode(&exp); err != nil {
+			return errors.New("DUMP payload version or checksum are wrong")
+		}
 	}
 	exp.Key = key
 	if ttlMs > 0 {

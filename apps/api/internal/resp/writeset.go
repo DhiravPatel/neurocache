@@ -639,6 +639,22 @@ var writeCommands = map[string]bool{
 	"XTXN.COMMIT": true, "XTXN.ABORT": true, "XTXN.FORGET": true,
 	"AIWAL.APPEND": true, "AIWAL.FSYNC": true, "AIWAL.CHECKPOINT": true,
 	"AIWAL.TRUNCATE": true, "AIWAL.FORGET": true,
+
+	// Tier 1 (GROUND.* / QUOTA.* / REMBED.*) is deliberately NOT in the
+	// writeset. These families mutate in-memory manager state (risk debits,
+	// budget consumption, the QUOTA policy registry, vector-space rebuilds) —
+	// but the AOF replayer (internal/http/dispatch.go) implements only core
+	// Redis verbs, so AI-family commands cannot be replayed on restart. That
+	// is true of every AI family here, including the very budgets QUOTA
+	// composes (COST.BUDGET, CARBON.BUDGET, RISK.BUDGET.SET): none survive a
+	// restart in the current architecture. Recording GROUND.REQUIRE /
+	// QUOTA.ADMIT to the AOF would therefore be a false durability promise —
+	// they'd be appended, then silently skipped at replay (and would
+	// double-apply on the RESP path, since execute() auto-records writeset
+	// members). So we leave them out entirely; their state is runtime-only,
+	// the same treatment as HOTKEYS and the existing budget primitives. The
+	// data-loss-safe skip in persistence.Replay keeps the keyspace intact
+	// regardless.
 }
 
 // isWriteCommand returns true if the command mutates the keyspace.

@@ -131,6 +131,34 @@ func (r *RiskBudgets) Debit(session string, score float64, reason string) (RiskD
 	return out, nil
 }
 
+// Peek computes what Debit(session, score) WOULD do without mutating the
+// session — the forward-looking check QUOTA needs. Unlike Status (which
+// only reports whether the session is ALREADY exhausted), Peek answers
+// "would the next debit of this score push the balance to/over zero?".
+// A never-SET session is treated against the default budget/weight without
+// being created, so a pure simulate leaves no trace.
+func (r *RiskBudgets) Peek(session string, score float64) RiskDebitResult {
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+	r.mu.RLock()
+	s, ok := r.sessions[session]
+	r.mu.RUnlock()
+	budget, balance, weight := defaultRiskBudget, defaultRiskBudget, 1.0
+	if ok {
+		s.mu.Lock()
+		budget, balance, weight = s.budget, s.balance, s.weight
+		s.mu.Unlock()
+	}
+	debit := (1 - score) * weight
+	out := RiskDebitResult{Balance: balance - debit, Budget: budget, Debited: debit}
+	out.Enforce = out.Balance <= 0
+	return out
+}
+
 // RiskStatus is STATUS's return.
 type RiskStatus struct {
 	Session    string  `json:"session"`

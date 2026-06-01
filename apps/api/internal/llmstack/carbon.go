@@ -237,6 +237,61 @@ func (c *CarbonLedger) Over(tenant string) (CarbonOverResult, bool) {
 	return out, hasBudget
 }
 
+// CarbonSimResult is Simulate's return: the projected charge for a
+// proposed inference plus whether booking it would breach the tenant's
+// CO₂ budget.
+type CarbonSimResult struct {
+	Tenant     string  `json:"tenant"`
+	EnergyWh   float64 `json:"energy_wh"`
+	CO2Gram    float64 `json:"co2_g"`
+	UsedG      float64 `json:"used_g"`
+	ProjectedG float64 `json:"projected_g"` // used + this charge
+	BudgetG    float64 `json:"budget_g"`
+	WouldExceed bool   `json:"would_exceed"`
+}
+
+// Simulate projects the carbon of a proposed inference and reports whether
+// booking it would push the tenant over budget — the forward-looking gate
+// QUOTA needs. Pure read: it touches no usage rows. The second return is
+// false when the tenant has no configured budget (caller decides whether
+// "no budget" means allow or fail-closed). The intensity/region math
+// mirrors Charge exactly so a simulate and a real charge agree.
+func (c *CarbonLedger) Simulate(tenant, feature, model, region string, tokens int64) (CarbonSimResult, bool) {
+	if tokens < 0 {
+		tokens = 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	wh1k, ok := c.intensity[model]
+	if !ok {
+		wh1k = 1.5
+	}
+	if region == "" {
+		region = "default"
+	}
+	gPerKWh, ok := c.regions[region]
+	if !ok {
+		gPerKWh = c.regions["default"]
+	}
+	energyWh := wh1k * float64(tokens) / 1000.0
+	co2g := energyWh / 1000.0 * gPerKWh
+	used := 0.0
+	for _, row := range c.usage {
+		if row.Tenant == tenant {
+			used += row.CO2Gram
+		}
+	}
+	budget, hasBudget := c.budgets[tenant]
+	out := CarbonSimResult{
+		Tenant: tenant, EnergyWh: energyWh, CO2Gram: co2g,
+		UsedG: used, ProjectedG: used + co2g, BudgetG: budget,
+	}
+	if hasBudget {
+		out.WouldExceed = out.ProjectedG > budget
+	}
+	return out, hasBudget
+}
+
 // Reset clears usage by scope.
 func (c *CarbonLedger) Reset(kind, name string) int {
 	c.mu.Lock()

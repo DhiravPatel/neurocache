@@ -67,6 +67,51 @@ func asciiUpper(s string) string {
 
 // readArray reads a single RESP array of bulk strings. It also tolerates
 // an inline command (space-separated text) for redis-cli interactive use.
+var errProtocol = errors.New("ERR Protocol error")
+
+// readRESPInt reads a CRLF-terminated decimal integer directly from the
+// reader, byte by byte, without allocating an intermediate string (unlike
+// readLine + strconv.Atoi). The leading type byte ('*' / '$') must already
+// be consumed. A leading '-' yields a negative value (used for the `$-1`
+// null bulk and `*-1` null array sentinels). This runs once for the array
+// header, once per bulk-length header, and is the bulk of the per-command
+// parse-alloc reduction (each of those was previously a throwaway string).
+func readRESPInt(br *bufio.Reader) (int, error) {
+	n := 0
+	neg := false
+	any := false
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch {
+		case b == '\r':
+			b2, err := br.ReadByte()
+			if err != nil {
+				return 0, err
+			}
+			if b2 != '\n' {
+				return 0, errProtocol
+			}
+			if neg {
+				return -1, nil
+			}
+			if !any {
+				return 0, errProtocol
+			}
+			return n, nil
+		case b == '-' && !any && !neg:
+			neg = true
+		case b >= '0' && b <= '9':
+			any = true
+			n = n*10 + int(b-'0')
+		default:
+			return 0, errProtocol
+		}
+	}
+}
+
 func readArray(br *bufio.Reader) ([]string, error) {
 	b, err := br.ReadByte()
 	if err != nil {
@@ -84,13 +129,12 @@ func readArray(br *bufio.Reader) ([]string, error) {
 		}
 		return splitInline(line), nil
 	}
-	line, err := readLine(br)
+	n, err := readRESPInt(br)
 	if err != nil {
 		return nil, err
 	}
-	n, err := strconv.Atoi(line)
-	if err != nil {
-		return nil, err
+	if n <= 0 {
+		return nil, nil // empty or null array — nothing to dispatch
 	}
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -101,11 +145,7 @@ func readArray(br *bufio.Reader) ([]string, error) {
 		if t != '$' {
 			return nil, errors.New("expected $ bulk")
 		}
-		ll, err := readLine(br)
-		if err != nil {
-			return nil, err
-		}
-		size, err := strconv.Atoi(ll)
+		size, err := readRESPInt(br)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +157,9 @@ func readArray(br *bufio.Reader) ([]string, error) {
 		if _, err := io.ReadFull(br, buf); err != nil {
 			return nil, err
 		}
-		if _, err := readLine(br); err != nil {
+		// Discard the trailing CRLF in place — readLine here would have
+		// allocated a throwaway string per argument.
+		if _, err := br.Discard(2); err != nil {
 			return nil, err
 		}
 		// `string(buf)` would copy the bytes — for a 100 KiB SET that's

@@ -125,6 +125,78 @@ func (s *Store) VEmb(key, id string) ([]float32, bool, error) {
 	return cp, true, nil
 }
 
+// VExportEntry is one member of a vector set, exported for external
+// re-embedding (REMBED.EXTERN). Attr carries the opaque JSON blob, which is
+// typically where a client stashed the source reference / text it needs to
+// re-embed (the store keeps no source text of its own).
+type VExportEntry struct {
+	ID   string
+	Vec  []float32
+	Attr string
+}
+
+// VExportOpts captures the index geometry so a caller can rebuild a fresh
+// index at a new dimension while preserving algo / metric / HNSW params.
+type VExportOpts struct {
+	Algo   vectorindex.Algo
+	Metric vectorindex.Metric
+	Dim    int
+	M      int
+	EFC    int
+	EFR    int
+}
+
+// VExport returns every (id, vec, attr) plus the index geometry. Snapshot
+// copies — safe to retain. ok=false when the key is absent.
+func (s *Store) VExport(key string) ([]VExportEntry, VExportOpts, bool, error) {
+	sh := s.shardForKey(key)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	e, ok, err := sh.get(key, TypeVector)
+	if err != nil || !ok {
+		return nil, VExportOpts{}, false, err
+	}
+	idx := e.Vector.Index
+	ids := idx.IDs()
+	out := make([]VExportEntry, 0, len(ids))
+	for _, id := range ids {
+		v, present := idx.Get(id)
+		if !present {
+			continue
+		}
+		cp := make([]float32, len(v))
+		copy(cp, v)
+		attr, _ := idx.GetAttr(id)
+		out = append(out, VExportEntry{ID: id, Vec: cp, Attr: attr})
+	}
+	opts := VExportOpts{
+		Algo: idx.Algo(), Metric: idx.Metric(), Dim: idx.Dim(),
+		M: idx.M(), EFC: idx.EFC(), EFR: idx.EFR(),
+	}
+	return out, opts, true, nil
+}
+
+// VReplaceIndex atomically swaps the key's underlying index — the commit step
+// of a REMBED.EXTERN migration. The new index becomes live under the shard
+// write lock, so no in-flight reader (VSim/VEmb/...) observes a half-built
+// state. ok=false when the key is absent.
+func (s *Store) VReplaceIndex(key string, idx *vectorindex.Index) (bool, error) {
+	if idx == nil {
+		return false, errors.New("nil index")
+	}
+	sh := s.shardForKey(key)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e, ok, err := sh.get(key, TypeVector)
+	if err != nil || !ok {
+		return false, err
+	}
+	e.Vector.Index = idx
+	s.recomputeBytes(e)
+	s.fire("vadd", key)
+	return true, nil
+}
+
 // VSetAttr / VGetAttr / VDelAttr manage the optional JSON attribute
 // blob attached to each id. The store treats the value as opaque —
 // callers serialize whatever JSON they like.
