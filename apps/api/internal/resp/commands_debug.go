@@ -3,9 +3,137 @@ package resp
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
+
+// cpuProf guards the single process-wide CPU profile that DEBUG
+// CPUPROFILE drives. Go's pprof CPU profiler is a singleton — only one
+// can run at a time — so START / STOP / auto-stop all serialize through
+// this one mutex. It also coexists with the NEUROCACHE_CPUPROFILE env
+// hook in main.go: if that one is active, StartCPUProfile here returns
+// "cpu profiling already in use", which we surface verbatim.
+var cpuProf struct {
+	mu   sync.Mutex
+	file *os.File
+	path string
+}
+
+// debugCPUProfileCmd implements DEBUG CPUPROFILE START|STOP|<seconds>.
+// It completes the runtime-introspection story: DEBUG JMAP already
+// surfaces Go memory stats, but there was no way to capture a CPU
+// profile from a live server without restarting it under the
+// NEUROCACHE_CPUPROFILE env hook. This makes on-demand CPU profiling a
+// first-class operation.
+//
+//	DEBUG CPUPROFILE START [path]   begin profiling; reply the file path
+//	DEBUG CPUPROFILE STOP           end profiling; reply the file path
+//	DEBUG CPUPROFILE <seconds>      profile for N seconds, reply immediately
+//
+// The profile lands at <data_dir>/cpuprofile-<unixnano>.pprof unless an
+// explicit path is given. Analyze with `go tool pprof <path>`.
+func (c *conn) debugCPUProfileCmd(args []string) {
+	if len(args) == 0 {
+		writeError(c.bw, "DEBUG CPUPROFILE requires START, STOP, or a number of seconds")
+		return
+	}
+	switch strings.ToUpper(args[0]) {
+	case "STOP":
+		cpuProf.mu.Lock()
+		defer cpuProf.mu.Unlock()
+		if cpuProf.file == nil {
+			writeError(c.bw, "no CPU profile is running")
+			return
+		}
+		path := stopCPUProfileLocked()
+		writeSimple(c.bw, "CPU profile written to "+path)
+	case "START":
+		path := ""
+		if len(args) >= 2 {
+			path = args[1]
+		}
+		started, err := c.startCPUProfile(path)
+		if err != nil {
+			writeError(c.bw, err.Error())
+			return
+		}
+		writeSimple(c.bw, "CPU profile started: "+started)
+	default:
+		secs, err := strconv.ParseFloat(args[0], 64)
+		if err != nil || secs <= 0 {
+			writeError(c.bw, "DEBUG CPUPROFILE expects START, STOP, or a positive number of seconds")
+			return
+		}
+		if secs > 300 {
+			secs = 300 // cap so an errant call can't profile indefinitely
+		}
+		started, err := c.startCPUProfile("")
+		if err != nil {
+			writeError(c.bw, err.Error())
+			return
+		}
+		dur := time.Duration(secs * float64(time.Second))
+		go func() {
+			time.Sleep(dur)
+			cpuProf.mu.Lock()
+			defer cpuProf.mu.Unlock()
+			if cpuProf.file != nil {
+				stopCPUProfileLocked()
+			}
+		}()
+		writeSimple(c.bw, fmt.Sprintf("CPU profile started for %gs: %s", secs, started))
+	}
+}
+
+// startCPUProfile opens the profile file and begins sampling. Returns
+// the resolved path. path == "" auto-names under the data dir.
+func (c *conn) startCPUProfile(path string) (string, error) {
+	cpuProf.mu.Lock()
+	defer cpuProf.mu.Unlock()
+	if cpuProf.file != nil {
+		return "", errors.New("a CPU profile is already running (DEBUG CPUPROFILE STOP first)")
+	}
+	if path == "" {
+		dir := c.eng.Cfg.DataDir
+		if dir == "" {
+			dir = "."
+		}
+		path = filepath.Join(dir, fmt.Sprintf("cpuprofile-%d.pprof", time.Now().UnixNano()))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return "", err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	cpuProf.file = f
+	cpuProf.path = path
+	return path, nil
+}
+
+// stopCPUProfileLocked stops sampling and closes the file. Caller must
+// hold cpuProf.mu and have verified cpuProf.file != nil. Returns the path.
+func stopCPUProfileLocked() string {
+	pprof.StopCPUProfile()
+	_ = cpuProf.file.Close()
+	path := cpuProf.path
+	cpuProf.file = nil
+	cpuProf.path = ""
+	return path
+}
 
 // debugObjectCmd implements DEBUG OBJECT key — verbose internal
 // report monitoring tools (RedisInsight, redis-cli --bigkeys) call

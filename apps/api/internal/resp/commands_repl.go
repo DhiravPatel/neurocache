@@ -149,6 +149,13 @@ func (c *conn) psyncCmd(args []string) {
 		writeError(c.bw, "wrong number of arguments for 'psync'")
 		return
 	}
+	// Latch the master into backlog-feeding mode at the very start of the
+	// handshake — before the offset is read or the snapshot is taken — so
+	// every write from this point streams to the replica, identical to the
+	// always-on behaviour. Before the first PSYNC, writes skip Propagate.
+	if c.eng.Master != nil {
+		c.eng.Master.Activate()
+	}
 	st := c.eng.Replication
 	replid := args[0]
 	offset, _ := strconv.ParseInt(args[1], 10, 64)

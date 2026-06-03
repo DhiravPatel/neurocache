@@ -131,6 +131,8 @@ func (c *conn) debugCmd(args []string) {
 		c.debugChangeReplIDCmd()
 	case "JMAP":
 		c.debugJMapCmd()
+	case "CPUPROFILE":
+		c.debugCPUProfileCmd(args[1:])
 	case "QUICKLIST-PACKED-THRESHOLD":
 		// Single-knob tunable in real Redis; here it's a no-op since
 		// our encoding heuristics aren't operator-tunable. Accept the
@@ -150,6 +152,7 @@ func (c *conn) debugCmd(args []string) {
 			"DEBUG RELOAD [NOSAVE]",
 			"DEBUG CHANGE-REPL-ID",
 			"DEBUG JMAP",
+			"DEBUG CPUPROFILE START|STOP|<seconds>",
 			"DEBUG QUICKLIST-PACKED-THRESHOLD <bytes>",
 			"DEBUG SET-ACTIVE-EXPIRE 0|1",
 		})

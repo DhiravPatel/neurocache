@@ -99,6 +99,15 @@ func (s *State) Watch(key string, version uint64) error {
 	return nil
 }
 
+// Watching reports whether this connection currently has any WATCHed
+// keys. The RESP layer uses it to maintain the engine's global watcher
+// gauge (which gates per-write version bumping).
+func (s *State) Watching() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.watched) > 0
+}
+
 // Unwatch clears every watched key.
 func (s *State) Unwatch() {
 	s.mu.Lock()

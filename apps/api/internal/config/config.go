@@ -70,7 +70,7 @@ type Config struct {
 
 	// HotKeys runtime tracker (HOTKEYS / HOTKEYS RESET / ...)
 	HotKeysK      int    // size of the heavy-keeper top-K (default 128)
-	HotKeysSample uint64 // 1-in-N event sampling rate (default 1 = sample everything)
+	HotKeysSample uint64 // 1-in-N event sampling rate (default 16)
 
 	// Tier 1 — groundedness / composite admission / embedding migration
 	GroundMinSupport float64 // default min support for GROUND.VERIFY/REQUIRE (0.5)
@@ -132,7 +132,13 @@ func Load() Config {
 		ClusterAutoFailover: envBool("NEUROCACHE_CLUSTER_AUTO_FAILOVER", false),
 
 		HotKeysK:      envInt("NEUROCACHE_HOTKEYS_K", 128),
-		HotKeysSample: uint64(envInt("NEUROCACHE_HOTKEYS_SAMPLE", 1)),
+		// Default 1-in-16 sampling. The HeavyKeeper top-K it feeds is
+		// already a probabilistic estimator, and locking it on every
+		// write serialized all writers under load (a top profiler entry).
+		// Sampling keeps the "hottest keys" ranking statistically faithful
+		// while cutting the lock-acquire rate 16x. Set to 1 to sample
+		// every event (exact, but slower under write-heavy load).
+		HotKeysSample: uint64(envInt("NEUROCACHE_HOTKEYS_SAMPLE", 16)),
 
 		GroundMinSupport: envFloat("NEUROCACHE_GROUND_MIN_SUPPORT", 0.5),
 		QuotaDefaultMode: strings.ToLower(env("NEUROCACHE_QUOTA_DEFAULT_MODE", "all")),

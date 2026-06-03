@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"syscall"
@@ -131,6 +132,18 @@ func readCgroupCPUQuota() int {
 
 func main() {
 	cfg := config.Load()
+	// Optional CPU profile for hot-path investigations. Gated on an env
+	// var so it's a no-op in production. Stopped on the shutdown path so
+	// the profile flushes cleanly when the process is signalled.
+	if path := os.Getenv("NEUROCACHE_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			_ = pprof.StartCPUProfile(f)
+			defer func() {
+				pprof.StopCPUProfile()
+				_ = f.Close()
+			}()
+		}
+	}
 	gogc, memLimit := tuneGC(cfg.MaxMemoryMB)
 	maxprocs := tuneGOMAXPROCS()
 	log := logger.New(cfg.LogLevel, cfg.LogFormat)

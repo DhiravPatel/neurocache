@@ -162,6 +162,12 @@ type conn struct {
 	asking   bool
 	readonly bool
 
+	// watchContributed records whether this conn is currently counted in
+	// the engine's global watcher gauge (raised while it WATCHes ≥1 key).
+	// Kept per-conn so we add/drop the gauge exactly once across the
+	// WATCH → EXEC/DISCARD/UNWATCH/RESET/disconnect lifecycle.
+	watchContributed bool
+
 	// proto is the negotiated wire protocol: 2 (default) or 3. HELLO 3
 	// promotes to RESP3, which adds Map/Set/Bool/Double/BigNumber/Push
 	// reply types. proto stays at 2 for the connection's life otherwise.
@@ -338,8 +344,33 @@ func (s *Server) handle(nc net.Conn) {
 	}
 }
 
+// syncWatchGauge reconciles this connection's contribution to the
+// engine's global watcher gauge after any operation that may have
+// emptied the watched set (UNWATCH / EXEC / DISCARD / RESET). WATCH
+// raises the gauge directly (before reading versions) so it isn't
+// routed through here.
+func (c *conn) syncWatchGauge() {
+	watching := c.tx.Watching()
+	if watching == c.watchContributed {
+		return
+	}
+	if watching {
+		c.eng.AddWatcher()
+	} else {
+		c.eng.DropWatcher()
+	}
+	c.watchContributed = watching
+}
+
 func (c *conn) cleanup() {
 	close(c.done)
+	// Drop this conn's watcher-gauge contribution if it disconnected
+	// mid-WATCH, so the gauge can return to zero and re-enable the
+	// BumpKey fast path.
+	if c.watchContributed {
+		c.eng.DropWatcher()
+		c.watchContributed = false
+	}
 	for _, sub := range c.subs {
 		sub.Close()
 	}

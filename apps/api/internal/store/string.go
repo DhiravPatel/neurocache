@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 // Set overwrites key with the given value. ttl == 0 clears any expiry,
@@ -23,6 +24,7 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 		// payload + accounting fields.
 		s.bytes.Add(-int64(old.Bytes))
 		old.Str = value
+		old.appendBuf = nil // release any APPEND buffer; Str is fresh now
 		old.Bytes = len(key) + len(value)
 		old.LastRead = now
 		// Invalidate the integer fast-path. We DON'T re-parse here:
@@ -275,13 +277,42 @@ func (s *Store) Append(key, value string) (int, error) {
 		return len(value), nil
 	}
 	s.bytes.Add(-int64(e.Bytes))
-	e.Str += value
+	// Amortized-O(1) append. The naive `e.Str += value` reallocates and
+	// copies the ENTIRE current value on every call — O(N²) total (and a
+	// GC storm) when a client appends repeatedly to one growing key,
+	// where Redis is O(1) amortized via its capacity-doubling SDS. We
+	// keep an over-allocated buffer and let Go's append() write into its
+	// spare capacity in place. Crucially this is safe for concurrent
+	// readers: append only ever writes at index ≥ len (or reallocates,
+	// leaving the old array intact), so it never disturbs the bytes an
+	// already-returned e.Str view points at. e.Str is re-published as an
+	// unsafe view over the buffer, so every existing reader keeps working
+	// unchanged.
+	e.appendBuf = growAppend(e.appendBuf, e.Str, value)
+	e.Str = unsafe.String(unsafe.SliceData(e.appendBuf), len(e.appendBuf))
 	// APPEND can produce a non-numeric string ("12" + "abc"); invalidate
 	// the integer fast-path so the next INCR goes through ParseInt.
 	e.IsInt = false
 	e.Bytes = len(key) + len(e.Str)
 	s.bytes.Add(int64(e.Bytes))
 	return len(e.Str), nil
+}
+
+// growAppend returns a buffer holding cur+value whose first len(cur)
+// bytes equal cur. When buf already backs cur (the steady state across
+// repeated APPENDs — Append republishes e.Str as a view over buf) it
+// appends into buf's spare capacity in place / grows geometrically;
+// otherwise (first append, or some other command replaced e.Str via
+// SET/SETRANGE/GETSET/SETBIT/…) it rebuilds from cur first. This keeps
+// Append self-correcting so no other writer of Str needs to know
+// appendBuf exists.
+func growAppend(buf []byte, cur, value string) []byte {
+	aliases := len(buf) == len(cur) &&
+		(len(cur) == 0 || unsafe.SliceData(buf) == unsafe.StringData(cur))
+	if !aliases {
+		buf = append(make([]byte, 0, len(cur)+len(value)), cur...)
+	}
+	return append(buf, value...)
 }
 
 // StrLen returns the byte length, 0 if missing.
