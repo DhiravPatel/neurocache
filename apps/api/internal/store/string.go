@@ -33,7 +33,7 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 		old.Str = value
 		old.appendBuf = nil // release any APPEND buffer; Str is fresh now
 		old.Bytes = len(key) + len(value)
-		old.LastRead = now
+		old.LastRead = now.UnixNano()
 		// Invalidate the integer fast-path. We DON'T re-parse here:
 		// SET is dominated by non-numeric values (random user data,
 		// session tokens, JSON), and a doomed ParseInt costs more
@@ -42,9 +42,9 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 		old.IsInt = false
 		old.IntAtomic.Store(0) // clear so a subsequent INCR slow-path resets correctly
 		if ttl > 0 {
-			old.ExpireAt = now.Add(ttl)
+			old.ExpireAt = now.Add(ttl).UnixNano()
 		} else {
-			old.ExpireAt = time.Time{}
+			old.ExpireAt = 0
 		}
 		s.bytes.Add(int64(old.Bytes))
 		sh.mu.Unlock()
@@ -58,12 +58,12 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 		Key:       key,
 		Type:      TypeString,
 		Str:       value,
-		CreatedAt: now,
-		LastRead:  now,
+		CreatedAt: now.UnixNano(),
+		LastRead:  now.UnixNano(),
 		Bytes:     len(key) + len(value),
 	}
 	if ttl > 0 {
-		e.ExpireAt = now.Add(ttl)
+		e.ExpireAt = now.Add(ttl).UnixNano()
 	}
 	sh.data[key] = e
 	s.bytes.Add(int64(e.Bytes))
@@ -75,7 +75,7 @@ func (s *Store) Set(key, value string, ttl time.Duration) {
 func (s *Store) SetNX(key, value string, ttl time.Duration) bool {
 	sh := s.shardForKey(key)
 	sh.mu.Lock()
-	if e, ok := sh.data[key]; ok && !e.expired(s.now()) {
+	if e, ok := sh.data[key]; ok && !e.expired(s.nowNs()) {
 		sh.mu.Unlock()
 		return false
 	}
@@ -84,12 +84,12 @@ func (s *Store) SetNX(key, value string, ttl time.Duration) bool {
 		Key:       key,
 		Type:      TypeString,
 		Str:       value,
-		CreatedAt: now,
-		LastRead:  now,
+		CreatedAt: now.UnixNano(),
+		LastRead:  now.UnixNano(),
 		Bytes:     len(key) + len(value),
 	}
 	if ttl > 0 {
-		e.ExpireAt = now.Add(ttl)
+		e.ExpireAt = now.Add(ttl).UnixNano()
 	}
 	sh.data[key] = e
 	s.bytes.Add(int64(e.Bytes))
@@ -108,7 +108,7 @@ func (s *Store) Get(key string) (string, bool) {
 		return "", false
 	}
 	e.Hits++
-	e.LastRead = s.now()
+	e.LastRead = s.nowNs()
 	if e.IsInt {
 		// IntAtomic may be ahead of e.Str (lock-free INCR path).
 		// Format on demand to return the authoritative value.
@@ -130,7 +130,7 @@ func (s *Store) GetTyped(key string) (string, bool, error) {
 		return "", false, nil
 	}
 	e.Hits++
-	e.LastRead = s.now()
+	e.LastRead = s.nowNs()
 	if e.IsInt {
 		return strconv.FormatInt(e.IntAtomic.Load(), 10), true, nil
 	}
@@ -144,7 +144,7 @@ func (s *Store) GetSet(key, value string) (string, bool, error) {
 	defer sh.mu.Unlock()
 	prev := ""
 	had := false
-	if e, ok := sh.data[key]; ok && !e.expired(s.now()) {
+	if e, ok := sh.data[key]; ok && !e.expired(s.nowNs()) {
 		if e.Type != TypeString {
 			return "", false, ErrWrongType
 		}
@@ -157,8 +157,8 @@ func (s *Store) GetSet(key, value string) (string, bool, error) {
 		Key:       key,
 		Type:      TypeString,
 		Str:       value,
-		CreatedAt: now,
-		LastRead:  now,
+		CreatedAt: now.UnixNano(),
+		LastRead:  now.UnixNano(),
 		Bytes:     len(key) + len(value),
 	}
 	sh.data[key] = e
@@ -187,7 +187,7 @@ func (s *Store) MSet(pairs ...string) error {
 			}
 			e := &Entry{
 				Key: it.k, Type: TypeString, Str: it.v,
-				CreatedAt: now, LastRead: now,
+				CreatedAt: now.UnixNano(), LastRead: now.UnixNano(),
 				Bytes: len(it.k) + len(it.v),
 			}
 			sh.data[it.k] = e
@@ -215,7 +215,7 @@ func (s *Store) MSetNX(pairs ...string) (bool, error) {
 	defer unlock()
 	for i := 0; i < len(pairs); i += 2 {
 		sh := s.shardForKey(pairs[i])
-		if e, ok := sh.data[pairs[i]]; ok && !e.expired(now) {
+		if e, ok := sh.data[pairs[i]]; ok && !e.expired(now.UnixNano()) {
 			return false, nil
 		}
 	}
@@ -224,7 +224,7 @@ func (s *Store) MSetNX(pairs ...string) (bool, error) {
 		k, v := pairs[i], pairs[i+1]
 		e := &Entry{
 			Key: k, Type: TypeString, Str: v,
-			CreatedAt: now, LastRead: now,
+			CreatedAt: now.UnixNano(), LastRead: now.UnixNano(),
 			Bytes: len(k) + len(v),
 		}
 		sh.data[k] = e
@@ -252,7 +252,7 @@ func (s *Store) MGet(keys ...string) ([]string, []bool, error) {
 		sh.mu.RLock()
 		for _, it := range items {
 			e, ok := sh.data[it.k]
-			if !ok || e.expired(now) {
+			if !ok || e.expired(now.UnixNano()) {
 				continue
 			}
 			if e.Type != TypeString {
@@ -278,7 +278,7 @@ func (s *Store) Append(key, value string) (int, error) {
 	}
 	if !ok {
 		now := s.now()
-		e = &Entry{Key: key, Type: TypeString, Str: value, CreatedAt: now, LastRead: now, Bytes: len(key) + len(value)}
+		e = &Entry{Key: key, Type: TypeString, Str: value, CreatedAt: now.UnixNano(), LastRead: now.UnixNano(), Bytes: len(key) + len(value)}
 		sh.data[key] = e
 		s.bytes.Add(int64(e.Bytes))
 		return len(value), nil
@@ -390,7 +390,7 @@ func (s *Store) SetRange(key string, offset int, value string) (int, error) {
 	newStr := string(cur)
 	if !ok {
 		now := s.now()
-		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
+		e = &Entry{Key: key, Type: TypeString, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
@@ -432,7 +432,7 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 	// ── lock-free hot path ────────────────────────────────────────
 	sh.mu.RLock()
 	e, ok := sh.data[key]
-	if ok && e.Type == TypeString && e.IsInt && !e.expired(s.now()) {
+	if ok && e.Type == TypeString && e.IsInt && !e.expired(s.nowNs()) {
 		newVal := e.IntAtomic.Add(delta)
 		sh.mu.RUnlock()
 		return newVal, nil
@@ -462,7 +462,7 @@ func (s *Store) Incr(key string, delta int64) (int64, error) {
 	v := strconv.FormatInt(cur, 10)
 	if !ok {
 		now := s.now()
-		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
+		e = &Entry{Key: key, Type: TypeString, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
@@ -496,7 +496,7 @@ func (s *Store) IncrByFloat(key string, delta float64) (float64, error) {
 	v := strconv.FormatFloat(cur, 'f', -1, 64)
 	if !ok {
 		now := s.now()
-		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
+		e = &Entry{Key: key, Type: TypeString, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))

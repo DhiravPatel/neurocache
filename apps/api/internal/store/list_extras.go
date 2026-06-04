@@ -67,10 +67,10 @@ func (s *Store) Touch(keys ...string) int {
 		sh.mu.Lock()
 		for _, k := range ks {
 			e, ok := sh.data[k]
-			if !ok || e.expired(now) {
+			if !ok || e.expired(now.UnixNano()) {
 				continue
 			}
-			e.LastRead = now
+			e.LastRead = now.UnixNano()
 			n++
 		}
 		sh.mu.Unlock()
@@ -80,21 +80,21 @@ func (s *Store) Touch(keys ...string) int {
 
 // ExpireTime returns the absolute expiry as a Unix-second timestamp.
 //
-//   -2 → key does not exist
-//   -1 → key exists, no TTL
-//    n → expiry as Unix epoch seconds
+//	-2 → key does not exist
+//	-1 → key exists, no TTL
+//	 n → expiry as Unix epoch seconds
 func (s *Store) ExpireTime(key string) int64 {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return -2
 	}
-	if e.ExpireAt.IsZero() {
+	if e.ExpireAt == 0 {
 		return -1
 	}
-	return e.ExpireAt.Unix()
+	return e.ExpireAt / int64(time.Second)
 }
 
 // PExpireTime is ExpireTime in milliseconds.
@@ -103,11 +103,11 @@ func (s *Store) PExpireTime(key string) int64 {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return -2
 	}
-	if e.ExpireAt.IsZero() {
+	if e.ExpireAt == 0 {
 		return -1
 	}
-	return e.ExpireAt.UnixMilli()
+	return e.ExpireAt / int64(time.Millisecond)
 }

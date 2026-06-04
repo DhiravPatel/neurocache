@@ -93,9 +93,9 @@ func hllHash(s string) uint64 {
 }
 
 // hllRegAndCount splits a 64-bit hash into (register index, rank):
-// - index: top P bits of the hash
-// - rank:  1 + number of leading zeros in the remaining (64-P) bits,
-//          capped at (64-P+1) when those bits are all zero
+//   - index: top P bits of the hash
+//   - rank:  1 + number of leading zeros in the remaining (64-P) bits,
+//     capped at (64-P+1) when those bits are all zero
 func hllRegAndCount(h uint64) (int, uint8) {
 	idx := int(h >> (64 - hllP))
 	remaining := h << hllP
@@ -133,7 +133,7 @@ func (s *Store) PFAdd(key string, members ...string) (int, error) {
 	}
 	if !ok {
 		now := time.Now()
-		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
+		e = &Entry{Key: key, Type: TypeString, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
@@ -218,7 +218,7 @@ func (s *Store) PFMerge(dst string, srcs ...string) error {
 		s.bytes.Add(-int64(old.Bytes))
 	}
 	now := time.Now()
-	e := &Entry{Key: dst, Type: TypeString, Str: string(buf), CreatedAt: now, LastRead: now, Bytes: len(dst) + len(buf)}
+	e := &Entry{Key: dst, Type: TypeString, Str: string(buf), CreatedAt: now.UnixNano(), LastRead: now.UnixNano(), Bytes: len(dst) + len(buf)}
 	shD.data[dst] = e
 	s.bytes.Add(int64(e.Bytes))
 	return nil

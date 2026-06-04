@@ -73,12 +73,12 @@ func (s *Store) Export() []ExportEntry {
 	out := make([]ExportEntry, 0, total)
 	for _, sh := range s.shards {
 		for _, e := range sh.data {
-			if e.expired(now) {
+			if e.expired(now.UnixNano()) {
 				continue
 			}
 			ent := ExportEntry{Key: e.Key, Type: e.Type.String()}
-			if !e.ExpireAt.IsZero() {
-				ent.ExpireAt = e.ExpireAt.UnixMilli()
+			if e.ExpireAt != 0 {
+				ent.ExpireAt = e.ExpireAt / int64(time.Millisecond)
 			}
 			switch e.Type {
 			case TypeString:
@@ -168,10 +168,10 @@ func (s *Store) Restore(entries []ExportEntry) {
 	s.bytes.Store(0)
 	now := time.Now()
 	for _, ent := range entries {
-		e := &Entry{Key: ent.Key, CreatedAt: now, LastRead: now}
+		e := &Entry{Key: ent.Key, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		if ent.ExpireAt > 0 {
-			e.ExpireAt = time.UnixMilli(ent.ExpireAt)
-			if e.expired(now) {
+			e.ExpireAt = time.UnixMilli(ent.ExpireAt).UnixNano()
+			if e.expired(now.UnixNano()) {
 				continue
 			}
 		}

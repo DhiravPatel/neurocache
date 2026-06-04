@@ -32,7 +32,7 @@ func (s *Store) SetModule(key string, typeIDLo, typeIDHi uint64, value any, byte
 	defer sh.mu.Unlock()
 	now := time.Now()
 	old, exists := sh.data[key]
-	if exists && !old.expired(now) && old.Type != TypeModule {
+	if exists && !old.expired(now.UnixNano()) && old.Type != TypeModule {
 		return ErrWrongType
 	}
 	if exists {
@@ -40,11 +40,11 @@ func (s *Store) SetModule(key string, typeIDLo, typeIDHi uint64, value any, byte
 	}
 	e := &Entry{
 		Key: key, Type: TypeModule,
-		CreatedAt: now, LastRead: now,
+		CreatedAt: now.UnixNano(), LastRead: now.UnixNano(),
 		Module: &ModuleValue{TypeIDLo: typeIDLo, TypeIDHi: typeIDHi, Value: value, Bytes: byteSize},
 	}
 	if ttl > 0 {
-		e.ExpireAt = now.Add(ttl)
+		e.ExpireAt = now.Add(ttl).UnixNano()
 	}
 	e.Bytes = int(byteSize) + len(key)
 	sh.data[key] = e
@@ -61,7 +61,7 @@ func (s *Store) GetModule(key string, typeIDLo, typeIDHi uint64) (any, bool, err
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return nil, false, nil
 	}
 	if e.Type != TypeModule || e.Module == nil {

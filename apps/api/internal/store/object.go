@@ -151,13 +151,13 @@ func (s *Store) Object(key string) (*ObjectInfo, bool) {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return nil, false
 	}
 	return &ObjectInfo{
 		Type:     e.Type.String(),
 		Encoding: resolveEncoding(e),
-		IdleSec:  int64(time.Since(e.LastRead).Seconds()),
+		IdleSec:  (nowCachedNs() - e.LastRead) / int64(time.Second),
 		FreqHits: atomic.LoadUint64(&e.Hits),
 		Bytes:    int64(e.Bytes),
 	}, true
@@ -172,13 +172,13 @@ func (s *Store) Dump(key string) (string, bool, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		sh.mu.RUnlock()
 		return "", false, nil
 	}
 	exp := ExportEntry{Key: e.Key, Type: e.Type.String()}
-	if !e.ExpireAt.IsZero() {
-		exp.ExpireAt = e.ExpireAt.UnixMilli()
+	if e.ExpireAt != 0 {
+		exp.ExpireAt = e.ExpireAt / int64(time.Millisecond)
 	}
 	switch e.Type {
 	case TypeString:
@@ -288,15 +288,15 @@ func (s *Store) Copy(src, dst string, replace bool) (bool, error) {
 	shS, shD, unlock := s.lockTwoW(src, dst)
 	defer unlock()
 	se, ok := shS.data[src]
-	if !ok || se.expired(time.Now()) {
+	if !ok || se.expired(time.Now().UnixNano()) {
 		return false, nil
 	}
 	if _, exists := shD.data[dst]; exists && !replace {
 		return false, nil
 	}
 	exp := ExportEntry{Key: dst, Type: se.Type.String()}
-	if !se.ExpireAt.IsZero() {
-		exp.ExpireAt = se.ExpireAt.UnixMilli()
+	if se.ExpireAt != 0 {
+		exp.ExpireAt = se.ExpireAt / int64(time.Millisecond)
 	}
 	switch se.Type {
 	case TypeString:
@@ -359,9 +359,9 @@ func (s *Store) restoreOne(ent ExportEntry) {
 		s.bytes.Add(-int64(old.Bytes))
 		delete(sh.data, ent.Key)
 	}
-	e := &Entry{Key: ent.Key, CreatedAt: time.Now(), LastRead: time.Now()}
+	e := &Entry{Key: ent.Key, CreatedAt: time.Now().UnixNano(), LastRead: time.Now().UnixNano()}
 	if ent.ExpireAt > 0 {
-		e.ExpireAt = time.UnixMilli(ent.ExpireAt)
+		e.ExpireAt = time.UnixMilli(ent.ExpireAt).UnixNano()
 	}
 	switch ent.Type {
 	case "string":
