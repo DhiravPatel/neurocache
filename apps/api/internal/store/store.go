@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dhiravpatel/neurocache/apps/api/internal/glob"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/store/qlist"
 )
 
@@ -641,87 +642,11 @@ func (s *Store) recomputeBytes(e *Entry) {
 	s.bytes.Add(int64(n - old))
 }
 
-// globMatch is a tiny glob matcher supporting *, ?, and [abc] — enough
-// for KEYS pattern support without pulling in a full regex.
-func globMatch(pattern, s string) bool {
-	return matchRunes([]rune(pattern), []rune(s))
-}
-
-// matchRunes is a linear-time glob matcher (`*`, `?`, `[set]`, literals).
-// It uses the standard single-pass star-backtracking algorithm — O(|p|·|s|)
-// worst case — NOT recursion-per-star. The previous recursive form
-// (`for i {... matchRunes(p[1:], s[i:])}`) was exponential: a pattern like
-// `*a*a*a*a*b` against a long string of `a`s backtracks combinatorially, so
-// a client could pin a CPU for seconds with one crafted KEYS/SCAN pattern
-// against a long key name (a ReDoS-class DoS).
-func matchRunes(p, s []rune) bool {
-	pi, si := 0, 0
-	star, starS := -1, 0
-	for si < len(s) {
-		if pi < len(p) && p[pi] == '*' {
-			star, starS = pi, si
-			pi++
-			continue
-		}
-		if matched, tl, ok := matchGlobToken(p, pi, s[si]); ok && matched {
-			pi += tl
-			si++
-			continue
-		}
-		// Current token doesn't match s[si] (or pattern is exhausted /
-		// malformed). Backtrack to the last '*', letting it swallow one
-		// more input rune. si only ever advances via starS, which keeps
-		// the whole thing linear.
-		if star >= 0 {
-			starS++
-			si = starS
-			pi = star + 1
-			continue
-		}
-		return false
-	}
-	// String consumed; the rest of the pattern must be all '*'.
-	for pi < len(p) && p[pi] == '*' {
-		pi++
-	}
-	return pi == len(p)
-}
-
-// matchGlobToken reports whether the single-rune token at p[pi] matches
-// rune c, plus the token's length in the pattern. ok=false means there is
-// no usable token at pi (pattern exhausted, a bare '*' the caller handles,
-// or a malformed '[' with no closing ']' — which can never match, matching
-// the previous implementation's behaviour).
-func matchGlobToken(p []rune, pi int, c rune) (matched bool, tokenLen int, ok bool) {
-	if pi >= len(p) {
-		return false, 0, false
-	}
-	switch p[pi] {
-	case '*':
-		return false, 0, false
-	case '?':
-		return true, 1, true
-	case '[':
-		closeIdx := -1
-		for i := pi + 1; i < len(p); i++ {
-			if p[i] == ']' {
-				closeIdx = i
-				break
-			}
-		}
-		if closeIdx == -1 {
-			return false, 0, false
-		}
-		for _, r := range p[pi+1 : closeIdx] {
-			if r == c {
-				return true, closeIdx - pi + 1, true
-			}
-		}
-		return false, closeIdx - pi + 1, true
-	default:
-		return p[pi] == c, 1, true
-	}
-}
+// globMatch matches a key against a Redis glob pattern via the shared,
+// zero-allocation, linear matcher. The previous in-package []rune matcher
+// allocated two rune slices per key — a real drag on KEYS over a large
+// keyspace — and an earlier form was exponential (ReDoS).
+func globMatch(pattern, s string) bool { return glob.Match(pattern, s) }
 
 // wrongTypeMsg is a helper used by command handlers to format errors.
 func wrongTypeMsg(e *Entry) string {

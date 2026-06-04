@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/glob"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -36,20 +37,20 @@ type Manager struct {
 //     every key the command touches. "~*" or "allkeys" is wildcard.
 //  3. channel patterns: same idea, for SUBSCRIBE / PUBLISH targets.
 type User struct {
-	Name        string
-	Enabled     bool
-	NoPass      bool       // accept any password (or no password)
-	Passwords   []string   // sha256 hex digests; never plain text
-	AllCommands bool       // +@all
-	AllowedCmds map[string]bool
-	DeniedCmds  map[string]bool
-	AllowedCats map[string]bool
-	DeniedCats  map[string]bool
-	AllKeys     bool
-	KeyPatterns []string
-	AllChannels bool
+	Name            string
+	Enabled         bool
+	NoPass          bool     // accept any password (or no password)
+	Passwords       []string // sha256 hex digests; never plain text
+	AllCommands     bool     // +@all
+	AllowedCmds     map[string]bool
+	DeniedCmds      map[string]bool
+	AllowedCats     map[string]bool
+	DeniedCats      map[string]bool
+	AllKeys         bool
+	KeyPatterns     []string
+	AllChannels     bool
 	ChannelPatterns []string
-	CreatedAt time.Time
+	CreatedAt       time.Time
 }
 
 // AllowsEverything reports whether this user has unconstrained access:
@@ -72,15 +73,15 @@ func (u *User) AllowsEverything() bool {
 
 // AuditEntry is one rejected-auth or rejected-permission event for ACL LOG.
 type AuditEntry struct {
-	Count       int
-	Reason      string // "auth-fail" | "command-denied" | "key-denied" | "channel-denied"
-	Context     string // free-form: command + culprit
-	Object      string
-	Username    string
-	AgeSeconds  float64
-	ClientInfo  string
-	EntryID     int
-	Timestamp   time.Time
+	Count      int
+	Reason     string // "auth-fail" | "command-denied" | "key-denied" | "channel-denied"
+	Context    string // free-form: command + culprit
+	Object     string
+	Username   string
+	AgeSeconds float64
+	ClientInfo string
+	EntryID    int
+	Timestamp  time.Time
 }
 
 // NewManager bootstraps an empty registry seeded with the "default"
@@ -521,37 +522,11 @@ func matchesAny(patterns []string, s string) bool {
 	return false
 }
 
-func globMatch(pattern, s string) bool {
-	return matchRunes([]rune(pattern), []rune(s))
-}
-
-func matchRunes(p, s []rune) bool {
-	for len(p) > 0 {
-		switch p[0] {
-		case '*':
-			if len(p) == 1 {
-				return true
-			}
-			for i := 0; i <= len(s); i++ {
-				if matchRunes(p[1:], s[i:]) {
-					return true
-				}
-			}
-			return false
-		case '?':
-			if len(s) == 0 {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		default:
-			if len(s) == 0 || p[0] != s[0] {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		}
-	}
-	return len(s) == 0
-}
+// globMatch matches an ACL key/channel pattern (~pat / &pat) via the
+// shared linear, zero-allocation matcher. The previous local copy was the
+// exponential recursive form — an attacker-influenced key name checked
+// against an ACL pattern could pin a CPU (ReDoS).
+func globMatch(pattern, s string) bool { return glob.Match(pattern, s) }
 
 func appendUnique(xs []string, v string) []string {
 	for _, x := range xs {

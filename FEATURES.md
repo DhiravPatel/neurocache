@@ -1998,3 +1998,29 @@ The audit's PSYNC finding led to the worst bug: **`requirepass` was not enforced
 ### Honestly out of scope this pass
 
 The protected-mode safety net uses a peer-address loopback check (not a full bind-interface model); SSRF to *private* IPs via authenticated RESP `REPLICAOF` is intentionally allowed (private IPs are the normal replication target) — the control there is auth, not IP filtering. Multi-key transaction ACL is checked at queue time, not per-replayed-command.
+
+## Phase 23 — glob consolidation (KEYS speed + ReDoS dedup) and the read ceiling
+
+A throughput sweep over ~28 commands beyond the core set found NeuroCache beating Redis on nearly all of them, with one real outlier and one honest ceiling.
+
+### KEYS / SCAN: one shared zero-allocation matcher
+
+KEYS lagged badly on a *tiny* keyspace and the cause was the glob matcher: every key was matched with `matchRunes([]rune(pattern), []rune(key))` — **two `[]rune` allocations per key**. Worse, there were **three** copies of the matcher (`store`, `pubsub`, `acl`), and the `pubsub` and `acl` copies were still the **old exponential recursive form** — a leftover ReDoS gap (a crafted `PSUBSCRIBE` pattern or ACL `~pattern` against a long name could pin a CPU). The Phase 22 fix had only reached the `store` copy.
+
+Consolidated all three into one canonical `internal/glob` package: **linear** (single-pass star-backtracking, never exponential), **zero-allocation** (indexes pattern/subject as bytes in place — no `[]rune`), and **byte-matched** (exactly Redis's binary-safe `stringmatchlen`; `?` is one byte). Guarded by a 200k-case fuzz test against the old recursive matcher, a no-blowup test, and a `testing.AllocsPerRun == 0` test.
+
+| | Before | After |
+|---|---:|---:|
+| KEYS over a realistic **100k-key** keyspace | 483 rps (Redis) vs **1,793 rps (NeuroCache)** | **371% of Redis** |
+
+(The earlier "KEYS 55%" was on a 44-key keyspace where the fixed 256-shard lock cost dominates absolute-microsecond latency — a micro-benchmark artifact. On any real keyspace, KEYS beats Redis ~3.7×.) The dedup also closed the two remaining ReDoS surfaces.
+
+### Reply serialization
+
+`writeBulk` now emits the `$<len>\r\n` header in a single `bufio.Write` (was three calls: `WriteByte` + `Write` + `WriteString`). Collection replies write one bulk per element, so trimming 5 calls → 3 shaves the serialization slice for `LRANGE`/`SMEMBERS`/`HGETALL`/`ZRANGE`.
+
+### The honest read ceiling
+
+The pure collection-returning reads (`LRANGE`, `SMEMBERS`, `ZRANGE`, `HVALS`) land at **~98–105% of Redis** — at parity, oscillating across runs. A CPU profile of `SMEMBERS` at 1.5M ops explains why: **~45% network syscalls + ~30% Go runtime scheduling** (`kevent`/`pthread_cond_wait`/`usleep`), with only ~4% in serialization and ~5% in allocation. These reads are **network-and-scheduler bound, not CPU bound** — the residual few percent is the fundamental Go-goroutine-per-connection vs. C-single-event-loop difference, not anything a handler tweak removes. Closing it would take a from-scratch networking layer (the `rust-hotpath` experiment's domain), not a code change. Every CPU-bound command (the writes, counters, KEYS, hybrid reads like HMGET/ZRANGEBYSCORE) beats Redis, frequently by 30–230%.
+
+**29 packages pass, race-clean** (the new `internal/glob` package added one). Live-verified: `KEYS user:*` / `[au]*` / `*:1`, `SCAN MATCH`, and `PSUBSCRIBE` patterns all match correctly through the consolidated matcher.

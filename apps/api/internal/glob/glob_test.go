@@ -1,14 +1,14 @@
-package store
+package glob
 
 import (
 	"math/rand"
 	"testing"
 )
 
-// oldMatchRunes is the previous exponential recursive matcher, kept here
-// ONLY as the reference oracle to prove the new linear matchRunes is
-// semantically identical. Do not use it outside the test.
-func oldMatchRunes(p, s []rune) bool {
+// refMatch is the previous exponential recursive matcher (rune-based),
+// kept ONLY as the oracle to prove Match is semantically identical on the
+// ASCII glob subset.
+func refMatch(p, s []rune) bool {
 	for len(p) > 0 {
 		switch p[0] {
 		case '*':
@@ -16,7 +16,7 @@ func oldMatchRunes(p, s []rune) bool {
 				return true
 			}
 			for i := 0; i <= len(s); i++ {
-				if oldMatchRunes(p[1:], s[i:]) {
+				if refMatch(p[1:], s[i:]) {
 					return true
 				}
 			}
@@ -58,11 +58,9 @@ func oldMatchRunes(p, s []rune) bool {
 	return len(s) == 0
 }
 
-// TestGlobMatchEquivalence fuzzes the new linear matcher against the old
-// recursive one over a small alphabet rich in glob metacharacters, so any
-// behavioural drift (including `[set]` and `?` edge cases) is caught.
-func TestGlobMatchEquivalence(t *testing.T) {
-	// Deterministic seed (no time-based randomness) so failures reproduce.
+// TestMatchEquivalence fuzzes Match against the reference recursive matcher
+// over an ASCII alphabet rich in glob metacharacters.
+func TestMatchEquivalence(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x9e3779b1))
 	alpha := []rune("ab*?[]")
 	salpha := []rune("abc")
@@ -77,28 +75,27 @@ func TestGlobMatchEquivalence(t *testing.T) {
 	for i := 0; i < 200000; i++ {
 		p := randStr(7, alpha)
 		s := randStr(7, salpha)
-		if got, want := matchRunes(p, s), oldMatchRunes(p, s); got != want {
-			t.Fatalf("mismatch: pattern=%q str=%q new=%v old=%v", string(p), string(s), got, want)
+		if got, want := Match(string(p), string(s)), refMatch(p, s); got != want {
+			t.Fatalf("mismatch: pattern=%q str=%q got=%v want=%v", string(p), string(s), got, want)
 		}
 	}
 }
 
-// TestGlobMatchLinearNoBlowup proves the pathological pattern that made the
-// old matcher exponential now returns quickly. If matchRunes were still
-// exponential this test would hang; the test harness timeout catches that.
-func TestGlobMatchLinearNoBlowup(t *testing.T) {
-	pattern := []rune("*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b")
-	s := make([]rune, 1000)
+// TestMatchLinearNoBlowup proves the pathological pattern that made the old
+// matcher exponential now returns immediately (the test would hang
+// otherwise).
+func TestMatchLinearNoBlowup(t *testing.T) {
+	pattern := "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b"
+	s := make([]byte, 2000)
 	for i := range s {
 		s[i] = 'a'
 	}
-	if matchRunes(pattern, s) {
-		t.Fatal("expected no match (string has no trailing b)")
+	if Match(pattern, string(s)) {
+		t.Fatal("expected no match (no trailing b)")
 	}
 }
 
-// TestGlobMatchBasics pins concrete cases.
-func TestGlobMatchBasics(t *testing.T) {
+func TestMatchBasics(t *testing.T) {
 	cases := []struct {
 		p, s string
 		want bool
@@ -112,14 +109,21 @@ func TestGlobMatchBasics(t *testing.T) {
 		{"h?llo", "hllo", false},
 		{"h[ae]llo", "hallo", true},
 		{"h[ae]llo", "hbllo", false},
-		{"foo*", "foobar", true},
-		{"*bar", "foobar", true},
 		{"user:*", "user:42", true},
 		{"user:*", "admin:42", false},
+		{"[ab", "a", false}, // malformed class never matches
 	}
 	for _, c := range cases {
-		if got := globMatch(c.p, c.s); got != c.want {
-			t.Errorf("globMatch(%q,%q)=%v want %v", c.p, c.s, got, c.want)
+		if got := Match(c.p, c.s); got != c.want {
+			t.Errorf("Match(%q,%q)=%v want %v", c.p, c.s, got, c.want)
 		}
+	}
+}
+
+// TestMatchZeroAlloc proves matching allocates nothing (the win that makes
+// KEYS over a large keyspace fast).
+func TestMatchZeroAlloc(t *testing.T) {
+	if n := testing.AllocsPerRun(1000, func() { Match("user:*:session", "user:4242:session") }); n != 0 {
+		t.Fatalf("Match should be zero-alloc, got %v allocs/op", n)
 	}
 }
