@@ -1004,10 +1004,20 @@ func (c *conn) dispatch(cmd string, args []string) {
 			writeError(c.bw, "value is not an integer or out of range")
 			return
 		}
-		d := time.Duration(n) * time.Second
+		unitNanos := int64(time.Second)
 		if cmd == "PEXPIRE" {
-			d = time.Duration(n) * time.Millisecond
+			unitNanos = int64(time.Millisecond)
 		}
+		// Guard the n*unit multiplication: time.Duration is int64
+		// nanoseconds, so an out-of-range n would overflow into a garbage
+		// (often negative) TTL — a way to smuggle a bogus expiry past the
+		// usual checks. Reject it as Redis does.
+		const maxI64 = int64(^uint64(0) >> 1)
+		if n > maxI64/unitNanos || n < -maxI64/unitNanos {
+			writeError(c.bw, "invalid expire time in '"+strings.ToLower(cmd)+"' command")
+			return
+		}
+		d := time.Duration(n * unitNanos)
 		if c.eng.KV.Expire(args[0], d) {
 			writeInt(c.bw, 1)
 		} else {
@@ -1221,8 +1231,12 @@ func (c *conn) dispatch(cmd string, args []string) {
 		if !c.wantArgs(cmd, args, 3) {
 			return
 		}
-		a, _ := strconv.Atoi(args[1])
-		b, _ := strconv.Atoi(args[2])
+		a, err1 := strconv.Atoi(args[1])
+		b, err2 := strconv.Atoi(args[2])
+		if err1 != nil || err2 != nil {
+			writeError(c.bw, "value is not an integer or out of range")
+			return
+		}
 		s, err := c.eng.KV.GetRange(args[0], a, b)
 		if err != nil {
 			c.writeStoreErr(err)

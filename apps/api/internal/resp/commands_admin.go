@@ -541,9 +541,13 @@ func (c *conn) resetCmd() {
 		sub.Close()
 		delete(c.psub, ch)
 	}
-	c.user = c.eng.ACL.DefaultUser()
+	// RESET deauthenticates: revert to the connection's initial user,
+	// which is nil (must re-AUTH) when a password is required.
+	c.user = c.eng.ACL.InitialUser()
 	if c.user != nil {
 		c.info.Username = c.user.Name
+	} else {
+		c.info.Username = "default"
 	}
 	c.info.ReplyMode = "on"
 	writeSimple(c.bw, "RESET")
@@ -900,6 +904,13 @@ func (c *conn) helloCmd(args []string) {
 			c.info.Name = args[i+1]
 			i++
 		}
+	}
+	// If a password is required and this HELLO didn't carry a valid AUTH,
+	// the connection is still unauthenticated — return NOAUTH rather than
+	// handing server metadata to an anonymous client (matches Redis).
+	if c.user == nil {
+		writeTypedError(c.bw, "NOAUTH", "HELLO must be called with the client already authenticated, otherwise the HELLO <proto> AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time")
+		return
 	}
 	pairs := []any{
 		"server", "neurocache",

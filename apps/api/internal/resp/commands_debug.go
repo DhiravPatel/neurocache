@@ -94,21 +94,33 @@ func (c *conn) debugCPUProfileCmd(args []string) {
 }
 
 // startCPUProfile opens the profile file and begins sampling. Returns
-// the resolved path. path == "" auto-names under the data dir.
-func (c *conn) startCPUProfile(path string) (string, error) {
+// the resolved path. name == "" auto-names; otherwise name must be a
+// bare filename. The profile is ALWAYS written inside the data dir —
+// a client-supplied path is confined to a single filename (no
+// separators, no "..") so DEBUG CPUPROFILE cannot be abused as an
+// arbitrary-file-write primitive (e.g. clobbering dump.rdb or writing
+// outside the data dir).
+func (c *conn) startCPUProfile(name string) (string, error) {
 	cpuProf.mu.Lock()
 	defer cpuProf.mu.Unlock()
 	if cpuProf.file != nil {
 		return "", errors.New("a CPU profile is already running (DEBUG CPUPROFILE STOP first)")
 	}
-	if path == "" {
-		dir := c.eng.Cfg.DataDir
-		if dir == "" {
-			dir = "."
-		}
-		path = filepath.Join(dir, fmt.Sprintf("cpuprofile-%d.pprof", time.Now().UnixNano()))
+	dir := c.eng.Cfg.DataDir
+	if dir == "" {
+		dir = "."
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	var fname string
+	if name == "" {
+		fname = fmt.Sprintf("cpuprofile-%d.pprof", time.Now().UnixNano())
+	} else {
+		fname = filepath.Base(name)
+		if fname != name || strings.ContainsAny(name, `/\`) || fname == "." || fname == ".." {
+			return "", errors.New("CPUPROFILE path must be a bare filename (written under the data dir)")
+		}
+	}
+	path := filepath.Join(dir, fname)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	f, err := os.Create(path)

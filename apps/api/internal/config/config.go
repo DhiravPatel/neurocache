@@ -37,6 +37,12 @@ type Config struct {
 	// Scripting
 	ScriptTimeoutMs int // Lua script wall-clock ceiling (5000 = 5s)
 
+	// ClientTimeoutSec drops a normal connection that has been idle (or is
+	// slow-feeding a command, the slowloris case) for this many seconds.
+	// 0 disables it, matching Redis's `timeout 0` default. Pub/sub and
+	// blocked clients are exempt, as in Redis.
+	ClientTimeoutSec int
+
 	// Replication
 	ReplicaOf       string // "host:port" or "" — follow a master at boot
 	ReplBacklogSize int64  // bytes retained for partial resync (default 1 MiB)
@@ -105,7 +111,8 @@ func Load() Config {
 		LatencyMaxLen:    envInt("NEUROCACHE_LATENCY_MAX_LEN", 160),
 		ClientIdleMax:    envInt("NEUROCACHE_CLIENT_IDLE_MAX", 0),
 
-		ScriptTimeoutMs: envInt("NEUROCACHE_SCRIPT_TIMEOUT_MS", 5000),
+		ScriptTimeoutMs:  envInt("NEUROCACHE_SCRIPT_TIMEOUT_MS", 5000),
+		ClientTimeoutSec: envInt("NEUROCACHE_CLIENT_TIMEOUT_SEC", 0),
 
 		ReplicaOf:       env("NEUROCACHE_REPLICAOF", ""),
 		ReplBacklogSize: int64(envInt("NEUROCACHE_REPL_BACKLOG_SIZE", 1<<20)),

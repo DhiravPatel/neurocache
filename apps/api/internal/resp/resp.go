@@ -256,7 +256,7 @@ func (s *Server) handle(nc net.Conn) {
 		subs:      map[string]*pubsub.Subscription{},
 		psub:      map[string]*pubsub.Subscription{},
 		shardSubs: map[string]*pubsub.Subscription{},
-		user:  s.eng.ACL.DefaultUser(),
+		user:  s.eng.ACL.InitialUser(),
 		info:  s.eng.Clients.Register(nc.RemoteAddr().String()),
 		proto: 2,
 		done:  make(chan struct{}),
@@ -265,6 +265,20 @@ func (s *Server) handle(nc net.Conn) {
 		c.info.Username = c.user.Name
 	}
 	defer c.cleanup()
+	// Last line of defence: a panic anywhere in this connection's command
+	// processing (e.g. a bounds bug in a parser fed a crafted RESTORE /
+	// protocol frame) must NOT crash the whole server. Go propagates an
+	// unrecovered panic across the goroutine boundary and aborts the
+	// process, so without this one malicious client could take down every
+	// other connection. We recover, log, and let the deferred cleanup drop
+	// just this connection. (Defers run LIFO: this recover, registered
+	// last, runs first and swallows the panic; cleanup then runs normally.)
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("recovered panic in connection handler",
+				"panic", r, "remote", nc.RemoteAddr().String())
+		}
+	}()
 
 	for {
 		// If this conn has been adopted as a replica link, the master
@@ -272,6 +286,16 @@ func (s *Server) handle(nc net.Conn) {
 		if c.adoptedByMaster != nil {
 			<-c.adoptedByMaster.StopCh()
 			return
+		}
+		// Optional idle/read timeout (slowloris defense). Bounds how long a
+		// connection may sit between commands or take to feed one. Exempt
+		// pub/sub subscribers (they legitimately idle waiting for messages),
+		// matching Redis's `timeout` semantics. 0 = disabled.
+		if to := s.eng.Cfg.ClientTimeoutSec; to > 0 &&
+			len(c.subs) == 0 && len(c.psub) == 0 && len(c.shardSubs) == 0 {
+			_ = c.nc.SetReadDeadline(time.Now().Add(time.Duration(to) * time.Second))
+		} else {
+			_ = c.nc.SetReadDeadline(time.Time{})
 		}
 		parts, err := readArray(c.br)
 		if err != nil {
@@ -304,7 +328,14 @@ func (s *Server) handle(nc net.Conn) {
 		c.executeUpper(parts, cmdU)
 		dur := time.Duration(s.eng.Clock.NowNanos() - startNs)
 		s.eng.Metrics.RecordCommand(cmdU, dur)
-		s.eng.SlowLog.Maybe(dur, parts, c.info.Addr)
+		// Redact secrets (AUTH / HELLO AUTH passwords) BEFORE they reach
+		// the SLOWLOG ring or the MONITOR fan-out — both echo raw command
+		// args, and a MONITOR subscriber or a SLOWLOG reader must never
+		// see a plaintext password. logParts aliases parts when there's
+		// nothing to redact (the common case), so this is allocation-free
+		// for normal commands.
+		logParts := redactSecrets(cmdU, parts)
+		s.eng.SlowLog.Maybe(dur, logParts, c.info.Addr)
 		s.eng.Latency.Record("command", dur)
 		// Phase 11: feed the SLO tracker with the latency sample.
 		// Cheap when no targets are configured for this command —
@@ -313,7 +344,7 @@ func (s *Server) handle(nc net.Conn) {
 			s.eng.SLOTracker.Record(cmdU, dur)
 		}
 		// MONITOR fan-out: cheap when no subscribers are attached.
-		s.eng.Monitor.Broadcast(c.info.Addr, 0, cmdU, parts[1:])
+		s.eng.Monitor.Broadcast(c.info.Addr, 0, cmdU, logParts[1:])
 		c.lockWrite()
 		// Honour CLIENT REPLY skip/off: silence the next reply or all replies.
 		switch c.info.ReplyMode {
@@ -360,6 +391,18 @@ func (c *conn) syncWatchGauge() {
 		c.eng.DropWatcher()
 	}
 	c.watchContributed = watching
+}
+
+// isLoopback reports whether the peer is connecting over loopback. Used
+// by the protected-mode safety net to allow local clients on a
+// passwordless instance while refusing external ones.
+func (c *conn) isLoopback() bool {
+	host, _, err := net.SplitHostPort(c.nc.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (c *conn) cleanup() {
@@ -428,9 +471,23 @@ func (c *conn) executeUpper(parts []string, cmd string) {
 		"PSYNC", "REPLCONF", "SYNC":
 		// fall through
 	default:
-		if c.user == nil && c.eng.Cfg.ProtectedMode {
+		// Unauthenticated: a password is required (the default user has
+		// one) but AUTH hasn't run on this connection. c.user is nil only
+		// in that case (see ACL.InitialUser), so this enforces requirepass
+		// regardless of protected mode — closing the bypass where a fresh
+		// connection was silently treated as the privileged default user.
+		if c.user == nil {
 			c.lockWrite()
 			writeTypedError(c.bw, "NOAUTH", "Authentication required.")
+			c.unlockWrite()
+			return
+		}
+		// Protected-mode safety net: when protected mode is on but NO
+		// password is configured, refuse non-loopback clients — Redis's
+		// guard against an accidentally-exposed, passwordless instance.
+		if c.eng.Cfg.ProtectedMode && c.user.NoPass && !c.isLoopback() {
+			c.lockWrite()
+			writeError(c.bw, "DENIED NeuroCache is running in protected mode and no password is set. Connect from localhost or set a password (requirepass / ACL).")
 			c.unlockWrite()
 			return
 		}

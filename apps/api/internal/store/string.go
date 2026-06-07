@@ -7,6 +7,13 @@ import (
 	"unsafe"
 )
 
+// maxStringBytes caps the in-memory size of any single string value,
+// mirroring Redis's proto-max-bulk-len (512 MiB). Commands that grow a
+// string from a client-supplied offset (SETRANGE, SETBIT, BITFIELD)
+// must enforce it: otherwise `SETBIT k 9999999999999 1` would
+// make([]byte, ~1.2 TB) and OOM the server off a single command.
+const maxStringBytes = 512 * 1024 * 1024
+
 // Set overwrites key with the given value. ttl == 0 clears any expiry,
 // ttl > 0 sets a new one. Any existing non-string value is replaced.
 //
@@ -356,6 +363,11 @@ func (s *Store) GetRange(key string, start, end int) (string, error) {
 func (s *Store) SetRange(key string, offset int, value string) (int, error) {
 	if offset < 0 {
 		return 0, errors.New("offset out of range")
+	}
+	// Bound the resulting size before allocating. Checking offset first
+	// (≤ maxStringBytes) guarantees offset+len(value) can't overflow.
+	if offset > maxStringBytes || offset+len(value) > maxStringBytes {
+		return 0, errors.New("string exceeds maximum allowed size (proto-max-bulk-len)")
 	}
 	sh := s.shardForKey(key)
 	sh.mu.Lock()

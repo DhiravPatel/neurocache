@@ -28,6 +28,11 @@ func (s *Store) SetBit(key string, offset int64, value int) (int, error) {
 		return 0, err
 	}
 	byteIdx := offset / 8
+	// Cap the bitmap at Redis's 512 MiB ceiling so a huge offset can't
+	// pre-grow a multi-gigabyte buffer and OOM the server.
+	if byteIdx >= maxStringBytes {
+		return 0, errors.New("bit offset is not an integer or out of range")
+	}
 	var cur []byte
 	if ok {
 		cur = []byte(e.Str)

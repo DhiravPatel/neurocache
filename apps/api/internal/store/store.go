@@ -647,54 +647,80 @@ func globMatch(pattern, s string) bool {
 	return matchRunes([]rune(pattern), []rune(s))
 }
 
+// matchRunes is a linear-time glob matcher (`*`, `?`, `[set]`, literals).
+// It uses the standard single-pass star-backtracking algorithm — O(|p|·|s|)
+// worst case — NOT recursion-per-star. The previous recursive form
+// (`for i {... matchRunes(p[1:], s[i:])}`) was exponential: a pattern like
+// `*a*a*a*a*b` against a long string of `a`s backtracks combinatorially, so
+// a client could pin a CPU for seconds with one crafted KEYS/SCAN pattern
+// against a long key name (a ReDoS-class DoS).
 func matchRunes(p, s []rune) bool {
-	for len(p) > 0 {
-		switch p[0] {
-		case '*':
-			if len(p) == 1 {
-				return true
-			}
-			for i := 0; i <= len(s); i++ {
-				if matchRunes(p[1:], s[i:]) {
-					return true
-				}
-			}
-			return false
-		case '?':
-			if len(s) == 0 {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		case '[':
-			close := -1
-			for i := 1; i < len(p); i++ {
-				if p[i] == ']' {
-					close = i
-					break
-				}
-			}
-			if close == -1 || len(s) == 0 {
-				return false
-			}
-			ok := false
-			for _, r := range p[1:close] {
-				if r == s[0] {
-					ok = true
-					break
-				}
-			}
-			if !ok {
-				return false
-			}
-			p, s = p[close+1:], s[1:]
-		default:
-			if len(s) == 0 || p[0] != s[0] {
-				return false
-			}
-			p, s = p[1:], s[1:]
+	pi, si := 0, 0
+	star, starS := -1, 0
+	for si < len(s) {
+		if pi < len(p) && p[pi] == '*' {
+			star, starS = pi, si
+			pi++
+			continue
 		}
+		if matched, tl, ok := matchGlobToken(p, pi, s[si]); ok && matched {
+			pi += tl
+			si++
+			continue
+		}
+		// Current token doesn't match s[si] (or pattern is exhausted /
+		// malformed). Backtrack to the last '*', letting it swallow one
+		// more input rune. si only ever advances via starS, which keeps
+		// the whole thing linear.
+		if star >= 0 {
+			starS++
+			si = starS
+			pi = star + 1
+			continue
+		}
+		return false
 	}
-	return len(s) == 0
+	// String consumed; the rest of the pattern must be all '*'.
+	for pi < len(p) && p[pi] == '*' {
+		pi++
+	}
+	return pi == len(p)
+}
+
+// matchGlobToken reports whether the single-rune token at p[pi] matches
+// rune c, plus the token's length in the pattern. ok=false means there is
+// no usable token at pi (pattern exhausted, a bare '*' the caller handles,
+// or a malformed '[' with no closing ']' — which can never match, matching
+// the previous implementation's behaviour).
+func matchGlobToken(p []rune, pi int, c rune) (matched bool, tokenLen int, ok bool) {
+	if pi >= len(p) {
+		return false, 0, false
+	}
+	switch p[pi] {
+	case '*':
+		return false, 0, false
+	case '?':
+		return true, 1, true
+	case '[':
+		closeIdx := -1
+		for i := pi + 1; i < len(p); i++ {
+			if p[i] == ']' {
+				closeIdx = i
+				break
+			}
+		}
+		if closeIdx == -1 {
+			return false, 0, false
+		}
+		for _, r := range p[pi+1 : closeIdx] {
+			if r == c {
+				return true, closeIdx - pi + 1, true
+			}
+		}
+		return false, closeIdx - pi + 1, true
+	default:
+		return p[pi] == c, 1, true
+	}
 }
 
 // wrongTypeMsg is a helper used by command handlers to format errors.

@@ -20,6 +20,11 @@ import (
 	"time"
 )
 
+// maxAOFBulk caps a single bulk-string length read during AOF replay,
+// mirroring the RESP proto-max-bulk-len (512 MiB) so a corrupt or
+// oversized record can't trigger a giant allocation at startup.
+const maxAOFBulk = 512 * 1024 * 1024
+
 // FsyncPolicy controls how often the AOF is fsynced.
 type FsyncPolicy int
 
@@ -282,6 +287,12 @@ func readCommand(br *bufio.Reader) (string, []string, error) {
 		size, err := strconv.Atoi(ll)
 		if err != nil {
 			return "", nil, err
+		}
+		// Bound the declared bulk length before allocating, so a
+		// corrupt/oversized AOF record can't OOM the server during the
+		// boot-time replay (mirrors the RESP proto-max-bulk-len cap).
+		if size < 0 || size > maxAOFBulk {
+			return "", nil, errors.New("AOF: bulk string length out of range")
 		}
 		buf := make([]byte, size)
 		if _, err := io.ReadFull(br, buf); err != nil {

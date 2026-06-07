@@ -69,6 +69,20 @@ func asciiUpper(s string) string {
 // an inline command (space-separated text) for redis-cli interactive use.
 var errProtocol = errors.New("ERR Protocol error")
 
+const (
+	// maxBulkLen caps a single RESP bulk string ($N), mirroring Redis's
+	// proto-max-bulk-len (512 MiB). Without it an unauthenticated client
+	// could send "$2000000000\r\n" and the parser would make([]byte, 2e9)
+	// before a single payload byte arrives — an instant out-of-memory DoS
+	// off one tiny packet. The cap also bounds readRESPInt so the digit
+	// accumulator can never integer-overflow.
+	maxBulkLen = 512 * 1024 * 1024
+	// maxMultiBulk caps a RESP array's element count (*N), mirroring
+	// Redis's 1M multibulk limit, so "*2000000000\r\n" can't allocate a
+	// two-billion-entry slice.
+	maxMultiBulk = 1024 * 1024
+)
+
 // readRESPInt reads a CRLF-terminated decimal integer directly from the
 // reader, byte by byte, without allocating an intermediate string (unlike
 // readLine + strconv.Atoi). The leading type byte ('*' / '$') must already
@@ -106,6 +120,12 @@ func readRESPInt(br *bufio.Reader) (int, error) {
 		case b >= '0' && b <= '9':
 			any = true
 			n = n*10 + int(b-'0')
+			// Bound the accumulator at the largest legal length. This
+			// both rejects oversized declarations early and makes the
+			// `n*10` step impossible to overflow (n stays < 2^30).
+			if n > maxBulkLen {
+				return 0, errProtocol
+			}
 		default:
 			return 0, errProtocol
 		}
@@ -135,6 +155,9 @@ func readArray(br *bufio.Reader) ([]string, error) {
 	}
 	if n <= 0 {
 		return nil, nil // empty or null array — nothing to dispatch
+	}
+	if n > maxMultiBulk {
+		return nil, errProtocol
 	}
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
@@ -169,6 +192,39 @@ func readArray(br *bufio.Reader) ([]string, error) {
 		out = append(out, bytesToStringNoCopy(buf))
 	}
 	return out, nil
+}
+
+// redactSecrets returns a copy of parts with credential arguments
+// masked, for the SLOWLOG / MONITOR sinks that echo raw command args. It
+// returns the original slice unchanged (no allocation) when there is
+// nothing sensitive — the overwhelmingly common case. cmd must already
+// be upper-cased.
+func redactSecrets(cmd string, parts []string) []string {
+	switch cmd {
+	case "AUTH":
+		// AUTH password  |  AUTH username password — mask every arg.
+		out := append([]string(nil), parts...)
+		for i := 1; i < len(out); i++ {
+			out[i] = "(redacted)"
+		}
+		return out
+	case "HELLO":
+		// HELLO [proto] [AUTH user pass] [SETNAME name] — mask the two
+		// tokens after an AUTH word.
+		for i := 1; i+1 < len(parts); i++ {
+			if strings.EqualFold(parts[i], "AUTH") {
+				out := append([]string(nil), parts...)
+				if i+1 < len(out) {
+					out[i+1] = "(redacted)"
+				}
+				if i+2 < len(out) {
+					out[i+2] = "(redacted)"
+				}
+				return out
+			}
+		}
+	}
+	return parts
 }
 
 func readLine(br *bufio.Reader) (string, error) {

@@ -25,6 +25,14 @@ func (s *Store) LCS(keyA, keyB string, mode string, minMatchLen int) (string, in
 	if a == "" && b == "" {
 		return "", 0, nil, nil
 	}
+	// LCS builds an (|a|+1)×(|b|+1) int table — O(|a|·|b|) memory. Two
+	// large values would allocate tens of gigabytes and OOM the server,
+	// so cap the product (the division form avoids overflow). Matches
+	// Redis, which refuses LCS on oversized strings.
+	const maxLCSCells = 64 * 1024 * 1024 // ~512 MiB of int cells
+	if len(a) > 0 && len(b) > 0 && len(a) > maxLCSCells/len(b) {
+		return "", 0, nil, errors.New("String too long for LCS")
+	}
 	dp := lcsTable(a, b)
 	length := dp[len(a)][len(b)]
 	if mode == "len" {
@@ -244,14 +252,29 @@ func parseBitFieldType(t string) (signed bool, width int, err error) {
 }
 
 func parseBitFieldOffset(off string, width int) (int, error) {
+	// maxBits is the 512 MiB string ceiling expressed in bits. Bounding
+	// the offset here stops BITFIELD from pre-growing a multi-gigabyte
+	// buffer (ensureBitCapacity) and also prevents the `#mult*width`
+	// multiplication below from integer-overflowing into a negative.
+	const maxBits = maxStringBytes * 8
 	if strings.HasPrefix(off, "#") {
 		multiplier, err := strconv.Atoi(off[1:])
 		if err != nil {
 			return 0, errors.New("invalid offset multiplier")
 		}
+		if multiplier < 0 || width <= 0 || multiplier > maxBits/width {
+			return 0, errors.New("bit offset is not an integer or out of range")
+		}
 		return multiplier * width, nil
 	}
-	return strconv.Atoi(off)
+	bitOff, err := strconv.Atoi(off)
+	if err != nil {
+		return 0, err
+	}
+	if bitOff < 0 || bitOff > maxBits {
+		return 0, errors.New("bit offset is not an integer or out of range")
+	}
+	return bitOff, nil
 }
 
 func ensureBitCapacity(buf []byte, bits int) []byte {

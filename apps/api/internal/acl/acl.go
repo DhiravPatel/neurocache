@@ -2,6 +2,7 @@ package acl
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -160,12 +161,34 @@ func (m *Manager) Authenticate(username, password string) (*User, error) {
 	}
 	hash := hashPassword(password)
 	for _, h := range u.Passwords {
-		if h == hash {
+		// Constant-time compare so the match doesn't leak how many leading
+		// hash bytes agreed via response timing. Both sides are 64-char
+		// SHA-256 hex, so lengths always match.
+		if subtle.ConstantTimeCompare([]byte(h), []byte(hash)) == 1 {
 			return u, nil
 		}
 	}
 	m.audited("auth-fail", "AUTH", username, "")
 	return nil, errors.New("WRONGPASS invalid username-password pair or user is disabled")
+}
+
+// InitialUser is the user a brand-new connection starts as. When the
+// default user requires a password (requirepass, or an ACL rule that
+// removed nopass), a fresh connection is UNAUTHENTICATED — it gets nil
+// and must AUTH before running commands. Otherwise it's the open default
+// user. This is what makes `requirepass` actually enforce on the wire:
+// previously every connection started as the fully-privileged default
+// user, so the password was set but never demanded (AllowsEverything()
+// short-circuited the gate) — an unauthenticated client could read and
+// write the whole keyspace.
+func (m *Manager) InitialUser() *User {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u := m.users["default"]
+	if u != nil && u.Enabled && !u.NoPass {
+		return nil
+	}
+	return u
 }
 
 // DefaultUser returns the always-present "default" user — handed to

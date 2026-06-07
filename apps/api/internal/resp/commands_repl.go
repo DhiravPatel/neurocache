@@ -149,6 +149,22 @@ func (c *conn) psyncCmd(args []string) {
 		writeError(c.bw, "wrong number of arguments for 'psync'")
 		return
 	}
+	// PSYNC/SYNC stream a full RDB snapshot of the entire keyspace. The
+	// dispatch gate exempts the replication verbs from the ACL check so
+	// the handshake can run before a replica's masterauth — which makes
+	// THIS check load-bearing: without it an unauthenticated client could
+	// PSYNC and exfiltrate the whole database even with requirepass set.
+	// Apply the same auth + permission gate a normal command would get.
+	if c.user == nil {
+		writeTypedError(c.bw, "NOAUTH", "Authentication required.")
+		return
+	}
+	if !c.user.AllowsEverything() {
+		if err := c.eng.ACL.Allowed(c.user, "PSYNC", nil, nil); err != nil {
+			writeTypedError(c.bw, "NOPERM", strings.TrimPrefix(err.Error(), "NOPERM "))
+			return
+		}
+	}
 	// Latch the master into backlog-feeding mode at the very start of the
 	// handshake — before the offset is read or the snapshot is taken — so
 	// every write from this point streams to the replica, identical to the
