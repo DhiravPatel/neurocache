@@ -305,10 +305,17 @@ func writeNil(w *bufio.Writer)      { _, _ = w.WriteString("$-1\r\n") }
 func writeNilArray(w *bufio.Writer) { _, _ = w.WriteString("*-1\r\n") }
 
 func writeBulk(w *bufio.Writer, s string) {
-	_ = w.WriteByte('$')
-	var buf [20]byte
-	_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(s)), 10))
-	_, _ = w.WriteString(crlf)
+	// Emit the whole "$<len>\r\n" header in ONE bufio.Write instead of the
+	// three calls (WriteByte + Write + WriteString) it took before. Each
+	// bufio call is a bounds-check + copy; collection replies write one
+	// bulk per element (LRANGE/SMEMBERS/HGETALL/ZRANGE), so trimming
+	// 5 calls → 3 per element measurably cuts the serialization slice.
+	var hdr [24]byte
+	hdr[0] = '$'
+	n := len(strconv.AppendInt(hdr[1:1], int64(len(s)), 10))
+	hdr[1+n] = '\r'
+	hdr[2+n] = '\n'
+	_, _ = w.Write(hdr[:3+n])
 	_, _ = w.WriteString(s) // streamed directly — no s+"\r\n" allocation
 	_, _ = w.WriteString(crlf)
 }

@@ -4,9 +4,10 @@
 package pubsub
 
 import (
-	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/dhiravpatel/neurocache/apps/api/internal/glob"
 )
 
 // Message is what PUBLISH delivers to each subscriber. Pattern is empty for
@@ -220,40 +221,8 @@ func trySend(sub *Subscription, m Message) bool {
 	}
 }
 
-// globMatch is the same tiny matcher used by the store. Duplicated here
-// to avoid an import cycle; the surface area is small enough.
-func globMatch(pattern, s string) bool {
-	return matchRunes([]rune(pattern), []rune(s))
-}
-
-func matchRunes(p, s []rune) bool {
-	for len(p) > 0 {
-		switch p[0] {
-		case '*':
-			if len(p) == 1 {
-				return true
-			}
-			for i := 0; i <= len(s); i++ {
-				if matchRunes(p[1:], s[i:]) {
-					return true
-				}
-			}
-			return false
-		case '?':
-			if len(s) == 0 {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		default:
-			if len(s) == 0 || p[0] != s[0] {
-				return false
-			}
-			p, s = p[1:], s[1:]
-		}
-	}
-	return len(s) == 0
-}
-
-// _ silences potential unused-import warnings for strings if callers
-// start using strings-based helpers here later.
-var _ = strings.ToLower
+// globMatch routes PSUBSCRIBE pattern matching through the shared,
+// linear, zero-allocation matcher. The previous local copy was the
+// exponential recursive form — a malicious PSUBSCRIBE pattern matched
+// against a long channel name could pin a CPU (ReDoS).
+func globMatch(pattern, s string) bool { return glob.Match(pattern, s) }
