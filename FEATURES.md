@@ -2024,3 +2024,38 @@ Consolidated all three into one canonical `internal/glob` package: **linear** (s
 The pure collection-returning reads (`LRANGE`, `SMEMBERS`, `ZRANGE`, `HVALS`) land at **~98–105% of Redis** — at parity, oscillating across runs. A CPU profile of `SMEMBERS` at 1.5M ops explains why: **~45% network syscalls + ~30% Go runtime scheduling** (`kevent`/`pthread_cond_wait`/`usleep`), with only ~4% in serialization and ~5% in allocation. These reads are **network-and-scheduler bound, not CPU bound** — the residual few percent is the fundamental Go-goroutine-per-connection vs. C-single-event-loop difference, not anything a handler tweak removes. Closing it would take a from-scratch networking layer (the `rust-hotpath` experiment's domain), not a code change. Every CPU-bound command (the writes, counters, KEYS, hybrid reads like HMGET/ZRANGEBYSCORE) beats Redis, frequently by 30–230%.
 
 **29 packages pass, race-clean** (the new `internal/glob` package added one). Live-verified: `KEYS user:*` / `[au]*` / `*:1`, `SCAN MATCH`, and `PSUBSCRIBE` patterns all match correctly through the consolidated matcher.
+
+## Phase 24 — memory at very large scale: shrinking the per-key Entry
+
+The binding constraint at scale is RAM per key, not per-op latency. Measured head-to-head at **1M keys** (short `key:N → valN`): Redis **63 bytes/key**, NeuroCache **438 bytes/key** — ~7×. At a billion keys that's the difference between fitting in 63 GB and needing 438 GB. So this phase targets the footprint.
+
+### The waste: `sizeof(Entry) == 240 bytes`
+
+The worst offender was timestamps: `CreatedAt` / `ExpireAt` / `LastRead` were each a `time.Time` — **24 bytes** apiece (a `time.Time` carries a wall clock, a monotonic ext, *and* a `*Location` pointer), so **72 bytes/key** just for three timestamps. Redis stores expiry as one 8-byte ms value on the key and the LRU clock in ~24 bits.
+
+Converted all three to `int64` unix-nanos (8 bytes each, **24 total — saving 48 bytes/key**). This also makes the hot expiry check a plain integer compare:
+
+```go
+func (e *Entry) expired(nowNs int64) bool { return e.ExpireAt != 0 && nowNs > e.ExpireAt }
+```
+
+instead of `!e.ExpireAt.IsZero() && now.After(e.ExpireAt)` (two `time.Time` method calls on every keyspace access).
+
+### Result
+
+| | sizeof(Entry) | RSS @ 1M keys |
+|---|---:|---:|
+| Before | 240 bytes | 438 bytes/key |
+| After | **192 bytes** (−20%) | **387 bytes/key** (−12%) |
+
+At a billion keys that's **~51 GB saved**. No throughput regression (SET 160% / GET 133% / INCR 177% of Redis pipelined — the int64 compare is if anything faster than the `time.Time` path).
+
+### How it was done safely
+
+A 91-site mechanical refactor across ~16 files. Changing the field *type* (not just the name) turns every `time.Time` method call into a **compile error**, so the compiler is an exhaustive checklist — no silent miss is possible. The value-specific conversions were done by hand: export paths divide nanos to ms/seconds (`DUMP`/snapshot/`EXPIRETIME`/`PEXPIRETIME`), restore paths multiply back, `OBJECT IDLETIME` and `TTL`/`PTTL` recompute from nanos. One real bug was caught in testing and fixed: `TTL` must read from real `time.Now()` (not the ~100µs-lagging cached clock) or it reports a TTL slightly *above* what was set; and `EXPIREAT` at the exact epoch is clamped to 1ns so it doesn't collide with the `0 = no expiry` sentinel.
+
+**Verified:** TTL ≤ set value, PX expiry, EXPIREAT/EXPIRETIME/PERSIST/OBJECT IDLETIME all correct live; DUMP/snapshot TTL round-trips; **29 packages pass, race-clean**.
+
+### Honest next lever (deferred)
+
+NeuroCache is still ~6× Redis on this micro-workload. The remaining structural waste is the **eight mutually-exclusive type fields** (`List`/`Hash`/`Set`/`ZSet`/`Stream`/`Module`/`Vector` + `appendBuf`, ~64–88 bytes) — a string entry uses one and pays for all. Moving them behind a single pointer/union would reclaim most of it (Entry → ~136 bytes), but it touches hundreds of `e.Hash`/`e.List`/… sites and is its own focused effort; not bundled here to keep this change green and reviewable.

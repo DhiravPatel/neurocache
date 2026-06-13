@@ -39,7 +39,7 @@ func (s *Store) VAdd(key, id string, vec []float32, opts vectorindex.Options) (i
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	e, ok := sh.data[key]
-	if ok && !e.expired(time.Now()) {
+	if ok && !e.expired(time.Now().UnixNano()) {
 		if e.Type != TypeVector || e.Vector == nil {
 			return 0, ErrWrongType
 		}
@@ -53,7 +53,7 @@ func (s *Store) VAdd(key, id string, vec []float32, opts vectorindex.Options) (i
 		}
 		e = &Entry{
 			Key: key, Type: TypeVector,
-			CreatedAt: time.Now(), LastRead: time.Now(),
+			CreatedAt: time.Now().UnixNano(), LastRead: time.Now().UnixNano(),
 			Vector: &VectorSet{Index: idx},
 		}
 		sh.data[key] = e
@@ -429,4 +429,3 @@ func encodeVectorString(vec []float32) string { return vectorindex.EncodeVector(
 func decodeVectorString(s string, dim int) ([]float32, error) {
 	return vectorindex.ParseVector(s, dim)
 }
-

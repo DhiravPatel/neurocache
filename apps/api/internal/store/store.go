@@ -81,11 +81,11 @@ type Entry struct {
 	List      *qlist.QList // elements are strings
 	Hash      map[string]string
 	HashTTL   map[string]time.Time // optional per-field expiries (Redis 7.4)
-	Set     map[string]struct{}
-	ZSet    *ZSet
-	Stream  *Stream
-	Module  *ModuleValue // populated when Type == TypeModule
-	Vector  *VectorSet   // populated when Type == TypeVector
+	Set       map[string]struct{}
+	ZSet      *ZSet
+	Stream    *Stream
+	Module    *ModuleValue // populated when Type == TypeModule
+	Vector    *VectorSet   // populated when Type == TypeVector
 
 	// IntVal + IsInt + IntAtomic are the integer fast-path for the
 	// SET/INCR/INCRBY hot path. Redis treats numeric strings specially:
@@ -111,15 +111,22 @@ type Entry struct {
 	IsInt     bool
 	IntAtomic atomic.Int64
 
-	CreatedAt time.Time
-	ExpireAt  time.Time // zero = no expiry
+	// Timestamps are unix-nanos (not time.Time). time.Time is 24 bytes
+	// each (it carries a *Location), so three of them cost 72 bytes per
+	// entry — at scale (hundreds of millions of keys) that dominates the
+	// footprint. int64 nanos cost 8 bytes each (24 total, saving 48
+	// bytes/key, ~20% of the Entry) AND make the hot expiry check a plain
+	// integer compare instead of time.Time method calls. 0 = unset (no
+	// expiry / never read).
+	CreatedAt int64 // unix nanos
+	ExpireAt  int64 // unix nanos; 0 = no expiry
 	Hits      uint64
-	LastRead  time.Time
+	LastRead  int64 // unix nanos
 	Bytes     int
 }
 
-func (e *Entry) expired(now time.Time) bool {
-	return !e.ExpireAt.IsZero() && now.After(e.ExpireAt)
+func (e *Entry) expired(nowNs int64) bool {
+	return e.ExpireAt != 0 && nowNs > e.ExpireAt
 }
 
 // Store is a sharded multi-type keyspace. The 256 shards each own a
@@ -164,6 +171,11 @@ func startCachedClock() {
 // precise enough for TTL/LRU; code needing exact time still calls time.Now().
 func nowCached() time.Time { return time.Unix(0, cachedNowNs.Load()) }
 
+// nowCachedNs is the cached wall clock as raw unix nanos — the form the
+// Entry timestamps and expiry checks use. One atomic load, no time.Time
+// construction.
+func nowCachedNs() int64 { return cachedNowNs.Load() }
+
 func New() *Store {
 	startCachedClock()
 	s := &Store{}
@@ -176,6 +188,10 @@ func New() *Store {
 
 // now returns the cached wall clock (Store-method convenience wrapper).
 func (s *Store) now() time.Time { return nowCached() }
+
+// nowNs returns the cached wall clock as unix nanos — used by every
+// path that stamps or checks an Entry's CreatedAt/ExpireAt/LastRead.
+func (s *Store) nowNs() int64 { return nowCachedNs() }
 
 // SetNotifier wires a keyspace callback (used by pub/sub's __keyspace__).
 // Call at most once during engine bootstrap. Callers must not block.
@@ -213,7 +229,7 @@ func (s *Store) ttlLoop() {
 			needHash := false
 			sh.mu.RLock()
 			for k, e := range sh.data {
-				if e.expired(now) {
+				if e.expired(now.UnixNano()) {
 					cand = append(cand, k)
 				} else if e.Type == TypeHash && len(e.HashTTL) > 0 {
 					needHash = true
@@ -225,7 +241,7 @@ func (s *Store) ttlLoop() {
 			}
 			sh.mu.Lock()
 			for _, k := range cand {
-				if e, ok := sh.data[k]; ok && e.expired(now) { // re-check
+				if e, ok := sh.data[k]; ok && e.expired(now.UnixNano()) { // re-check
 					s.bytes.Add(-int64(e.Bytes))
 					delete(sh.data, k)
 					expired = append(expired, k)
@@ -250,7 +266,7 @@ func (s *Store) Type(key string) ValueType {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(s.now()) {
+	if !ok || e.expired(s.nowNs()) {
 		return TypeNone
 	}
 	return e.Type
@@ -269,7 +285,7 @@ func (s *Store) Exists(keys ...string) int {
 		sh := s.shardForKey(keys[0])
 		sh.mu.RLock()
 		defer sh.mu.RUnlock()
-		if e, ok := sh.data[keys[0]]; ok && !e.expired(now) {
+		if e, ok := sh.data[keys[0]]; ok && !e.expired(now.UnixNano()) {
 			return 1
 		}
 		return 0
@@ -279,7 +295,7 @@ func (s *Store) Exists(keys ...string) int {
 	for sh, ks := range buckets {
 		sh.mu.RLock()
 		for _, k := range ks {
-			if e, ok := sh.data[k]; ok && !e.expired(now) {
+			if e, ok := sh.data[k]; ok && !e.expired(now.UnixNano()) {
 				n++
 			}
 		}
@@ -337,7 +353,7 @@ func (s *Store) Expire(key string, ttl time.Duration) bool {
 		sh.mu.Unlock()
 		return false
 	}
-	e.ExpireAt = s.now().Add(ttl)
+	e.ExpireAt = s.now().Add(ttl).UnixNano()
 	sh.mu.Unlock()
 	s.fire("expire", key)
 	return true
@@ -352,7 +368,14 @@ func (s *Store) ExpireAt(key string, at time.Time) bool {
 		sh.mu.Unlock()
 		return false
 	}
-	e.ExpireAt = at
+	// 0 is the "no expiry" sentinel, so clamp the (absurd) exact-epoch
+	// absolute time to 1ns — it stays safely in the past and expires on
+	// next access rather than being read as "never expires".
+	ns := at.UnixNano()
+	if ns == 0 {
+		ns = 1
+	}
+	e.ExpireAt = ns
 	sh.mu.Unlock()
 	s.fire("expireat", key)
 	return true
@@ -364,10 +387,10 @@ func (s *Store) Persist(key string) bool {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	e, ok := sh.data[key]
-	if !ok || e.ExpireAt.IsZero() {
+	if !ok || e.ExpireAt == 0 {
 		return false
 	}
-	e.ExpireAt = time.Time{}
+	e.ExpireAt = 0
 	return true
 }
 
@@ -380,10 +403,14 @@ func (s *Store) TTL(key string) time.Duration {
 	if !ok {
 		return -2
 	}
-	if e.ExpireAt.IsZero() {
+	if e.ExpireAt == 0 {
 		return -1
 	}
-	d := time.Until(e.ExpireAt)
+	// Use real time (not the cached clock) for the TTL readout: expiries
+	// can be stamped with real time.Now(), and the cached clock lags by up
+	// to ~100µs, which would otherwise report a TTL slightly above what
+	// was set. TTL/PTTL aren't hot, so the exact clock read is fine here.
+	d := time.Duration(e.ExpireAt - time.Now().UnixNano())
 	if d < 0 {
 		return -2
 	}
@@ -398,7 +425,7 @@ func (s *Store) Keys(pattern string) []string {
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k, e := range sh.data {
-			if e.expired(now) {
+			if e.expired(now.UnixNano()) {
 				continue
 			}
 			if pattern == "" || pattern == "*" || globMatch(pattern, k) {
@@ -416,7 +443,7 @@ func (s *Store) Rename(src, dst string) bool {
 	shS, shD, unlock := s.lockTwoW(src, dst)
 	defer unlock()
 	e, ok := shS.data[src]
-	if !ok || e.expired(s.now()) {
+	if !ok || e.expired(s.nowNs()) {
 		return false
 	}
 	if old, ok := shD.data[dst]; ok {
@@ -437,7 +464,7 @@ func (s *Store) RenameNX(src, dst string) bool {
 		return false
 	}
 	e, ok := shS.data[src]
-	if !ok || e.expired(s.now()) {
+	if !ok || e.expired(s.nowNs()) {
 		return false
 	}
 	delete(shS.data, src)
@@ -479,7 +506,7 @@ func (s *Store) Snapshot() []Entry {
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for _, e := range sh.data {
-			if !e.expired(now) {
+			if !e.expired(now.UnixNano()) {
 				out = append(out, *e)
 			}
 		}
@@ -506,7 +533,7 @@ func (sh *shard) get(key string, want ValueType) (*Entry, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	if e.expired(nowCached()) {
+	if e.expired(nowCachedNs()) {
 		return nil, false, nil
 	}
 	if want != TypeNone && e.Type != want {
@@ -521,7 +548,7 @@ func (sh *shard) get(key string, want ValueType) (*Entry, bool, error) {
 // touch the global byte counter (the caller orchestrates via Store.addBytes).
 func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) {
 	e, ok := sh.data[key]
-	if ok && !e.expired(s.now()) {
+	if ok && !e.expired(s.nowNs()) {
 		if e.Type != t {
 			return nil, ErrWrongType
 		}
@@ -530,7 +557,7 @@ func (s *Store) getOrCreate(sh *shard, key string, t ValueType) (*Entry, error) 
 	if ok {
 		s.bytes.Add(-int64(e.Bytes))
 	}
-	e = &Entry{Key: key, Type: t, CreatedAt: s.now(), LastRead: s.now()}
+	e = &Entry{Key: key, Type: t, CreatedAt: s.nowNs(), LastRead: s.nowNs()}
 	switch t {
 	case TypeList:
 		e.List = qlist.New()
@@ -687,10 +714,10 @@ func (s *Store) PeekTouchState(key string) (uint64, time.Time, bool) {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(s.now()) {
+	if !ok || e.expired(s.nowNs()) {
 		return 0, time.Time{}, false
 	}
-	return atomic.LoadUint64(&e.Hits), e.LastRead, true
+	return atomic.LoadUint64(&e.Hits), time.Unix(0, e.LastRead), true
 }
 
 // RestoreTouchState writes (hits, lastRead) back onto an entry —
@@ -706,7 +733,7 @@ func (s *Store) RestoreTouchState(key string, hits uint64, lastRead time.Time) {
 		return
 	}
 	atomic.StoreUint64(&e.Hits, hits)
-	e.LastRead = lastRead
+	e.LastRead = lastRead.UnixNano()
 }
 
 // joinErr wraps the underlying error with command context for nicer logs.

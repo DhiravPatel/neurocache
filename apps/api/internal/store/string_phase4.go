@@ -12,9 +12,9 @@ import (
 // DelEx is a compare-and-delete: it removes the key only when the
 // caller-supplied value matches the current string. Returns:
 //
-//   1  — key existed, value matched, key was removed
-//   0  — key existed but value did not match (no-op)
-//  -1  — key did not exist
+//	 1  — key existed, value matched, key was removed
+//	 0  — key existed but value did not match (no-op)
+//	-1  — key did not exist
 //
 // The CAS makes safe "delete only if you still own the lease" patterns
 // trivial — without it, callers race the standard "GET then DEL" pair
@@ -28,7 +28,7 @@ func (s *Store) DelEx(key, value string) (int, error) {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return -1, nil
 	}
 	if e.Type != TypeString {
@@ -58,7 +58,7 @@ func (s *Store) Digest(key string) (string, bool, error) {
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok := sh.data[key]
-	if !ok || e.expired(time.Now()) {
+	if !ok || e.expired(time.Now().UnixNano()) {
 		return "", false, nil
 	}
 	h := sha1.New()
@@ -147,9 +147,9 @@ func (s *Store) MSetEx(ttl time.Duration, pairs ...string) error {
 			Key:       k,
 			Type:      TypeString,
 			Str:       v,
-			CreatedAt: now,
-			LastRead:  now,
-			ExpireAt:  exp,
+			CreatedAt: now.UnixNano(),
+			LastRead:  now.UnixNano(),
+			ExpireAt:  exp.UnixNano(),
 			Bytes:     len(k) + len(v),
 		}
 		sh.data[k] = e

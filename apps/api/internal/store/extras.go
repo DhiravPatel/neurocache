@@ -87,10 +87,10 @@ func (s *Store) GetDel(key string) (string, bool, error) {
 // GetEx reads a key and optionally adjusts the TTL atomically.
 // Modes:
 //
-//   "" / "KEEP"  — leave TTL alone
-//   "EX seconds" / "PX millis" — set new TTL
-//   "EXAT unix-sec" / "PXAT unix-ms" — set absolute expiry
-//   "PERSIST"    — clear TTL
+//	"" / "KEEP"  — leave TTL alone
+//	"EX seconds" / "PX millis" — set new TTL
+//	"EXAT unix-sec" / "PXAT unix-ms" — set absolute expiry
+//	"PERSIST"    — clear TTL
 func (s *Store) GetEx(key string, mode string, value int64) (string, bool, error) {
 	sh := s.shardForKey(key)
 	sh.mu.Lock()
@@ -103,15 +103,15 @@ func (s *Store) GetEx(key string, mode string, value int64) (string, bool, error
 	case "", "KEEP":
 		// no-op
 	case "PERSIST":
-		e.ExpireAt = time.Time{}
+		e.ExpireAt = 0
 	case "EX":
-		e.ExpireAt = time.Now().Add(time.Duration(value) * time.Second)
+		e.ExpireAt = time.Now().Add(time.Duration(value) * time.Second).UnixNano()
 	case "PX":
-		e.ExpireAt = time.Now().Add(time.Duration(value) * time.Millisecond)
+		e.ExpireAt = time.Now().Add(time.Duration(value) * time.Millisecond).UnixNano()
 	case "EXAT":
-		e.ExpireAt = time.Unix(value, 0)
+		e.ExpireAt = time.Unix(value, 0).UnixNano()
 	case "PXAT":
-		e.ExpireAt = time.UnixMilli(value)
+		e.ExpireAt = time.UnixMilli(value).UnixNano()
 	default:
 		return "", false, errors.New("syntax error")
 	}

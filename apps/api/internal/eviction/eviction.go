@@ -21,8 +21,8 @@ func (p AISmart) Score(e store.Entry, now time.Time) float64 {
 	freq := float64(e.Hits)
 	// decay: recency in (0,1]; 1.0 = just accessed, lower = stale
 	var recency float64 = 1.0
-	if !e.LastRead.IsZero() {
-		age := now.Sub(e.LastRead).Seconds()
+	if e.LastRead != 0 {
+		age := float64(now.UnixNano()-e.LastRead) / float64(time.Second)
 		recency = 1.0 / (1.0 + age/3600.0) // half-ish within an hour
 	}
 	sizePenalty := float64(e.Bytes) / 1024.0 // KB
@@ -33,10 +33,10 @@ func (p AISmart) Score(e store.Entry, now time.Time) float64 {
 type LRU struct{}
 
 func (LRU) Score(e store.Entry, now time.Time) float64 {
-	if e.LastRead.IsZero() {
+	if e.LastRead == 0 {
 		return -float64(now.Unix())
 	}
-	return -float64(now.Sub(e.LastRead).Seconds())
+	return -float64(now.UnixNano()-e.LastRead) / float64(time.Second)
 }
 
 // LFU: fewer hits = evict first.

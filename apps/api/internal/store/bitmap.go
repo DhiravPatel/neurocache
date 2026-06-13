@@ -51,7 +51,7 @@ func (s *Store) SetBit(key string, offset int64, value int) (int, error) {
 	}
 	if !ok {
 		now := time.Now()
-		e = &Entry{Key: key, Type: TypeString, CreatedAt: now, LastRead: now}
+		e = &Entry{Key: key, Type: TypeString, CreatedAt: now.UnixNano(), LastRead: now.UnixNano()}
 		sh.data[key] = e
 	} else {
 		s.bytes.Add(-int64(e.Bytes))
@@ -224,7 +224,7 @@ func (s *Store) BitOp(op, dst string, keys []string) (int, error) {
 		s.bytes.Add(-int64(old.Bytes))
 	}
 	now := time.Now()
-	e := &Entry{Key: dst, Type: TypeString, Str: string(out), CreatedAt: now, LastRead: now, Bytes: len(dst) + len(out)}
+	e := &Entry{Key: dst, Type: TypeString, Str: string(out), CreatedAt: now.UnixNano(), LastRead: now.UnixNano(), Bytes: len(dst) + len(out)}
 	shD.data[dst] = e
 	s.bytes.Add(int64(e.Bytes))
 	return maxLen, nil

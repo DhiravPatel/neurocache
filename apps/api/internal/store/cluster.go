@@ -20,7 +20,7 @@ func (s *Store) KeysInSlot(slot, count int, hasher SlotHasher) []string {
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k, e := range sh.data {
-			if e.expired(now) {
+			if e.expired(now.UnixNano()) {
 				continue
 			}
 			if hasher(k) != slot {
@@ -47,7 +47,7 @@ func (s *Store) CountKeysInSlot(slot int, hasher SlotHasher) int {
 	for _, sh := range s.shards {
 		sh.mu.RLock()
 		for k, e := range sh.data {
-			if e.expired(now) {
+			if e.expired(now.UnixNano()) {
 				continue
 			}
 			if hasher(k) == slot {
