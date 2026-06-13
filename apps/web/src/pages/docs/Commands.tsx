@@ -6389,8 +6389,11 @@ export default function Commands() {
         </div>
       </header>
 
-      {/* ── Search bar ────────────────────────────────────────────── */}
-      <div className="sticky top-16 z-20 -mx-2 mb-4 bg-bg/80 px-2 py-2 backdrop-blur-md">
+      {/* ── Search bar ──────────────────────────────────────────────
+           top-[6.5rem] on mobile clears the SiteHeader (56px) + the docs
+           shell's mobile sub-bar (48px); lg:top-16 restores the original
+           offset on desktop, where the sub-bar is hidden. */}
+      <div className="sticky top-[6.5rem] z-20 -mx-2 mb-4 bg-bg/80 px-2 py-2 backdrop-blur-md lg:top-16">
         <div className="relative">
           <SearchIcon
             size={16}

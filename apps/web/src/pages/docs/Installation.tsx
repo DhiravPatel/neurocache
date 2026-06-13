@@ -1,4 +1,5 @@
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function Installation() {
   return (
@@ -10,6 +11,12 @@ export default function Installation() {
         <code>http://localhost:8080</code> and the RESP protocol at{" "}
         <code>:6379</code>.
       </p>
+
+      <Callout type="note" title="Prerequisite">
+        NeuroCache ships as a single Docker image, so you'll need Docker
+        available. Once running, the dashboard listens on port{" "}
+        <code>8080</code> and the RESP protocol on port <code>6379</code>.
+      </Callout>
 
       <h2>One-line installer</h2>
       <p>
@@ -85,6 +92,10 @@ neurocache> GET hello
 # → world`}</Code>
 
       <h2>Uninstall</h2>
+      <Callout type="danger" title="This deletes your data">
+        Removing the <code>neurocache-data</code> volume permanently deletes
+        all persisted data. Skip that line if you want to keep your cache.
+      </Callout>
       <Code lang="bash">{`docker rm -f neurocache
 docker volume rm neurocache-data     # also deletes persisted data
 docker image rm neurocache/engine:latest`}</Code>

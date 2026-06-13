@@ -1,4 +1,5 @@
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function Deployment() {
   return (
@@ -17,6 +18,12 @@ export default function Deployment() {
         <li><strong>Health check</strong> on <code>GET /api/health</code>.</li>
         <li><strong>Auth</strong>: NeuroCache does not ship with auth — deploy behind a reverse proxy (Caddy, Cloudflare Zero Trust, Tailscale, OAuth2 Proxy) if it's internet-facing.</li>
       </ul>
+
+      <Callout type="note" title="Before going to production">
+        Work through every item above — especially auth. Since NeuroCache ships
+        without built-in authentication, an internet-facing deployment must sit
+        behind a reverse proxy or zero-trust layer.
+      </Callout>
 
       <h2>Render</h2>
       <p>
@@ -142,6 +149,12 @@ spec:
         <li><strong>Vertical scaling</strong> is straightforward — raise the memory cap and bump <code>NEUROCACHE_MAX_MEMORY</code>.</li>
         <li><strong>Horizontal scaling</strong> (replication + sharding) is on the V3 roadmap. For multi-region today, run independent nodes per region and let your app key into the nearest one.</li>
       </ul>
+
+      <Callout type="warning" title="Data durability">
+        NeuroCache is an in-memory engine running as a single node with one
+        replica per volume. Mount a persistent volume at <code>/data</code> so
+        state survives restarts — without it, data is lost.
+      </Callout>
     </>
   );
 }

@@ -14,6 +14,7 @@ export default {
         surface: "rgb(var(--surface) / <alpha-value>)",
         border:  "rgb(var(--border)  / <alpha-value>)",
         primary: "rgb(var(--primary) / <alpha-value>)",
+        "primary-strong": "rgb(var(--primary-strong) / <alpha-value>)",
         accent:  "rgb(var(--accent)  / <alpha-value>)",
         code: {
           DEFAULT: "rgb(var(--code-bg) / <alpha-value>)",
@@ -104,6 +105,93 @@ export default {
             "--tw-prose-pre-bg":        "rgb(var(--code-bg))",
             "--tw-prose-th-borders":    "rgb(var(--border))",
             "--tw-prose-td-borders":    "rgb(var(--border))",
+
+            maxWidth: "none",
+            fontSize: "0.95rem",
+            lineHeight: "1.75",
+
+            // ── Headings — tighter, more deliberate scale ──────────
+            h1: {
+              fontSize: "2.15rem",
+              fontWeight: "700",
+              letterSpacing: "-0.022em",
+              lineHeight: "1.12",
+              marginTop: "0",
+              marginBottom: "0.55em",
+            },
+            h2: {
+              fontSize: "1.45rem",
+              fontWeight: "600",
+              letterSpacing: "-0.012em",
+              lineHeight: "1.3",
+              marginTop: "2.75rem",
+              marginBottom: "1rem",
+              scrollMarginTop: "6rem",
+            },
+            h3: {
+              fontSize: "1.15rem",
+              fontWeight: "600",
+              lineHeight: "1.4",
+              marginTop: "2rem",
+              marginBottom: "0.6rem",
+              scrollMarginTop: "6rem",
+            },
+            h4: {
+              fontSize: "1rem",
+              fontWeight: "600",
+              marginTop: "1.5rem",
+              marginBottom: "0.5rem",
+              scrollMarginTop: "6rem",
+            },
+
+            // ── Lead paragraph under the <h1> ─────────────────────
+            '[class~="lead"]': {
+              fontSize: "1.2rem",
+              lineHeight: "1.6",
+              color: "rgb(var(--slate-300))",
+              marginTop: "0.4rem",
+              marginBottom: "2rem",
+            },
+
+            // ── Links — underline only on hover, with offset ──────
+            a: {
+              fontWeight: "500",
+              textDecoration: "none",
+              transition: "color .15s ease",
+            },
+            "a:hover": {
+              textDecoration: "underline",
+              textUnderlineOffset: "3px",
+            },
+
+            // ── Lists ─────────────────────────────────────────────
+            "ul > li::marker": { color: "rgb(var(--primary))" },
+            "ol > li::marker": { color: "rgb(var(--slate-400))", fontWeight: "600" },
+            li: { marginTop: "0.4em", marginBottom: "0.4em" },
+            strong: { color: "rgb(var(--slate-100))", fontWeight: "600" },
+            hr: { marginTop: "2.5rem", marginBottom: "2.5rem" },
+
+            // ── Blockquote — de-italicized, primary accent rail ───
+            blockquote: {
+              fontStyle: "normal",
+              fontWeight: "400",
+              borderLeftWidth: "3px",
+              paddingLeft: "1.1em",
+            },
+            "blockquote p:first-of-type::before": { content: "none" },
+            "blockquote p:last-of-type::after": { content: "none" },
+
+            // ── Tables — header fill, generous cell padding ───────
+            table: { fontSize: "0.875rem", lineHeight: "1.6" },
+            "thead th": {
+              backgroundColor: "rgb(var(--surface))",
+              color: "rgb(var(--slate-200))",
+              fontWeight: "600",
+              padding: "0.6em 0.9em",
+              verticalAlign: "bottom",
+            },
+            "tbody td": { padding: "0.55em 0.9em", verticalAlign: "top" },
+
             // Inline <code> — pill-shaped, high contrast in both themes.
             "code": {
               backgroundColor: "rgb(var(--inline-code-bg))",
@@ -114,6 +202,9 @@ export default {
               fontWeight: "500",
               fontSize: "0.875em",
             },
+            // Strip the default backtick quotes around inline <code>.
+            "code::before": { content: '""' },
+            "code::after": { content: '""' },
             // Don't double-style <pre><code> (already handled by Code.tsx).
             "pre code": {
               backgroundColor: "transparent",

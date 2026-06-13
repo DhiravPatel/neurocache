@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function LLMCache() {
   return (
@@ -67,6 +68,12 @@ export async function ask(prompt: string) {
         for code generation or deterministic tasks where a subtle prompt
         change might mean a totally different output.
       </p>
+      <Callout type="note" title="Picking a threshold">
+        Because LLM completions are more sensitive to wording, the default
+        starts stricter at <code>0.88</code> than the generic semantic cache's{" "}
+        <code>0.75</code>. Loosen it for conversational Q&amp;A; tighten it for
+        deterministic tasks.
+      </Callout>
 
       <h2>What shows up in the dashboard</h2>
       <p>
@@ -79,6 +86,13 @@ export async function ask(prompt: string) {
       <Code lang="bash">{`# coming soon — today these are fixed at binary start-up.
 # NEUROCACHE_LLM_TOKENS_PER_HIT=1200
 # NEUROCACHE_LLM_USD_PER_MILLION=5.0`}</Code>
+      <Callout type="tip" title="Higher hit rate, lower bill">
+        Every cache hit skips an LLM call, so a better hit rate directly cuts
+        latency and cost. Watch the live hit rate and{" "}
+        <strong>estimated dollar savings</strong> on the{" "}
+        <Link to="/dashboard">Dashboard</Link>, and normalize your prompts to
+        push the hit rate higher.
+      </Callout>
 
       <h2>Patterns</h2>
       <h3>Normalize prompts before caching</h3>

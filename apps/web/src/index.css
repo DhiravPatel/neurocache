@@ -15,6 +15,9 @@
     --surface: 248 250 252;
     --border:  226 232 240;
     --primary: 124 92 255;
+    /* Higher-contrast violet for active text/icons on a primary/10 tint
+       (the flat brand --primary fails AA on that background). */
+    --primary-strong: 109 40 217;
     --accent:   14 165 233;
 
     --slate-100:  15  23  42;
@@ -52,6 +55,8 @@
     --surface:  17  20  28;
     --border:   31  36  48;
     --primary: 124  92 255;
+    /* Lighter violet so active text/icons stay legible on the dark tint. */
+    --primary-strong: 196 181 253;
     --accent:   34 211 238;
 
     --slate-100: 241 245 249;
@@ -83,7 +88,7 @@
   }
 
   html, body, #root { height: 100%; }
-  html { color-scheme: light dark; }
+  html { color-scheme: light dark; scroll-behavior: smooth; }
 
   body {
     @apply bg-bg text-slate-200 font-sans antialiased;
@@ -179,8 +184,24 @@
 .tok-operator    { color: rgb(var(--tok-operator)); }
 .tok-punctuation { color: rgb(var(--tok-operator)); }
 
-/* prefer-reduced-motion: kill non-essential animations. */
+/* ─── Docs: hover "#" anchor injected next to headings ───────────── */
+.prose :where(h2, h3, h4) > .heading-anchor {
+  margin-left: 0.4rem;
+  color: rgb(var(--primary));
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.prose :where(h2, h3, h4):hover > .heading-anchor,
+.prose .heading-anchor:focus-visible {
+  opacity: 1;
+}
+.prose .heading-anchor:hover { text-decoration: none; }
+
+/* prefer-reduced-motion: kill non-essential animations + smooth scroll. */
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;

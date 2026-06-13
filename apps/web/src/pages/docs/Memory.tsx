@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function MemoryDocs() {
   return (
@@ -11,6 +12,12 @@ export default function MemoryDocs() {
         knowledge base that grows over time and ranks itself by relevance
         at read time.
       </p>
+
+      <Callout type="tip" title="Recall by meaning">
+        Every command is keyed to a single user, so <code>MEMORY_QUERY</code>{" "}
+        returns top-k semantically relevant memories for just that user plus a
+        synthesized context string you can drop straight into a system prompt.
+      </Callout>
 
       <h2>API</h2>
       <table>
@@ -75,6 +82,12 @@ Based on stored context:
         Use meaningful user ids — <code>user:123</code> or{" "}
         <code>tenant:acme:user:42</code>. Memory is strictly scoped; no cross-user leakage.
       </p>
+
+      <Callout type="note" title="Memory is per-user">
+        Because memory is strictly scoped to the user id you pass, one user can
+        never recall another's memories. Use structured ids like{" "}
+        <code>tenant:acme:user:42</code> to keep multi-tenant data isolated.
+      </Callout>
 
       <h2>Inspect in the dashboard</h2>
       <p>

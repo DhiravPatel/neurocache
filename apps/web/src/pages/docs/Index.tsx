@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
-import { Rocket, BookOpen, Sparkles, Zap, Brain, Database, Gauge, Wrench, Boxes, Network } from "lucide-react";
+import { Rocket, BookOpen, Sparkles, Zap, Brain, Database, Gauge, Wrench, Boxes, Network, ArrowRight } from "lucide-react";
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function DocsIndex() {
   return (
@@ -19,6 +20,12 @@ export default function DocsIndex() {
         proxy, MCP server) — every primitive an LLM app rebuilds in
         client code, server-side, persistent, replicated.
       </p>
+
+      <Callout type="tip" title="New here? Start with the 5-minute tour">
+        The <Link to="/docs/quickstart">Quick Start</Link> takes you from an
+        empty engine to your first semantic cache hit. Already running?
+        Jump straight to the <Link to="/docs/commands">command reference</Link>.
+      </Callout>
 
       <h2>Why another cache?</h2>
       <p>
@@ -99,11 +106,21 @@ function Card({
   return (
     <Link
       to={to}
-      className="card block p-4 no-underline transition-colors hover:border-primary/40"
+      className="group relative flex flex-col gap-2.5 overflow-hidden rounded-xl border border-border bg-surface/60 p-4 no-underline transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-surface hover:shadow-[0_12px_32px_-16px_rgb(var(--primary)/0.5)] dark:bg-surface/40"
     >
-      <Icon size={16} className="text-primary" />
-      <div className="mt-2 text-[15px] font-semibold text-slate-100">{title}</div>
-      <div className="mt-1 text-sm text-slate-400">{children}</div>
+      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary/25 to-accent/10 text-primary ring-1 ring-inset ring-primary/20 transition-transform duration-200 group-hover:scale-105">
+        <Icon size={17} />
+      </span>
+      <div className="flex items-center gap-1.5 text-[15px] font-semibold text-slate-100">
+        {title}
+        <ArrowRight
+          size={14}
+          className="-translate-x-1 text-primary opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100"
+        />
+      </div>
+      <div className="text-sm leading-relaxed text-slate-400 [&_code]:rounded [&_code]:bg-primary/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.82em] [&_code]:text-primary">
+        {children}
+      </div>
     </Link>
   );
 }

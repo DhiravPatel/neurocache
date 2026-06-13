@@ -1,4 +1,5 @@
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function SDKs() {
   return (
@@ -14,6 +15,13 @@ export default function SDKs() {
       <h2>TypeScript / JavaScript</h2>
       <Code lang="bash">{`pnpm add @neurocache/sdk
 # or: npm i @neurocache/sdk / yarn add @neurocache/sdk`}</Code>
+      <Callout type="tip" title="Reach for the TypeScript SDK first">
+        It ships first-class helpers for the AI-native commands — like{" "}
+        <code>semanticGet</code>, <code>cacheLLMAround</code>, and{" "}
+        <code>memory.query</code> — so you avoid the generic{" "}
+        <code>command()</code> / <code>do()</code> dispatch other clients
+        rely on.
+      </Callout>
       <Code lang="ts">{`import { NeuroCache } from "@neurocache/sdk";
 
 const cache = new NeuroCache({ baseUrl: "http://localhost:8080" });

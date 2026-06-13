@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function SemanticCache() {
   return (
@@ -46,6 +47,11 @@ SEMANTIC_GET "what language should I use for backend services"
         cache hits (and more false positives); higher values mean fewer
         hits but stricter matching.
       </p>
+      <Callout type="tip" title="Start at the default and tune">
+        Begin around <code>0.75</code> and adjust from there: lower it if you
+        want more cache hits, raise it for stricter matching. The dashboard's
+        live threshold slider makes calibrating easy.
+      </Callout>
       <Code lang="bash">{`# Env var — affects every SEMANTIC_GET
 NEUROCACHE_SEMANTIC_THRESHOLD=0.80
 
@@ -79,6 +85,12 @@ return fresh;`}</Code>
       </p>
 
       <h2>Gotchas</h2>
+      <Callout type="warning" title="Keys are indexed, and namespaces are separate">
+        Only the <code>key</code> is embedded and matched by meaning, not the
+        value. Semantic entries also live in their own namespace, so{" "}
+        <code>SET</code> / <code>GET</code> do not share data with{" "}
+        <code>SEMANTIC_SET</code> / <code>SEMANTIC_GET</code>.
+      </Callout>
       <ul>
         <li><strong>Keys, not values, are indexed.</strong> The thing you want to "look up by meaning" goes in the <code>key</code> argument.</li>
         <li><strong>Semantic entries are separate from KV.</strong> <code>SET</code> / <code>GET</code> and <code>SEMANTIC_SET</code> / <code>SEMANTIC_GET</code> do not share a namespace.</li>

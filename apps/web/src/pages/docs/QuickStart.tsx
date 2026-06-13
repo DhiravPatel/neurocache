@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function QuickStart() {
   return (
@@ -41,6 +42,11 @@ OK
         <Link to="/docs/semantic-cache">Semantic Cache</Link> for how
         scoring works and how to tune the threshold.
       </p>
+      <Callout type="tip" title="Meaning, not text">
+        Because lookups match on meaning, differently worded questions can all
+        hit the same cached entry. Tune the match in{" "}
+        <Link to="/docs/semantic-cache">Semantic Cache</Link>.
+      </Callout>
 
       <h2>4. LLM response cache</h2>
       <p>
@@ -91,11 +97,11 @@ Based on stored context:
         rolling 60-second timeline.
       </p>
 
-      <p className="mt-8 text-sm text-slate-500">
-        Ready to integrate properly? Go to{" "}
+      <Callout type="info" title="Where to next">
+        Ready to integrate properly? Head to{" "}
         <Link to="/docs/sdks">SDKs</Link> or browse the full{" "}
         <Link to="/docs/commands">command reference</Link>.
-      </p>
+      </Callout>
     </>
   );
 }

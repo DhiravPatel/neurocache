@@ -1,4 +1,5 @@
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 
 export default function Configuration() {
   return (
@@ -347,6 +348,12 @@ export default function Configuration() {
           <tr><td><code>noeviction</code></td><td>Never evict. Writes error when over cap.</td></tr>
         </tbody>
       </table>
+      <Callout type="warning" title="noeviction rejects writes">
+        With <code>noeviction</code>, nothing is removed once{" "}
+        <code>NEUROCACHE_MAX_MEMORY</code> is reached — every subsequent write
+        errors until memory is freed. Use it only when losing data is worse
+        than rejecting writes.
+      </Callout>
 
       <h2>CORS</h2>
       <p>

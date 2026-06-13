@@ -1,4 +1,5 @@
 import { Code } from "../../components/Code";
+import { Callout } from "../../components/docs/Callout";
 import { Link } from "react-router-dom";
 
 export default function Architecture() {
@@ -73,6 +74,12 @@ export default function Architecture() {
         </a>{" "}
         for the verified numbers.
       </p>
+      <Callout type="note" title="Why 256 shards instead of one mutex">
+        A single global mutex would have bottlenecked write-heavy
+        multi-key workloads at high concurrency. With sharding, the
+        remaining gap to Redis throughput is Go vs C — not lock
+        contention.
+      </Callout>
 
       <table>
         <thead>
@@ -262,6 +269,12 @@ size_kb  = bytes(entry) / 1024`}</Code>
         (RDB is ignored — replaying AOF on top of an RDB would
         double-apply non-idempotent writes).
       </p>
+      <Callout type="warning" title="AOF wins on startup">
+        With both <code>NEUROCACHE_AOF_ENABLED</code> and{" "}
+        <code>NEUROCACHE_RDB_ENABLED</code> on, the RDB snapshot is
+        ignored at boot. This is deliberate — layering AOF replay on top
+        of an RDB would double-apply non-idempotent writes.
+      </Callout>
 
       <h2>Metrics collection</h2>
       <p>

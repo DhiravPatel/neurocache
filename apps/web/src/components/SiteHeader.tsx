@@ -20,7 +20,7 @@ export function SiteHeader() {
           >
             <Github size={14} /> GitHub
           </a>
-          <Link to="/docs" className="btn-ghost md:hidden">
+          <Link to="/docs" className="btn-ghost md:hidden" aria-label="Documentation">
             <Book size={14} />
           </Link>
           <Link to="/dashboard" className="btn-primary">
