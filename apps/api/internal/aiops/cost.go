@@ -2,6 +2,7 @@ package aiops
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -133,6 +134,37 @@ func (b *CostBudgets) List() []string {
 	for k := range b.tenants {
 		out = append(out, k)
 	}
+	return out
+}
+
+// TenantUsage is a point-in-time snapshot of one tenant's budget state.
+type TenantUsage struct {
+	Tenant    string  `json:"tenant"`
+	Used      float64 `json:"used"`
+	Remaining float64 `json:"remaining"`
+	Max       float64 `json:"max"`
+	WindowMs  int64   `json:"window_ms"`
+}
+
+// ListUsage returns a usage snapshot for every configured tenant in a single
+// locked pass (avoiding the N+1 lock churn of calling Usage per tenant), sorted
+// by tenant name for stable output.
+func (b *CostBudgets) ListUsage() []TenantUsage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]TenantUsage, 0, len(b.tenants))
+	for name, t := range b.tenants {
+		t.compact()
+		used := t.spent()
+		out = append(out, TenantUsage{
+			Tenant:    name,
+			Used:      used,
+			Remaining: t.maxUSD - used,
+			Max:       t.maxUSD,
+			WindowMs:  t.windowMs,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tenant < out[j].Tenant })
 	return out
 }
 

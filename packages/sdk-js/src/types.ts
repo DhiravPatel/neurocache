@@ -129,3 +129,32 @@ export interface MemoryConsolidateResult {
   dropped: number;
   new_ids: string[];
 }
+
+// ─── cost & budgets ───
+
+/** Result of charging a tenant's budget. */
+export interface CostChargeResult {
+  /** Whether the charge fit within budget. When false, nothing was recorded. */
+  allowed: boolean;
+  /** USD remaining in the tenant's window after this call. */
+  remaining: number;
+}
+
+/** A single tenant's budget state. */
+export interface CostUsage {
+  used: number;
+  remaining: number;
+  max: number;
+  window_ms: number;
+}
+
+/** Per-tenant usage row returned by `cost.list()`. */
+export interface TenantUsage extends CostUsage {
+  tenant: string;
+}
+
+/** The runtime LLM-savings cost model. */
+export interface CostModel {
+  tokens_per_hit: number;
+  usd_per_million_tokens: number;
+}

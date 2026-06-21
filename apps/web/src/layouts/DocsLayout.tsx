@@ -11,6 +11,7 @@ import {
   Sparkles,
   Zap,
   Brain,
+  DollarSign,
   SlidersHorizontal,
   Boxes,
   Network,
@@ -46,6 +47,7 @@ export const docsNav: DocSection[] = [
       { to: "/docs/semantic-cache", label: "Semantic Cache",     icon: Sparkles, file: "SemanticCache.tsx" },
       { to: "/docs/llm-cache",      label: "LLM Response Cache",  icon: Zap,      file: "LLMCache.tsx" },
       { to: "/docs/memory",         label: "User Memory Store",   icon: Brain,    file: "Memory.tsx" },
+      { to: "/docs/costs",          label: "Cost & Budgets",      icon: DollarSign, file: "Costs.tsx" },
     ],
   },
   {

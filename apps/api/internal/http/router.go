@@ -88,6 +88,8 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/cost/{tenant}", h.costUsage)
 	mux.HandleFunc("POST /api/cost/{tenant}/reset", h.costReset)
 	mux.HandleFunc("GET /api/cost", h.costList)
+	mux.HandleFunc("GET /api/cost-model", h.costModelGet)
+	mux.HandleFunc("POST /api/cost-model", h.costModelSet)
 
 	// AI-ops: shadow cache
 	mux.HandleFunc("POST /api/shadow/{key}", h.shadowPut)

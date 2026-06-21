@@ -16,7 +16,31 @@ import type {
   MemoryLayerStats,
   MemoryDecayResult,
   MemoryConsolidateResult,
+  CostChargeResult,
+  CostUsage,
+  TenantUsage,
+  CostModel,
 } from "./types";
+
+/**
+ * Thrown by {@link NeuroCache.guardedSpend} when a tenant has no budget
+ * headroom left, so the guarded call is never invoked.
+ */
+export class BudgetExceededError extends Error {
+  readonly tenant: string;
+  readonly attemptedUsd: number;
+  readonly remaining: number;
+  constructor(tenant: string, attemptedUsd: number, remaining: number) {
+    super(
+      `NeuroCache budget exceeded for tenant "${tenant}": ` +
+        `attempted $${attemptedUsd}, only $${remaining} remaining`,
+    );
+    this.name = "BudgetExceededError";
+    this.tenant = tenant;
+    this.attemptedUsd = attemptedUsd;
+    this.remaining = remaining;
+  }
+}
 
 export class NeuroCache {
   private baseUrl: string;
@@ -295,6 +319,71 @@ export class NeuroCache {
         },
       ),
   };
+
+  // ─── cost & budgets ───
+  cost = {
+    /** Configure a tenant's spend allowance over a sliding window. */
+    setBudget: (tenant: string, maxUsd: number, windowMs: number) =>
+      this.req<{ status: string }>(
+        `/api/cost/${encodeURIComponent(tenant)}/budget`,
+        { method: "POST", body: JSON.stringify({ max_usd: maxUsd, window_ms: windowMs }) },
+      ),
+    /**
+     * Record a spend against a tenant. If it would exceed the budget the call
+     * is rejected (`allowed: false`) and nothing is recorded — let callers
+     * short-circuit before paying for an LLM request they can't afford.
+     */
+    charge: (tenant: string, usd: number) =>
+      this.req<CostChargeResult>(
+        `/api/cost/${encodeURIComponent(tenant)}/charge`,
+        { method: "POST", body: JSON.stringify({ usd }) },
+      ),
+    /** Current usage for a tenant. */
+    usage: (tenant: string) =>
+      this.req<CostUsage>(`/api/cost/${encodeURIComponent(tenant)}`),
+    /** Zero a tenant's spend log without changing its budget. */
+    reset: (tenant: string) =>
+      this.req<{ reset: boolean }>(
+        `/api/cost/${encodeURIComponent(tenant)}/reset`,
+        { method: "POST" },
+      ),
+    /** Usage snapshot for every configured tenant. */
+    list: () => this.req<{ tenants: TenantUsage[] }>("/api/cost"),
+    /** Read the runtime LLM-savings cost model. */
+    model: () => this.req<CostModel>("/api/cost-model"),
+    /**
+     * Update the runtime LLM-savings cost model. Omit a field (or pass a
+     * non-positive value) to leave it unchanged. Returns the effective model.
+     */
+    setModel: (opts: { tokensPerHit?: number; usdPerMillion?: number }) =>
+      this.req<CostModel>("/api/cost-model", {
+        method: "POST",
+        body: JSON.stringify({
+          tokens_per_hit: opts.tokensPerHit ?? 0,
+          usd_per_million_tokens: opts.usdPerMillion ?? 0,
+        }),
+      }),
+  };
+
+  /**
+   * Reserve budget for a tenant before an expensive operation. Charges
+   * `estUsd` up front; if the tenant is over budget, throws
+   * {@link BudgetExceededError} WITHOUT invoking `spend`. Otherwise runs
+   * `spend` and returns its result.
+   *
+   * The estimate is recorded as the charge — pass your best per-call cost
+   * estimate (e.g. expected tokens × price). For exact accounting, charge the
+   * measured cost yourself after the call instead.
+   */
+  async guardedSpend<T>(
+    tenant: string,
+    estUsd: number,
+    spend: () => Promise<T>,
+  ): Promise<T> {
+    const { allowed, remaining } = await this.cost.charge(tenant, estUsd);
+    if (!allowed) throw new BudgetExceededError(tenant, estUsd, remaining);
+    return spend();
+  }
 
   // ─── raw command ───
   exec(command: string, ...args: string[]) {

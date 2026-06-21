@@ -888,7 +888,7 @@ func (c *conn) dispatch(cmd string, args []string) {
 		c.agentCmd(strings.TrimPrefix(cmd, "AGENT."), args)
 	case "STREAM.SET", "STREAM.GET", "STREAM.REPLAY", "STREAM.FORGET", "STREAM.PURGE", "STREAM.STATS":
 		c.streamCmd(strings.TrimPrefix(cmd, "STREAM."), args)
-	case "COST.BUDGET", "COST.CHARGE", "COST.USAGE", "COST.RESET", "COST.LIST":
+	case "COST.BUDGET", "COST.CHARGE", "COST.USAGE", "COST.RESET", "COST.LIST", "COST.MODEL":
 		c.costCmd(strings.TrimPrefix(cmd, "COST."), args)
 	case "SHADOW.PUT", "SHADOW.GET", "SHADOW.FORGET", "SHADOW.STATS":
 		c.shadowCmd(strings.TrimPrefix(cmd, "SHADOW."), args)

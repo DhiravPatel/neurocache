@@ -1,4 +1,4 @@
-export { NeuroCache } from "./client";
+export { NeuroCache, BudgetExceededError } from "./client";
 export type {
   NeuroCacheOptions,
   EngineInfo,
@@ -18,4 +18,8 @@ export type {
   MemoryLayerStats,
   MemoryDecayResult,
   MemoryConsolidateResult,
+  CostChargeResult,
+  CostUsage,
+  TenantUsage,
+  CostModel,
 } from "./types";

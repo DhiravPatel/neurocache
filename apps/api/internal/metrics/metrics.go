@@ -389,3 +389,30 @@ func (m *Metrics) Summary() Summary {
 	s.Breakdown = m.CommandBreakdown()
 	return s
 }
+
+// CostModel returns the current LLM-savings assumptions:
+// (tokensPerHit, usdPerMillionTokens).
+func (m *Metrics) CostModel() (int64, float64) {
+	return m.tokensPerHit.Load(), float64(m.priceMicroUSDPerMTok.Load()) / 1_000_000.0
+}
+
+// SetCostModel updates the LLM-savings cost model at runtime — the values
+// that were previously fixed at process start-up. tokensPerHit is the assumed
+// number of tokens saved per cache hit; usdPerMillion is the price per million
+// tokens. A non-positive argument leaves that field unchanged, so callers can
+// update one dimension at a time. Returns the effective (tokensPerHit,
+// usdPerMillion) after the update.
+//
+// The change affects savings accounting for subsequent hits only; already
+// accrued savings are not retroactively re-priced. The model is node-local
+// runtime state and resets to defaults on restart (set the startup defaults
+// via configuration).
+func (m *Metrics) SetCostModel(tokensPerHit int64, usdPerMillion float64) (int64, float64) {
+	if tokensPerHit > 0 {
+		m.tokensPerHit.Store(tokensPerHit)
+	}
+	if usdPerMillion > 0 {
+		m.priceMicroUSDPerMTok.Store(int64(usdPerMillion * 1_000_000))
+	}
+	return m.CostModel()
+}
