@@ -262,7 +262,38 @@ func (h *handlers) costReset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) costList(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{"tenants": h.eng.CostBudgets.List()})
+	writeJSON(w, 200, map[string]any{"tenants": h.eng.CostBudgets.ListUsage()})
+}
+
+// ── COST.MODEL — runtime-tunable LLM-savings cost model ─────────────
+// GET  /api/cost-model  → {tokens_per_hit, usd_per_million_tokens}
+// POST /api/cost-model  → updates either field (non-positive = unchanged)
+
+func (h *handlers) costModelGet(w http.ResponseWriter, _ *http.Request) {
+	tph, usd := h.eng.Metrics.CostModel()
+	writeJSON(w, 200, map[string]any{
+		"tokens_per_hit":         tph,
+		"usd_per_million_tokens": usd,
+	})
+}
+
+type costModelReq struct {
+	TokensPerHit  int64   `json:"tokens_per_hit"`
+	UsdPerMillion float64 `json:"usd_per_million_tokens"`
+}
+
+func (h *handlers) costModelSet(w http.ResponseWriter, r *http.Request) {
+	defer h.record("COST.MODEL", time.Now())
+	var req costModelReq
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, "invalid json")
+		return
+	}
+	tph, usd := h.eng.Metrics.SetCostModel(req.TokensPerHit, req.UsdPerMillion)
+	writeJSON(w, 200, map[string]any{
+		"tokens_per_hit":         tph,
+		"usd_per_million_tokens": usd,
+	})
 }
 
 // ── SHADOW.* ────────────────────────────────────────────────────────

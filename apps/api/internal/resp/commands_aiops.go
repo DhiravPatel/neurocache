@@ -271,6 +271,36 @@ func (c *conn) costCmd(sub string, args []string) {
 		writeInt(c.bw, 0)
 	case "LIST":
 		writeArray(c.bw, c.eng.CostBudgets.List())
+	case "MODEL":
+		// COST.MODEL                       → read the savings cost model
+		// COST.MODEL tokens-per-hit usd-per-million → update it (runtime)
+		if len(args) == 0 {
+			tph, usd := c.eng.Metrics.CostModel()
+			writeValue(c.bw, []any{
+				"tokens_per_hit", tph,
+				"usd_per_million_tokens", strconv.FormatFloat(usd, 'f', 6, 64),
+			})
+			return
+		}
+		if len(args) != 2 {
+			writeError(c.bw, "COST.MODEL [tokens-per-hit usd-per-million]")
+			return
+		}
+		tph, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			writeError(c.bw, "ERR tokens-per-hit must be an integer")
+			return
+		}
+		usd, err := strconv.ParseFloat(args[1], 64)
+		if err != nil {
+			writeError(c.bw, "ERR usd-per-million must be a float")
+			return
+		}
+		ntph, nusd := c.eng.Metrics.SetCostModel(tph, usd)
+		writeValue(c.bw, []any{
+			"tokens_per_hit", ntph,
+			"usd_per_million_tokens", strconv.FormatFloat(nusd, 'f', 6, 64),
+		})
 	default:
 		writeError(c.bw, "Unknown COST subcommand "+sub)
 	}

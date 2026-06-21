@@ -73,6 +73,20 @@ export type MetricsSummary = {
   command_breakdown: CommandCount[];
 };
 
+// Cost & budgets
+export type TenantUsage = {
+  tenant: string;
+  used: number;
+  remaining: number;
+  max: number;
+  window_ms: number;
+};
+
+export type CostModel = {
+  tokens_per_hit: number;
+  usd_per_million_tokens: number;
+};
+
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
   health: () => req<{ status: string; uptime: number }>("/api/health"),
@@ -145,6 +159,36 @@ export const api = {
     }),
 
   flushAll: () => req("/api/flushall", { method: "POST" }),
+
+  // Cost & budgets
+  costList: () => req<{ tenants: TenantUsage[] }>("/api/cost"),
+  costUsage: (tenant: string) =>
+    req<{ used: number; remaining: number; max: number; window_ms: number }>(
+      `/api/cost/${encodeURIComponent(tenant)}`,
+    ),
+  costSetBudget: (tenant: string, maxUsd: number, windowMs: number) =>
+    req<{ status: string }>(`/api/cost/${encodeURIComponent(tenant)}/budget`, {
+      method: "POST",
+      body: JSON.stringify({ max_usd: maxUsd, window_ms: windowMs }),
+    }),
+  costCharge: (tenant: string, usd: number) =>
+    req<{ allowed: boolean; remaining: number }>(
+      `/api/cost/${encodeURIComponent(tenant)}/charge`,
+      { method: "POST", body: JSON.stringify({ usd }) },
+    ),
+  costReset: (tenant: string) =>
+    req<{ reset: boolean }>(`/api/cost/${encodeURIComponent(tenant)}/reset`, {
+      method: "POST",
+    }),
+  costModel: () => req<CostModel>("/api/cost-model"),
+  costSetModel: (tokensPerHit: number, usdPerMillion: number) =>
+    req<CostModel>("/api/cost-model", {
+      method: "POST",
+      body: JSON.stringify({
+        tokens_per_hit: tokensPerHit,
+        usd_per_million_tokens: usdPerMillion,
+      }),
+    }),
 
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),

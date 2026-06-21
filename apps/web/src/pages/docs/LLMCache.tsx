@@ -80,18 +80,26 @@ export async function ask(prompt: string) {
         The <Link to="/dashboard">Dashboard</Link> reports live LLM cache
         hit rate and an <strong>estimated dollar savings</strong> figure.
         The estimate assumes 1,000 tokens per cached response at
-        $10 / million tokens (OpenAI's <code>gpt-4o-mini</code> ballpark).
-        Override either via env:
+        $10 / million tokens (OpenAI's <code>gpt-4o-mini</code> ballpark) by
+        default — but you can now retune both <em>at runtime</em>, no restart
+        required:
       </p>
-      <Code lang="bash">{`# coming soon — today these are fixed at binary start-up.
-# NEUROCACHE_LLM_TOKENS_PER_HIT=1200
-# NEUROCACHE_LLM_USD_PER_MILLION=5.0`}</Code>
+      <Code lang="bash">{`# Read the current cost model
+COST.MODEL
+# → tokens_per_hit 1000  usd_per_million_tokens 10.000000
+
+# Update it live (tokens-per-hit, usd-per-million)
+COST.MODEL 1200 5.0
+
+# Or over HTTP
+curl -s localhost:8080/api/cost-model \\
+  -d '{"tokens_per_hit":1200,"usd_per_million_tokens":5.0}'`}</Code>
       <Callout type="tip" title="Higher hit rate, lower bill">
         Every cache hit skips an LLM call, so a better hit rate directly cuts
-        latency and cost. Watch the live hit rate and{" "}
-        <strong>estimated dollar savings</strong> on the{" "}
-        <Link to="/dashboard">Dashboard</Link>, and normalize your prompts to
-        push the hit rate higher.
+        latency and cost. Watch the live hit rate, tune the cost model, and cap
+        per-tenant spend on the{" "}
+        <Link to="/docs/costs">Cost &amp; Budgets</Link> page — also surfaced in
+        the <Link to="/dashboard/costs">dashboard</Link>.
       </Callout>
 
       <h2>Patterns</h2>
