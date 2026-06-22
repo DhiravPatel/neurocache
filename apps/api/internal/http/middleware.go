@@ -37,6 +37,10 @@ type statusRecorder struct {
 
 func (s *statusRecorder) WriteHeader(c int) { s.status = c; s.ResponseWriter.WriteHeader(c) }
 
+// Unwrap lets http.ResponseController reach the underlying ResponseWriter so
+// streaming endpoints (Server-Sent Events) can Flush through this wrapper.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 func withLogging(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

@@ -20,6 +20,10 @@ import type {
   CostUsage,
   TenantUsage,
   CostModel,
+  PubSubMessage,
+  PubSubSubscription,
+  PubSubHandlers,
+  PubSubChannels,
 } from "./types";
 
 /**
@@ -383,6 +387,93 @@ export class NeuroCache {
     const { allowed, remaining } = await this.cost.charge(tenant, estUsd);
     if (!allowed) throw new BudgetExceededError(tenant, estUsd, remaining);
     return spend();
+  }
+
+  // ─── pub/sub ───
+
+  /** Publish a message to a channel. Returns how many subscribers received it. */
+  publish(channel: string, message: string) {
+    return this.req<{ receivers: number }>("/api/publish", {
+      method: "POST",
+      body: JSON.stringify({ channel, message }),
+    });
+  }
+
+  /** Introspect active channels (PUBSUB CHANNELS / NUMSUB / NUMPAT). */
+  pubsubChannels(pattern = "*") {
+    return this.req<PubSubChannels>(
+      `/api/pubsub/channels?pattern=${encodeURIComponent(pattern)}`,
+    );
+  }
+
+  /**
+   * Subscribe to one or more channels and/or glob patterns and receive
+   * messages over a streaming connection (Server-Sent Events). Works in the
+   * browser and in Node 18+. Returns a handle — call `close()` to stop.
+   *
+   *   const sub = cache.subscribe(
+   *     { channels: ["news"], patterns: ["room.*"] },
+   *     (m) => console.log(m.channel, m.payload),
+   *   );
+   *   // …later
+   *   sub.close();
+   */
+  subscribe(
+    opts: { channels?: string[]; patterns?: string[] },
+    onMessage: (msg: PubSubMessage) => void,
+    handlers: PubSubHandlers = {},
+  ): PubSubSubscription {
+    const qs = new URLSearchParams();
+    for (const c of opts.channels ?? []) qs.append("channel", c);
+    for (const p of opts.patterns ?? []) qs.append("pattern", p);
+
+    const controller = new AbortController();
+
+    const run = async () => {
+      const res = await this.fetchImpl(`${this.baseUrl}/api/subscribe?${qs}`, {
+        headers: { ...this.headers, Accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`NeuroCache ${res.status}: ${body || res.statusText}`);
+      }
+      handlers.onOpen?.();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep: number;
+        // SSE events are separated by a blank line.
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of block.split("\n")) {
+            if (line === "" || line.startsWith(":")) continue; // ping/comment
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+          }
+          if (event !== "message" || data.length === 0) continue; // skip "subscribed"
+          try {
+            onMessage(JSON.parse(data.join("\n")) as PubSubMessage);
+          } catch {
+            /* ignore malformed frame */
+          }
+        }
+      }
+    };
+
+    run().catch((err) => {
+      if (!controller.signal.aborted) handlers.onError?.(err);
+    });
+
+    return { close: () => controller.abort() };
   }
 
   // ─── raw command ───

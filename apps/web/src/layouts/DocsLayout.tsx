@@ -12,6 +12,7 @@ import {
   Zap,
   Brain,
   DollarSign,
+  Radio,
   SlidersHorizontal,
   Boxes,
   Network,
@@ -48,6 +49,7 @@ export const docsNav: DocSection[] = [
       { to: "/docs/llm-cache",      label: "LLM Response Cache",  icon: Zap,      file: "LLMCache.tsx" },
       { to: "/docs/memory",         label: "User Memory Store",   icon: Brain,    file: "Memory.tsx" },
       { to: "/docs/costs",          label: "Cost & Budgets",      icon: DollarSign, file: "Costs.tsx" },
+      { to: "/docs/pubsub",         label: "Pub/Sub",             icon: Radio,    file: "PubSub.tsx" },
     ],
   },
   {

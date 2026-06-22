@@ -13,6 +13,7 @@ import ModulesPage from "./pages/Modules";
 import VectorSetsPage from "./pages/VectorSets";
 import Playground from "./pages/Playground";
 import CostsPage from "./pages/Costs";
+import PubSubPage from "./pages/PubSub";
 
 import DocsLayout from "./layouts/DocsLayout";
 import DocsIndex         from "./pages/docs/Index";
@@ -23,6 +24,7 @@ import DocsSemantic      from "./pages/docs/SemanticCache";
 import DocsLLM           from "./pages/docs/LLMCache";
 import DocsMemory        from "./pages/docs/Memory";
 import DocsCosts         from "./pages/docs/Costs";
+import DocsPubSub        from "./pages/docs/PubSub";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
 import DocsArchitecture  from "./pages/docs/Architecture";
@@ -44,6 +46,7 @@ export default function App() {
         <Route path="llm-cache"    element={<DocsLLM />} />
         <Route path="memory"       element={<DocsMemory />} />
         <Route path="costs"        element={<DocsCosts />} />
+        <Route path="pubsub"       element={<DocsPubSub />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
         <Route path="architecture" element={<DocsArchitecture />} />
@@ -59,6 +62,7 @@ export default function App() {
         <Route path="llm"       element={<LLMCachePage />} />
         <Route path="memory"    element={<MemoryPage />} />
         <Route path="costs"     element={<CostsPage />} />
+        <Route path="pubsub"    element={<PubSubPage />} />
         <Route path="modules"   element={<ModulesPage />} />
         <Route path="vectors"   element={<VectorSetsPage />} />
         <Route path="playground" element={<Playground />} />
