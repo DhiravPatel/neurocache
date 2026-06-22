@@ -262,3 +262,12 @@ export interface StreamEntry {
 export interface StreamSubscription {
   close(): void;
 }
+
+// ─── pipelining ───
+
+/** One command's outcome in a pipeline, in submission order. */
+export interface PipelineResult {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+}

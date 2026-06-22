@@ -1,5 +1,6 @@
 export {
   NeuroCache,
+  Pipeline,
   BudgetExceededError,
   LockAcquireTimeoutError,
   RateLimitedError,
@@ -40,4 +41,5 @@ export type {
   QueueStats,
   StreamEntry,
   StreamSubscription,
+  PipelineResult,
 } from "./types";

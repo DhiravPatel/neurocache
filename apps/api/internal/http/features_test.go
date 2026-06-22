@@ -100,6 +100,41 @@ func TestStreamAddRange(t *testing.T) {
 	}
 }
 
+func TestPipeline(t *testing.T) {
+	h := testHandlers(t)
+	body := `{"commands":[["SET","k","v"],["GET","k"],["INCR","n"],["INCR","n"]]}`
+	rec := httptest.NewRecorder()
+	h.pipeline(rec, httptest.NewRequest("POST", "/api/pipeline", strings.NewReader(body)))
+	if rec.Code != 200 {
+		t.Fatalf("pipeline code=%d", rec.Code)
+	}
+	var out struct {
+		Results []struct {
+			Ok     bool `json:"ok"`
+			Result any  `json:"result"`
+		} `json:"results"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Results) != 4 {
+		t.Fatalf("want 4 results, got %d", len(out.Results))
+	}
+	if out.Results[1].Result != "v" {
+		t.Fatalf("GET should return v, got %v", out.Results[1].Result)
+	}
+	// INCR returns a number; JSON-decoded as float64. 1 then 2.
+	if out.Results[2].Result.(float64) != 1 || out.Results[3].Result.(float64) != 2 {
+		t.Fatalf("INCR sequence wrong: %v, %v", out.Results[2].Result, out.Results[3].Result)
+	}
+
+	// Dangerous commands are refused per-command, not fatal to the batch.
+	rec = httptest.NewRecorder()
+	h.pipeline(rec, httptest.NewRequest("POST", "/api/pipeline",
+		strings.NewReader(`{"commands":[["PING"],["SHUTDOWN"],["PING"]]}`)))
+	if !strings.Contains(rec.Body.String(), "not allowed over the HTTP API") {
+		t.Fatalf("SHUTDOWN should be refused: %s", rec.Body.String())
+	}
+}
+
 func ftoa(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
