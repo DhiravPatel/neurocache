@@ -1,4 +1,4 @@
-export { NeuroCache, BudgetExceededError } from "./client";
+export { NeuroCache, BudgetExceededError, LockAcquireTimeoutError } from "./client";
 export type {
   NeuroCacheOptions,
   EngineInfo,
@@ -26,4 +26,7 @@ export type {
   PubSubSubscription,
   PubSubHandlers,
   PubSubChannels,
+  LockAcquireResult,
+  LockCheckResult,
+  LockSnapshot,
 } from "./types";

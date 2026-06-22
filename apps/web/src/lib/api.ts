@@ -208,6 +208,31 @@ export const api = {
     return `${BASE}/api/subscribe?${qs}`;
   },
 
+  // Distributed locks
+  lockList: () =>
+    req<{ locks: { name: string; owner: string; token: number; remaining_ms: number }[] }>(
+      "/api/locks",
+    ),
+  lockCheck: (name: string) =>
+    req<{ held: boolean; owner?: string; token?: number; remaining_ms?: number }>(
+      `/api/locks/${encodeURIComponent(name)}`,
+    ),
+  lockAcquire: (name: string, owner: string, ttlMs: number) =>
+    req<{ acquired: boolean; token: number }>(
+      `/api/locks/${encodeURIComponent(name)}/acquire`,
+      { method: "POST", body: JSON.stringify({ owner, ttl_ms: ttlMs }) },
+    ),
+  lockRelease: (name: string, owner: string) =>
+    req<{ released: boolean }>(`/api/locks/${encodeURIComponent(name)}/release`, {
+      method: "POST",
+      body: JSON.stringify({ owner }),
+    }),
+  lockExtend: (name: string, owner: string, ttlMs: number) =>
+    req<{ extended: boolean }>(`/api/locks/${encodeURIComponent(name)}/extend`, {
+      method: "POST",
+      body: JSON.stringify({ owner, ttl_ms: ttlMs }),
+    }),
+
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),
   metricsTimeline: () =>

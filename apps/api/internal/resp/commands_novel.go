@@ -68,6 +68,7 @@ func (c *conn) idempotentCmd(args []string) {
 // LOCK RELEASE name owner            -> 1 / 0
 // LOCK EXTEND  name owner ttl-ms     -> 1 / 0
 // LOCK CHECK   name                  -> [owner, token, remaining-ms] or nil
+// LOCK LIST                          -> [[name, owner, token, remaining-ms], ...]
 func (c *conn) lockCmd(args []string) {
 	if len(args) < 1 {
 		writeError(c.bw, "wrong number of arguments for 'lock'")
@@ -118,6 +119,13 @@ func (c *conn) lockCmd(args []string) {
 			return
 		}
 		writeValue(c.bw, []any{info.Owner, int64(info.Token), info.RemMs})
+	case "LIST":
+		snaps := c.eng.Locks.List()
+		rows := make([]any, 0, len(snaps))
+		for _, s := range snaps {
+			rows = append(rows, []any{s.Name, s.Owner, int64(s.Token), s.RemMs})
+		}
+		writeValue(c.bw, rows)
 	default:
 		writeError(c.bw, "Unknown LOCK subcommand "+args[0])
 	}

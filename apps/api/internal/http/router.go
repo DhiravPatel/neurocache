@@ -96,6 +96,13 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/subscribe", h.requireAuth(h.subscribe))
 	mux.HandleFunc("GET /api/pubsub/channels", h.requireAuth(h.pubsubChannels))
 
+	// Distributed locks (fencing-token leases)
+	mux.HandleFunc("GET /api/locks", h.requireAuth(h.listLocks))
+	mux.HandleFunc("GET /api/locks/{name}", h.requireAuth(h.checkLock))
+	mux.HandleFunc("POST /api/locks/{name}/acquire", h.acquireLock)
+	mux.HandleFunc("POST /api/locks/{name}/release", h.releaseLock)
+	mux.HandleFunc("POST /api/locks/{name}/extend", h.extendLock)
+
 	// AI-ops: shadow cache
 	mux.HandleFunc("POST /api/shadow/{key}", h.shadowPut)
 	mux.HandleFunc("GET /api/shadow/{key}", h.shadowGet)
