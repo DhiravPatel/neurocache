@@ -212,3 +212,53 @@ export interface LockSnapshot {
   token: number;
   remaining_ms: number;
 }
+
+// ─── rate limiting ───
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  retry_after_ms: number;
+  reset_ms: number;
+}
+
+// ─── leaderboards ───
+
+export interface LeaderboardEntry {
+  member: string;
+  score: number;
+  rank: number;
+}
+
+// ─── queues ───
+
+export interface QueueJob {
+  id: number;
+  queue: string;
+  priority: number;
+  payload: string;
+  idempotency_key?: string;
+  attempts: number;
+  last_error?: string;
+  enqueued_at: string;
+}
+
+export interface QueueStats {
+  name: string;
+  pending: number;
+  reserved: number;
+  dlq: number;
+  max_attempts: number;
+  dlq_cap: number;
+}
+
+// ─── streams ───
+
+export interface StreamEntry {
+  id: string;
+  fields: Record<string, string>;
+}
+
+export interface StreamSubscription {
+  close(): void;
+}

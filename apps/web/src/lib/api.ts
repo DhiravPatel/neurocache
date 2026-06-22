@@ -87,6 +87,17 @@ export type CostModel = {
   usd_per_million_tokens: number;
 };
 
+export type QueueJob = {
+  id: number;
+  queue: string;
+  priority: number;
+  payload: string;
+  idempotency_key?: string;
+  attempts: number;
+  last_error?: string;
+  enqueued_at: string;
+};
+
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
   health: () => req<{ status: string; uptime: number }>("/api/health"),
@@ -232,6 +243,75 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ owner, ttl_ms: ttlMs }),
     }),
+
+  // Rate limiting (429 is a normal "denied" outcome, not a transport error)
+  rateLimit: async (key: string, windowMs: number, max: number, cost = 1, peek = false) => {
+    const res = await fetch(`${BASE}/api/ratelimit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, window_ms: windowMs, max, cost, peek }),
+    });
+    if (res.status !== 200 && res.status !== 429) throw new Error(`${res.status}`);
+    return res.json() as Promise<{
+      allowed: boolean; remaining: number; retry_after_ms: number; reset_ms: number;
+    }>;
+  },
+  rateLimitReset: (key: string) =>
+    req("/api/ratelimit/reset", { method: "POST", body: JSON.stringify({ key }) }),
+
+  // Leaderboards
+  lbSet: (name: string, member: string, score: number) =>
+    req<{ member: string; score: number; rank: number }>(
+      `/api/leaderboard/${encodeURIComponent(name)}`,
+      { method: "POST", body: JSON.stringify({ member, score }) },
+    ),
+  lbIncr: (name: string, member: string, by: number) =>
+    req<{ member: string; score: number; rank: number }>(
+      `/api/leaderboard/${encodeURIComponent(name)}/incr`,
+      { method: "POST", body: JSON.stringify({ member, by }) },
+    ),
+  lbTop: (name: string, n = 10) =>
+    req<{ count: number; entries: { member: string; score: number; rank: number }[] }>(
+      `/api/leaderboard/${encodeURIComponent(name)}/top?n=${n}`,
+    ),
+  lbRemove: (name: string, member: string) =>
+    req<{ removed: boolean }>(
+      `/api/leaderboard/${encodeURIComponent(name)}/${encodeURIComponent(member)}`,
+      { method: "DELETE" },
+    ),
+
+  // Queues (durable Workers job queue)
+  queueList: () => req<{ queues: string[] }>("/api/worker"),
+  queueStats: (name: string) =>
+    req<{ name: string; pending: number; reserved: number; dlq: number; max_attempts: number; dlq_cap: number }>(
+      `/api/worker/${encodeURIComponent(name)}/stats`,
+    ),
+  queueEnqueue: (name: string, payload: string, priority = 0) =>
+    req<{ id: number }>(`/api/worker/${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: JSON.stringify({ payload, priority }),
+    }),
+  queueDequeue: (name: string) =>
+    req<{ job: QueueJob | null }>(`/api/worker/${encodeURIComponent(name)}/next`),
+  queueAck: (name: string, id: number) =>
+    req<{ acked: boolean }>(`/api/worker/${encodeURIComponent(name)}/ack/${id}`, { method: "POST" }),
+  queueDLQ: (name: string) =>
+    req<{ jobs: QueueJob[] }>(`/api/worker/${encodeURIComponent(name)}/dlq`),
+  queueRequeue: (name: string, id: number) =>
+    req<{ status: string }>(`/api/worker/${encodeURIComponent(name)}/requeue/${id}`, { method: "POST" }),
+
+  // Streams
+  streamAdd: (key: string, fields: Record<string, string>) =>
+    req<{ id: string }>(`/api/streams/${encodeURIComponent(key)}`, {
+      method: "POST",
+      body: JSON.stringify({ fields }),
+    }),
+  streamRange: (key: string, count = 50, reverse = true) =>
+    req<{ length: number; entries: { id: string; fields: Record<string, string> }[] }>(
+      `/api/streams/${encodeURIComponent(key)}?count=${count}&reverse=${reverse ? 1 : 0}`,
+    ),
+  streamTailUrl: (key: string, last = "$") =>
+    `${BASE}/api/streams/${encodeURIComponent(key)}/tail?last=${encodeURIComponent(last)}`,
 
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),

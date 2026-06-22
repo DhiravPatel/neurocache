@@ -27,6 +27,12 @@ import type {
   LockAcquireResult,
   LockCheckResult,
   LockSnapshot,
+  RateLimitResult,
+  LeaderboardEntry,
+  QueueJob,
+  QueueStats,
+  StreamEntry,
+  StreamSubscription,
 } from "./types";
 
 /**
@@ -61,6 +67,23 @@ export class LockAcquireTimeoutError extends Error {
     this.name = "LockAcquireTimeoutError";
     this.lockName = lockName;
     this.waitedMs = waitedMs;
+  }
+}
+
+/**
+ * Thrown by {@link NeuroCache.limit} when a key is over its rate limit. Carries
+ * the limiter's retry hints so callers can set a Retry-After header or back off.
+ */
+export class RateLimitedError extends Error {
+  readonly key: string;
+  readonly retryAfterMs: number;
+  readonly resetMs: number;
+  constructor(key: string, retryAfterMs: number, resetMs: number) {
+    super(`rate limit exceeded for "${key}" — retry in ${retryAfterMs}ms`);
+    this.name = "RateLimitedError";
+    this.key = key;
+    this.retryAfterMs = retryAfterMs;
+    this.resetMs = resetMs;
   }
 }
 
@@ -589,6 +612,278 @@ export class NeuroCache {
       if (!controller.signal.aborted) handlers.onError?.(err);
     });
 
+    return { close: () => controller.abort() };
+  }
+
+  // ─── rate limiting ───
+
+  /**
+   * Check one event against a GCRA rate limit for `key`. Does NOT throw when
+   * over the limit — inspect `allowed` and the retry hints. `peek: true`
+   * evaluates without consuming a slot.
+   */
+  async rateLimit(
+    key: string,
+    opts: { windowMs: number; max: number; cost?: number; peek?: boolean },
+  ): Promise<RateLimitResult> {
+    const res = await this.fetchImpl(`${this.baseUrl}/api/ratelimit`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify({
+        key,
+        window_ms: opts.windowMs,
+        max: opts.max,
+        cost: opts.cost ?? 1,
+        peek: opts.peek ?? false,
+      }),
+    });
+    // 429 is a normal "denied" outcome here, not a transport error.
+    if (res.status !== 200 && res.status !== 429) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`NeuroCache ${res.status}: ${body || res.statusText}`);
+    }
+    return res.json() as Promise<RateLimitResult>;
+  }
+
+  /**
+   * Run `fn` only if `key` is under its rate limit; otherwise throw
+   * {@link RateLimitedError} (carrying retry hints) without invoking `fn`.
+   */
+  async limit<T>(
+    key: string,
+    opts: { windowMs: number; max: number; cost?: number },
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const r = await this.rateLimit(key, opts);
+    if (!r.allowed) throw new RateLimitedError(key, r.retry_after_ms, r.reset_ms);
+    return fn();
+  }
+
+  /** Clear all usage recorded for a rate-limit key. */
+  rateLimitReset(key: string) {
+    return this.req<{ status: string }>("/api/ratelimit/reset", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    });
+  }
+
+  // ─── leaderboards (sorted set, highest-first) ───
+  leaderboard = {
+    /** Set a member's score. Returns the member's new score and rank. */
+    set: (name: string, member: string, score: number) =>
+      this.req<LeaderboardEntry>(`/api/leaderboard/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({ member, score }),
+      }),
+    /** Increment a member's score by `by` (default 1). */
+    incr: (name: string, member: string, by = 1) =>
+      this.req<LeaderboardEntry>(`/api/leaderboard/${encodeURIComponent(name)}/incr`, {
+        method: "POST",
+        body: JSON.stringify({ member, by }),
+      }),
+    /** Top `n` members, highest score first. */
+    top: (name: string, n = 10) =>
+      this.req<{ count: number; entries: LeaderboardEntry[] }>(
+        `/api/leaderboard/${encodeURIComponent(name)}/top?n=${n}`,
+      ),
+    /** A member's score and rank, or `{ found: false }`. */
+    rank: (name: string, member: string) =>
+      this.req<{ found: boolean; member?: string; score?: number; rank?: number }>(
+        `/api/leaderboard/${encodeURIComponent(name)}/rank/${encodeURIComponent(member)}`,
+      ),
+    /** A member plus `n` neighbours on each side — the "your rank" view. */
+    around: (name: string, member: string, n = 3) =>
+      this.req<{ found: boolean; entries?: LeaderboardEntry[] }>(
+        `/api/leaderboard/${encodeURIComponent(name)}/around/${encodeURIComponent(member)}?n=${n}`,
+      ),
+    /** Remove a member from the board. */
+    remove: (name: string, member: string) =>
+      this.req<{ removed: boolean }>(
+        `/api/leaderboard/${encodeURIComponent(name)}/${encodeURIComponent(member)}`,
+        { method: "DELETE" },
+      ),
+  };
+
+  // ─── queues (durable jobs: priority, retries, DLQ, visibility timeout) ───
+  queue = {
+    /** Enqueue a job. `idempotencyKey` dedupes in-flight duplicates. */
+    enqueue: (
+      name: string,
+      payload: string,
+      opts: { priority?: number; idempotencyKey?: string } = {},
+    ) =>
+      this.req<{ id: number }>(`/api/worker/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          payload,
+          priority: opts.priority,
+          idempotency_key: opts.idempotencyKey,
+        }),
+      }),
+    /** Reserve the highest-priority job for `visibilityMs` (default server-side 30s). */
+    dequeue: (name: string, visibilityMs?: number) => {
+      const qs = visibilityMs ? `?visibility_ms=${visibilityMs}` : "";
+      return this.req<{ job: QueueJob | null }>(
+        `/api/worker/${encodeURIComponent(name)}/next${qs}`,
+      );
+    },
+    /** Mark a reserved job done. */
+    ack: (name: string, id: number) =>
+      this.req<{ acked: boolean }>(
+        `/api/worker/${encodeURIComponent(name)}/ack/${id}`,
+        { method: "POST" },
+      ),
+    /** Return a job to the queue (or dead-letter it once attempts are exhausted). */
+    nack: (name: string, id: number, opts: { error?: string; delayMs?: number } = {}) =>
+      this.req<{ requeued: boolean; dlq: boolean }>(
+        `/api/worker/${encodeURIComponent(name)}/nack/${id}`,
+        { method: "POST", body: JSON.stringify({ error: opts.error, delay_ms: opts.delayMs }) },
+      ),
+    stats: (name: string) =>
+      this.req<QueueStats>(`/api/worker/${encodeURIComponent(name)}/stats`),
+    dlq: (name: string) =>
+      this.req<{ jobs: QueueJob[] }>(`/api/worker/${encodeURIComponent(name)}/dlq`),
+    requeue: (name: string, id: number) =>
+      this.req<{ status: string }>(
+        `/api/worker/${encodeURIComponent(name)}/requeue/${id}`,
+        { method: "POST" },
+      ),
+    configure: (name: string, opts: { maxAttempts?: number; dlqCap?: number }) =>
+      this.req<{ status: string }>(`/api/worker/${encodeURIComponent(name)}/config`, {
+        method: "POST",
+        body: JSON.stringify({ max_attempts: opts.maxAttempts, dlq_cap: opts.dlqCap }),
+      }),
+    list: () => this.req<{ queues: string[] }>("/api/worker"),
+  };
+
+  /**
+   * Run a polling consumer loop: reserve a job, run `handler`, then ACK on
+   * success or NACK (with the error) on throw. Returns a handle; call `stop()`
+   * to end the loop after the in-flight job settles.
+   */
+  work(
+    queue: string,
+    handler: (job: QueueJob) => Promise<void>,
+    opts: { visibilityMs?: number; pollMs?: number; onError?: (e: unknown) => void } = {},
+  ): { stop: () => void } {
+    let stopped = false;
+    const pollMs = opts.pollMs ?? 1000;
+    const loop = async () => {
+      while (!stopped) {
+        let job: QueueJob | null = null;
+        try {
+          job = (await this.queue.dequeue(queue, opts.visibilityMs)).job;
+        } catch (e) {
+          opts.onError?.(e);
+        }
+        if (!job) {
+          await sleep(pollMs);
+          continue;
+        }
+        try {
+          await handler(job);
+          await this.queue.ack(queue, job.id);
+        } catch (e) {
+          opts.onError?.(e);
+          await this.queue
+            .nack(queue, job.id, { error: (e as Error)?.message ?? String(e) })
+            .catch(() => {});
+        }
+      }
+    };
+    void loop();
+    return { stop: () => { stopped = true; } };
+  }
+
+  // ─── streams (append-only log) ───
+  streams = {
+    /** Append an entry; returns its assigned id. `id` defaults to "*" (auto). */
+    add: (key: string, fields: Record<string, string>, opts: { id?: string; maxlen?: number } = {}) =>
+      this.req<{ id: string }>(`/api/streams/${encodeURIComponent(key)}`, {
+        method: "POST",
+        body: JSON.stringify({ fields, id: opts.id, maxlen: opts.maxlen }),
+      }),
+    /** Read a range of entries (defaults to the whole stream, oldest-first). */
+    range: (key: string, opts: { start?: string; end?: string; count?: number; reverse?: boolean } = {}) => {
+      const qs = new URLSearchParams();
+      if (opts.start) qs.set("start", opts.start);
+      if (opts.end) qs.set("end", opts.end);
+      if (opts.count !== undefined) qs.set("count", String(opts.count));
+      if (opts.reverse) qs.set("reverse", "1");
+      return this.req<{ length: number; entries: StreamEntry[] }>(
+        `/api/streams/${encodeURIComponent(key)}?${qs}`,
+      );
+    },
+    /** Number of entries in the stream. */
+    len: (key: string) =>
+      this.req<{ length: number }>(`/api/streams/${encodeURIComponent(key)}/len`),
+    /**
+     * Follow a stream live over Server-Sent Events. `last` controls the start:
+     * "$" (default) = only new entries; "0" = replay then follow. Returns a
+     * handle — call `close()` to stop.
+     */
+    tail: (
+      key: string,
+      onEntry: (entry: StreamEntry) => void,
+      opts: { last?: string; onOpen?: () => void; onError?: (e: unknown) => void } = {},
+    ): StreamSubscription => {
+      const qs = new URLSearchParams();
+      if (opts.last) qs.set("last", opts.last);
+      return this.sseStream(
+        `${this.baseUrl}/api/streams/${encodeURIComponent(key)}/tail?${qs}`,
+        (d) => onEntry(d as StreamEntry),
+        { onOpen: opts.onOpen, onError: opts.onError },
+      );
+    },
+  };
+
+  /**
+   * Shared Server-Sent Events reader (used by streams.tail). Parses default
+   * "message" events as JSON and invokes `onData`; ignores comments/pings and
+   * named events. Returns a handle whose `close()` aborts the stream.
+   */
+  private sseStream(
+    url: string,
+    onData: (data: unknown) => void,
+    handlers: { onOpen?: () => void; onError?: (e: unknown) => void } = {},
+  ): { close: () => void } {
+    const controller = new AbortController();
+    const run = async () => {
+      const res = await this.fetchImpl(url, {
+        headers: { ...this.headers, Accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`NeuroCache ${res.status}: ${body || res.statusText}`);
+      }
+      handlers.onOpen?.();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep: number;
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          let event = "message";
+          const data: string[] = [];
+          for (const line of block.split("\n")) {
+            if (line === "" || line.startsWith(":")) continue;
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+          }
+          if (event !== "message" || data.length === 0) continue;
+          try { onData(JSON.parse(data.join("\n"))); } catch { /* ignore */ }
+        }
+      }
+    };
+    run().catch((err) => {
+      if (!controller.signal.aborted) handlers.onError?.(err);
+    });
     return { close: () => controller.abort() };
   }
 

@@ -1,4 +1,9 @@
-export { NeuroCache, BudgetExceededError, LockAcquireTimeoutError } from "./client";
+export {
+  NeuroCache,
+  BudgetExceededError,
+  LockAcquireTimeoutError,
+  RateLimitedError,
+} from "./client";
 export type {
   NeuroCacheOptions,
   EngineInfo,
@@ -29,4 +34,10 @@ export type {
   LockAcquireResult,
   LockCheckResult,
   LockSnapshot,
+  RateLimitResult,
+  LeaderboardEntry,
+  QueueJob,
+  QueueStats,
+  StreamEntry,
+  StreamSubscription,
 } from "./types";
