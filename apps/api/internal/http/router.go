@@ -91,6 +91,11 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("GET /api/cost-model", h.costModelGet)
 	mux.HandleFunc("POST /api/cost-model", h.costModelSet)
 
+	// Pub/Sub (REST publish + introspection, SUBSCRIBE over Server-Sent Events)
+	mux.HandleFunc("POST /api/publish", h.publish)
+	mux.HandleFunc("GET /api/subscribe", h.requireAuth(h.subscribe))
+	mux.HandleFunc("GET /api/pubsub/channels", h.requireAuth(h.pubsubChannels))
+
 	// AI-ops: shadow cache
 	mux.HandleFunc("POST /api/shadow/{key}", h.shadowPut)
 	mux.HandleFunc("GET /api/shadow/{key}", h.shadowGet)

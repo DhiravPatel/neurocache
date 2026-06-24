@@ -190,6 +190,24 @@ export const api = {
       }),
     }),
 
+  // Pub/Sub
+  publish: (channel: string, message: string) =>
+    req<{ receivers: number }>("/api/publish", {
+      method: "POST",
+      body: JSON.stringify({ channel, message }),
+    }),
+  pubsubChannels: (pattern = "*") =>
+    req<{ channels: string[]; num_subs: Record<string, number>; num_patterns: number }>(
+      `/api/pubsub/channels?pattern=${encodeURIComponent(pattern)}`,
+    ),
+  /** Build the EventSource URL for a SUBSCRIBE stream (consumed via EventSource). */
+  subscribeUrl: (opts: { channels?: string[]; patterns?: string[] }) => {
+    const qs = new URLSearchParams();
+    (opts.channels ?? []).forEach((c) => qs.append("channel", c));
+    (opts.patterns ?? []).forEach((p) => qs.append("pattern", p));
+    return `${BASE}/api/subscribe?${qs}`;
+  },
+
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),
   metricsTimeline: () =>

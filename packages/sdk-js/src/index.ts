@@ -22,4 +22,8 @@ export type {
   CostUsage,
   TenantUsage,
   CostModel,
+  PubSubMessage,
+  PubSubSubscription,
+  PubSubHandlers,
+  PubSubChannels,
 } from "./types";

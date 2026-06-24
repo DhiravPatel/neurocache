@@ -158,3 +158,33 @@ export interface CostModel {
   tokens_per_hit: number;
   usd_per_million_tokens: number;
 }
+
+// ─── pub/sub ───
+
+/** A message delivered to a subscriber. `pattern` is empty for exact-channel
+ *  subscriptions and echoes the matched glob for pattern subscriptions. */
+export interface PubSubMessage {
+  channel: string;
+  pattern: string;
+  payload: string;
+}
+
+/** Handle returned by `subscribe()` — call `close()` to stop the stream. */
+export interface PubSubSubscription {
+  close(): void;
+}
+
+/** Callbacks for a subscription's lifecycle. */
+export interface PubSubHandlers {
+  /** Fired once the stream is open and the server confirmed the channels. */
+  onOpen?: () => void;
+  /** Fired if the stream errors (network/HTTP), unless it was closed by you. */
+  onError?: (err: unknown) => void;
+}
+
+/** Channels/pattern introspection (PUBSUB CHANNELS / NUMSUB / NUMPAT). */
+export interface PubSubChannels {
+  channels: string[];
+  num_subs: Record<string, number>;
+  num_patterns: number;
+}
