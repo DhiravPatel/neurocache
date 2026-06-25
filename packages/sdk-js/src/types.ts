@@ -188,3 +188,27 @@ export interface PubSubChannels {
   num_subs: Record<string, number>;
   num_patterns: number;
 }
+
+// ─── distributed locks ───
+
+/** Result of LOCK ACQUIRE. `token` is the monotonic fencing token (0 if not acquired). */
+export interface LockAcquireResult {
+  acquired: boolean;
+  token: number;
+}
+
+/** Current state of a lock (LOCK CHECK). */
+export interface LockCheckResult {
+  held: boolean;
+  owner?: string;
+  token?: number;
+  remaining_ms?: number;
+}
+
+/** One live lock, as returned by `locks.list()`. */
+export interface LockSnapshot {
+  name: string;
+  owner: string;
+  token: number;
+  remaining_ms: number;
+}

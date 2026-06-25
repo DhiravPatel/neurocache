@@ -24,6 +24,9 @@ import type {
   PubSubSubscription,
   PubSubHandlers,
   PubSubChannels,
+  LockAcquireResult,
+  LockCheckResult,
+  LockSnapshot,
 } from "./types";
 
 /**
@@ -45,6 +48,31 @@ export class BudgetExceededError extends Error {
     this.remaining = remaining;
   }
 }
+
+/**
+ * Thrown by {@link NeuroCache.withLock} when the lock could not be acquired
+ * within the configured wait window.
+ */
+export class LockAcquireTimeoutError extends Error {
+  readonly lockName: string;
+  readonly waitedMs: number;
+  constructor(lockName: string, waitedMs: number) {
+    super(`could not acquire lock "${lockName}" within ${waitedMs}ms`);
+    this.name = "LockAcquireTimeoutError";
+    this.lockName = lockName;
+    this.waitedMs = waitedMs;
+  }
+}
+
+function randomOwner(): string {
+  return (
+    "owner-" +
+    Math.random().toString(36).slice(2, 10) +
+    Date.now().toString(36)
+  );
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class NeuroCache {
   private baseUrl: string;
@@ -387,6 +415,94 @@ export class NeuroCache {
     const { allowed, remaining } = await this.cost.charge(tenant, estUsd);
     if (!allowed) throw new BudgetExceededError(tenant, estUsd, remaining);
     return spend();
+  }
+
+  // ─── distributed locks ───
+  locks = {
+    /**
+     * Try to acquire `name` for `owner` for `ttlMs`. Returns the fencing
+     * token on success (a monotonically increasing integer you can pass to
+     * downstream services so they reject stale holders). Reentrant: the
+     * current owner re-acquiring refreshes the TTL and bumps the token.
+     */
+    acquire: (name: string, owner: string, ttlMs: number) =>
+      this.req<LockAcquireResult>(
+        `/api/locks/${encodeURIComponent(name)}/acquire`,
+        { method: "POST", body: JSON.stringify({ owner, ttl_ms: ttlMs }) },
+      ),
+    /** Release `name` if `owner` holds it. */
+    release: (name: string, owner: string) =>
+      this.req<{ released: boolean }>(
+        `/api/locks/${encodeURIComponent(name)}/release`,
+        { method: "POST", body: JSON.stringify({ owner }) },
+      ),
+    /** Extend the lease on `name` if `owner` holds it (token unchanged). */
+    extend: (name: string, owner: string, ttlMs: number) =>
+      this.req<{ extended: boolean }>(
+        `/api/locks/${encodeURIComponent(name)}/extend`,
+        { method: "POST", body: JSON.stringify({ owner, ttl_ms: ttlMs }) },
+      ),
+    /** Inspect the current holder of `name`. */
+    check: (name: string) =>
+      this.req<LockCheckResult>(`/api/locks/${encodeURIComponent(name)}`),
+    /** Every lock currently held. */
+    list: () => this.req<{ locks: LockSnapshot[] }>("/api/locks"),
+  };
+
+  /**
+   * Run `fn` while holding the lock `name`, handling the full lease lifecycle:
+   * acquire (optionally retrying until `waitMs` elapses), keep the lease alive
+   * by extending in the background while `fn` runs, and always release on the
+   * way out. `fn` receives the fencing token — forward it to downstream
+   * systems so they can fence stale writers.
+   *
+   * Throws {@link LockAcquireTimeoutError} if the lock can't be acquired in
+   * time. Auto-extension is best-effort; correctness should ultimately rest on
+   * the fencing token, not on the lease never lapsing.
+   */
+  async withLock<T>(
+    name: string,
+    fn: (token: number) => Promise<T>,
+    opts: {
+      ttlMs?: number;
+      owner?: string;
+      waitMs?: number;
+      retryMs?: number;
+      autoExtend?: boolean;
+    } = {},
+  ): Promise<T> {
+    const ttlMs = opts.ttlMs ?? 30_000;
+    const owner = opts.owner ?? randomOwner();
+    const waitMs = opts.waitMs ?? 0;
+    const retryMs = opts.retryMs ?? 100;
+    const autoExtend = opts.autoExtend ?? true;
+
+    const deadline = Date.now() + waitMs;
+    let token = 0;
+    for (;;) {
+      const res = await this.locks.acquire(name, owner, ttlMs);
+      if (res.acquired) {
+        token = res.token;
+        break;
+      }
+      if (Date.now() >= deadline) throw new LockAcquireTimeoutError(name, waitMs);
+      await sleep(Math.min(retryMs, Math.max(0, deadline - Date.now())));
+    }
+
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (autoExtend) {
+      timer = setInterval(() => {
+        // best-effort; swallow transient errors so the interval keeps trying
+        this.locks.extend(name, owner, ttlMs).catch(() => {});
+      }, Math.max(1_000, Math.floor(ttlMs / 3)));
+    }
+
+    try {
+      return await fn(token);
+    } finally {
+      if (timer) clearInterval(timer);
+      await this.locks.release(name, owner).catch(() => {});
+    }
   }
 
   // ─── pub/sub ───

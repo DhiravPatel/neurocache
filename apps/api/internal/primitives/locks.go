@@ -2,6 +2,7 @@ package primitives
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -106,6 +107,34 @@ func (m *LockManager) Check(name string) (LockInfo, bool) {
 		return LockInfo{}, false
 	}
 	return LockInfo{Owner: cur.owner, Token: cur.token, RemMs: rem}, true
+}
+
+// LockSnapshot is one live lock's observable state.
+type LockSnapshot struct {
+	Name  string `json:"name"`
+	Owner string `json:"owner"`
+	Token uint64 `json:"token"`
+	RemMs int64  `json:"remaining_ms"`
+}
+
+// List returns a snapshot of every live lock, sorted by name. Expired locks
+// are skipped (and opportunistically swept) so the result reflects only locks
+// that are actually held right now.
+func (m *LockManager) List() []LockSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	out := make([]LockSnapshot, 0, len(m.locks))
+	for name, l := range m.locks {
+		rem := l.expires.Sub(now).Milliseconds()
+		if rem <= 0 {
+			delete(m.locks, name)
+			continue
+		}
+		out = append(out, LockSnapshot{Name: name, Owner: l.owner, Token: l.token, RemMs: rem})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // Errors callers can surface verbatim.
