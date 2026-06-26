@@ -271,3 +271,34 @@ export interface PipelineResult {
   result?: unknown;
   error?: string;
 }
+
+// ─── conversations / sessions ───
+
+export interface ConversationTurn {
+  role: string; // "system" | "user" | "assistant" | "tool"
+  content: string;
+  tokens: number;
+  created_at: string;
+}
+
+// ─── prompt templates ───
+
+export interface PromptVersion {
+  version: number;
+  body: string;
+  created_at: string;
+}
+
+export interface PromptListing {
+  name: string;
+  latest_version: number;
+  versions: number;
+}
+
+// ─── moderation / safety ───
+
+export interface ModerationResult {
+  safe: boolean;
+  score: number;
+  categories?: string[];
+}

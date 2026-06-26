@@ -2,7 +2,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import {
   Activity, Database, Brain, Zap, Sparkles, Terminal, BarChart3,
   BookOpen, Boxes, Compass, DollarSign, Radio, Lock,
-  Gauge, Trophy, ListChecks, Waves,
+  Gauge, Trophy, ListChecks, Waves, MessagesSquare, FileText, FlaskConical,
 } from "lucide-react";
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
@@ -16,6 +16,9 @@ const navItems = [
   { to: "/dashboard/semantic",   label: "Semantic",   icon: Sparkles  },
   { to: "/dashboard/llm",        label: "LLM Cache",  icon: Zap       },
   { to: "/dashboard/memory",     label: "Memory",     icon: Brain     },
+  { to: "/dashboard/conversations", label: "Conversations", icon: MessagesSquare },
+  { to: "/dashboard/prompts",    label: "Prompts",    icon: FileText  },
+  { to: "/dashboard/experiments", label: "Experiments", icon: FlaskConical },
   { to: "/dashboard/costs",      label: "Cost & Budgets", icon: DollarSign },
   { to: "/dashboard/pubsub",     label: "Pub/Sub",    icon: Radio      },
   { to: "/dashboard/locks",      label: "Locks",      icon: Lock       },

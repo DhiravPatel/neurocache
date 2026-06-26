@@ -42,4 +42,8 @@ export type {
   StreamEntry,
   StreamSubscription,
   PipelineResult,
+  ConversationTurn,
+  PromptVersion,
+  PromptListing,
+  ModerationResult,
 } from "./types";

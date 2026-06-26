@@ -98,6 +98,24 @@ export type QueueJob = {
   enqueued_at: string;
 };
 
+export type ConvTurn = { role: string; content: string; tokens: number; created_at: string };
+export type PromptVersion = { version: number; body: string; created_at: string };
+export type PromptListing = { name: string; latest_version: number; versions: number };
+export type VariantStats = {
+  variant: string;
+  exposures: number;
+  wins: number;
+  win_rate: number;
+  total_value: number;
+  avg_value: number;
+};
+export type ExperimentStats = {
+  name: string;
+  variants: VariantStats[];
+  winner?: string;
+  created_at: string;
+};
+
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
   health: () => req<{ status: string; uptime: number }>("/api/health"),
@@ -312,6 +330,74 @@ export const api = {
     ),
   streamTailUrl: (key: string, last = "$") =>
     `${BASE}/api/streams/${encodeURIComponent(key)}/tail?last=${encodeURIComponent(last)}`,
+
+  // Conversations / sessions
+  convList: () => req<{ conversations: string[]; count: number }>("/api/conv"),
+  convWindow: (key: string, maxTokens?: number) =>
+    req<{ turns: ConvTurn[] }>(
+      `/api/conv/${encodeURIComponent(key)}${maxTokens ? `?max_tokens=${maxTokens}` : ""}`,
+    ),
+  convAppend: (key: string, role: string, content: string) =>
+    req<{ turns: number }>(`/api/conv/${encodeURIComponent(key)}`, {
+      method: "POST",
+      body: JSON.stringify({ role, content }),
+    }),
+  convSummarize: (key: string, summary: string, keepTokens?: number) =>
+    req<{ dropped_turns: number; tokens_remaining: number }>(
+      `/api/conv/${encodeURIComponent(key)}/summarize`,
+      { method: "POST", body: JSON.stringify({ summary, keep_tokens: keepTokens }) },
+    ),
+  convReset: (key: string) =>
+    req<{ reset: boolean }>(`/api/conv/${encodeURIComponent(key)}`, { method: "DELETE" }),
+
+  // Prompt templates
+  promptList: () => req<PromptListing[]>("/api/prompts"),
+  promptGet: (name: string, version?: number) =>
+    req<PromptVersion>(`/api/prompts/${encodeURIComponent(name)}${version ? `?version=${version}` : ""}`),
+  promptVersions: (name: string) =>
+    req<PromptVersion[]>(`/api/prompts/${encodeURIComponent(name)}/versions`),
+  promptSet: (name: string, body: string, version?: number) =>
+    req<{ version: number }>(`/api/prompts/${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: JSON.stringify({ body, version }),
+    }),
+  promptRender: (name: string, vars: Record<string, string>, version?: number) =>
+    req<{ rendered: string }>(`/api/prompts/${encodeURIComponent(name)}/render`, {
+      method: "POST",
+      body: JSON.stringify({ vars, version }),
+    }),
+  promptDelete: (name: string, version?: number) =>
+    req<{ removed: number }>(
+      `/api/prompts/${encodeURIComponent(name)}${version ? `?version=${version}` : ""}`,
+      { method: "DELETE" },
+    ),
+
+  // A/B experiments
+  abList: () => req<{ experiments: string[] }>("/api/ab"),
+  abStats: (name: string) => req<ExperimentStats>(`/api/ab/${encodeURIComponent(name)}`),
+  abDefine: (name: string, variants: string[], weights?: number[]) =>
+    req<{ status: string }>("/api/ab", {
+      method: "POST",
+      body: JSON.stringify({ name, variants, weights }),
+    }),
+  abAssign: (name: string, user: string) =>
+    req<{ variant?: string; hit?: boolean }>(
+      `/api/ab/${encodeURIComponent(name)}/assign?user=${encodeURIComponent(user)}`,
+    ),
+  abExpose: (name: string, variant: string) =>
+    req<{ status: string }>(`/api/ab/${encodeURIComponent(name)}/expose`, {
+      method: "POST",
+      body: JSON.stringify({ variant }),
+    }),
+  abRecord: (name: string, variant: string, value: number) =>
+    req<{ status: string }>(`/api/ab/${encodeURIComponent(name)}/record`, {
+      method: "POST",
+      body: JSON.stringify({ variant, value }),
+    }),
+  abReset: (name: string) =>
+    req<{ reset: boolean }>(`/api/ab/${encodeURIComponent(name)}/reset`, { method: "POST" }),
+  abDelete: (name: string) =>
+    req<{ removed: boolean }>(`/api/ab/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),
