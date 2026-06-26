@@ -116,6 +116,19 @@ export type ExperimentStats = {
   created_at: string;
 };
 
+export type GraphNeighbor = { predicate: string; object: string };
+export type FlagState = {
+  name: string;
+  on: boolean;
+  percentage: number;
+  allow?: string[];
+  deny?: string[];
+  evals: number;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
   health: () => req<{ status: string; uptime: number }>("/api/health"),
@@ -398,6 +411,65 @@ export const api = {
     req<{ reset: boolean }>(`/api/ab/${encodeURIComponent(name)}/reset`, { method: "POST" }),
   abDelete: (name: string) =>
     req<{ removed: boolean }>(`/api/ab/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // Knowledge graph
+  graphLink: (subject: string, predicate: string, object: string) =>
+    req<{ created: boolean }>("/api/graph/link", {
+      method: "POST",
+      body: JSON.stringify({ subject, predicate, object }),
+    }),
+  graphUnlink: (subject: string, predicate: string, object: string) =>
+    req<{ removed: boolean }>("/api/graph/unlink", {
+      method: "POST",
+      body: JSON.stringify({ subject, predicate, object }),
+    }),
+  graphNeighbors: (subject: string, predicate?: string) => {
+    const qs = new URLSearchParams({ subject });
+    if (predicate) qs.set("predicate", predicate);
+    return req<{ neighbors: GraphNeighbor[] }>(`/api/graph/neighbors?${qs}`);
+  },
+  graphIn: (object: string, predicate?: string) => {
+    const qs = new URLSearchParams({ object });
+    if (predicate) qs.set("predicate", predicate);
+    return req<{ subjects: string[] }>(`/api/graph/in?${qs}`);
+  },
+  graphPath: (from: string, to: string, maxDepth?: number) => {
+    const qs = new URLSearchParams({ from, to });
+    if (maxDepth) qs.set("max_depth", String(maxDepth));
+    // path is the chain of edges (predicate + arrived-at node); `from` is implicit.
+    return req<{ found: boolean; path?: GraphNeighbor[] }>(`/api/graph/path?${qs}`);
+  },
+  graphSubjects: () => req<{ subjects: string[] }>("/api/graph/subjects"),
+  graphStats: () => req<Record<string, number>>("/api/graph/stats"),
+
+  // Moderation / safety
+  safeCheck: (text: string) =>
+    req<{ hit: boolean; result?: { safe: boolean; score: number; categories?: string[] } }>(
+      `/api/safe?text=${encodeURIComponent(text)}`,
+    ),
+  safeInject: (text: string) =>
+    req<{ score: number; matched: string[] }>(`/api/safe/inject?text=${encodeURIComponent(text)}`),
+  safeSet: (text: string, safe: boolean, score: number, categories?: string[]) =>
+    req<{ status: string }>("/api/safe", {
+      method: "POST",
+      body: JSON.stringify({ text, safe, score, categories }),
+    }),
+  safeStats: () => req<Record<string, number>>("/api/safe/stats"),
+
+  // Feature flags
+  flagList: () => req<{ flags: string[] }>("/api/flag"),
+  flagGet: (name: string) => req<FlagState>(`/api/flag/${encodeURIComponent(name)}`),
+  flagSet: (name: string, on: boolean, percentage: number, allow?: string[], deny?: string[]) =>
+    req<{ status: string }>(`/api/flag/${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: JSON.stringify({ on, percentage, allow, deny }),
+    }),
+  flagIs: (name: string, user: string) =>
+    req<{ enabled: boolean }>(
+      `/api/flag/${encodeURIComponent(name)}/is?user=${encodeURIComponent(user)}`,
+    ),
+  flagDelete: (name: string) =>
+    req<{ removed: boolean }>(`/api/flag/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),

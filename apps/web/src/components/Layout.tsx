@@ -3,6 +3,7 @@ import {
   Activity, Database, Brain, Zap, Sparkles, Terminal, BarChart3,
   BookOpen, Boxes, Compass, DollarSign, Radio, Lock,
   Gauge, Trophy, ListChecks, Waves, MessagesSquare, FileText, FlaskConical,
+  Network, ShieldCheck, Flag,
 } from "lucide-react";
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
@@ -19,6 +20,9 @@ const navItems = [
   { to: "/dashboard/conversations", label: "Conversations", icon: MessagesSquare },
   { to: "/dashboard/prompts",    label: "Prompts",    icon: FileText  },
   { to: "/dashboard/experiments", label: "Experiments", icon: FlaskConical },
+  { to: "/dashboard/graph",      label: "Knowledge Graph", icon: Network },
+  { to: "/dashboard/moderation", label: "Moderation", icon: ShieldCheck },
+  { to: "/dashboard/flags",      label: "Feature Flags", icon: Flag },
   { to: "/dashboard/costs",      label: "Cost & Budgets", icon: DollarSign },
   { to: "/dashboard/pubsub",     label: "Pub/Sub",    icon: Radio      },
   { to: "/dashboard/locks",      label: "Locks",      icon: Lock       },

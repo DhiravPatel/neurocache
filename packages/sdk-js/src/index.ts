@@ -46,4 +46,5 @@ export type {
   PromptVersion,
   PromptListing,
   ModerationResult,
+  QuotaDims,
 } from "./types";

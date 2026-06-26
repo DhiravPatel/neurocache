@@ -302,3 +302,15 @@ export interface ModerationResult {
   score: number;
   categories?: string[];
 }
+
+// ─── quota (composite admission control) ───
+
+/** Per-gate inputs for a quota admit/simulate. Supply only the gates the
+ *  policy requires. */
+export interface QuotaDims {
+  cost?: { scope: string; usd: number };
+  carbon?: { tenant: string; tokens: number; model?: string; feature?: string; region?: string };
+  risk?: { session: string; score: number };
+  rate?: { key: string; window_ms: number; max: number; cost?: number };
+  market?: { market: string; max_price: number };
+}
