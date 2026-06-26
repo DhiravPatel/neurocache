@@ -15,6 +15,10 @@ import Playground from "./pages/Playground";
 import CostsPage from "./pages/Costs";
 import PubSubPage from "./pages/PubSub";
 import LocksPage from "./pages/Locks";
+import RateLimitPage from "./pages/RateLimit";
+import LeaderboardsPage from "./pages/Leaderboards";
+import QueuesPage from "./pages/Queues";
+import StreamsPage from "./pages/Streams";
 
 import DocsLayout from "./layouts/DocsLayout";
 import DocsIndex         from "./pages/docs/Index";
@@ -27,6 +31,10 @@ import DocsMemory        from "./pages/docs/Memory";
 import DocsCosts         from "./pages/docs/Costs";
 import DocsPubSub        from "./pages/docs/PubSub";
 import DocsLocks         from "./pages/docs/Locks";
+import DocsRateLimiting  from "./pages/docs/RateLimiting";
+import DocsLeaderboards  from "./pages/docs/Leaderboards";
+import DocsQueues        from "./pages/docs/Queues";
+import DocsStreams       from "./pages/docs/Streams";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
 import DocsArchitecture  from "./pages/docs/Architecture";
@@ -50,6 +58,10 @@ export default function App() {
         <Route path="costs"        element={<DocsCosts />} />
         <Route path="pubsub"       element={<DocsPubSub />} />
         <Route path="locks"        element={<DocsLocks />} />
+        <Route path="rate-limiting" element={<DocsRateLimiting />} />
+        <Route path="leaderboards" element={<DocsLeaderboards />} />
+        <Route path="queues"       element={<DocsQueues />} />
+        <Route path="streams"      element={<DocsStreams />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
         <Route path="architecture" element={<DocsArchitecture />} />
@@ -67,6 +79,10 @@ export default function App() {
         <Route path="costs"     element={<CostsPage />} />
         <Route path="pubsub"    element={<PubSubPage />} />
         <Route path="locks"     element={<LocksPage />} />
+        <Route path="ratelimit" element={<RateLimitPage />} />
+        <Route path="leaderboards" element={<LeaderboardsPage />} />
+        <Route path="queues"    element={<QueuesPage />} />
+        <Route path="streams"   element={<StreamsPage />} />
         <Route path="modules"   element={<ModulesPage />} />
         <Route path="vectors"   element={<VectorSetsPage />} />
         <Route path="playground" element={<Playground />} />

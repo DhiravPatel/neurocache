@@ -103,6 +103,24 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("POST /api/locks/{name}/release", h.releaseLock)
 	mux.HandleFunc("POST /api/locks/{name}/extend", h.extendLock)
 
+	// Rate limiting (GCRA)
+	mux.HandleFunc("POST /api/ratelimit", h.rateLimitCheck)
+	mux.HandleFunc("POST /api/ratelimit/reset", h.rateLimitReset)
+
+	// Leaderboards (sorted-set, highest-first)
+	mux.HandleFunc("POST /api/leaderboard/{name}", h.lbSet)
+	mux.HandleFunc("POST /api/leaderboard/{name}/incr", h.lbIncr)
+	mux.HandleFunc("GET /api/leaderboard/{name}/top", h.lbTop)
+	mux.HandleFunc("GET /api/leaderboard/{name}/rank/{member}", h.lbRank)
+	mux.HandleFunc("GET /api/leaderboard/{name}/around/{member}", h.lbAround)
+	mux.HandleFunc("DELETE /api/leaderboard/{name}/{member}", h.lbRemove)
+
+	// Streams (append-only log + SSE tail)
+	mux.HandleFunc("POST /api/streams/{key}", h.streamAdd)
+	mux.HandleFunc("GET /api/streams/{key}", h.streamRange)
+	mux.HandleFunc("GET /api/streams/{key}/len", h.streamLen)
+	mux.HandleFunc("GET /api/streams/{key}/tail", h.requireAuth(h.streamTail))
+
 	// AI-ops: shadow cache
 	mux.HandleFunc("POST /api/shadow/{key}", h.shadowPut)
 	mux.HandleFunc("GET /api/shadow/{key}", h.shadowGet)

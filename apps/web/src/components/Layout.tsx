@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import {
   Activity, Database, Brain, Zap, Sparkles, Terminal, BarChart3,
   BookOpen, Boxes, Compass, DollarSign, Radio, Lock,
+  Gauge, Trophy, ListChecks, Waves,
 } from "lucide-react";
 import clsx from "clsx";
 import { usePolling } from "../lib/usePolling";
@@ -18,6 +19,10 @@ const navItems = [
   { to: "/dashboard/costs",      label: "Cost & Budgets", icon: DollarSign },
   { to: "/dashboard/pubsub",     label: "Pub/Sub",    icon: Radio      },
   { to: "/dashboard/locks",      label: "Locks",      icon: Lock       },
+  { to: "/dashboard/ratelimit",  label: "Rate Limiting", icon: Gauge   },
+  { to: "/dashboard/leaderboards", label: "Leaderboards", icon: Trophy },
+  { to: "/dashboard/queues",     label: "Queues",     icon: ListChecks },
+  { to: "/dashboard/streams",    label: "Streams",    icon: Waves      },
   { to: "/dashboard/modules",    label: "Modules",    icon: Boxes     },
   { to: "/dashboard/vectors",    label: "Vector Sets",icon: Compass   },
   { to: "/dashboard/playground", label: "Playground", icon: Terminal  },

@@ -14,6 +14,10 @@ import {
   DollarSign,
   Radio,
   Lock,
+  Gauge,
+  Trophy,
+  ListChecks,
+  Waves,
   SlidersHorizontal,
   Boxes,
   Network,
@@ -52,6 +56,15 @@ export const docsNav: DocSection[] = [
       { to: "/docs/costs",          label: "Cost & Budgets",      icon: DollarSign, file: "Costs.tsx" },
       { to: "/docs/pubsub",         label: "Pub/Sub",             icon: Radio,    file: "PubSub.tsx" },
       { to: "/docs/locks",          label: "Distributed Locks",   icon: Lock,     file: "Locks.tsx" },
+    ],
+  },
+  {
+    title: "Primitives",
+    items: [
+      { to: "/docs/rate-limiting", label: "Rate Limiting", icon: Gauge,      file: "RateLimiting.tsx" },
+      { to: "/docs/leaderboards",  label: "Leaderboards",  icon: Trophy,     file: "Leaderboards.tsx" },
+      { to: "/docs/queues",        label: "Queues",        icon: ListChecks, file: "Queues.tsx" },
+      { to: "/docs/streams",       label: "Streams",       icon: Waves,      file: "Streams.tsx" },
     ],
   },
   {
