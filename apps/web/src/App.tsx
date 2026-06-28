@@ -25,6 +25,9 @@ import ExperimentsPage from "./pages/Experiments";
 import KnowledgeGraphPage from "./pages/KnowledgeGraph";
 import ModerationPage from "./pages/Moderation";
 import FeatureFlagsPage from "./pages/FeatureFlags";
+import ChurnPage from "./pages/Churn";
+import SchedulerPage from "./pages/Scheduler";
+import EventsPage from "./pages/Events";
 
 import DocsLayout from "./layouts/DocsLayout";
 import DocsIndex         from "./pages/docs/Index";
@@ -47,6 +50,9 @@ import DocsExperiments   from "./pages/docs/Experiments";
 import DocsKnowledgeGraph from "./pages/docs/KnowledgeGraph";
 import DocsModeration    from "./pages/docs/Moderation";
 import DocsFeatureFlags  from "./pages/docs/FeatureFlags";
+import DocsChurn         from "./pages/docs/Churn";
+import DocsScheduler     from "./pages/docs/Scheduler";
+import DocsEvents        from "./pages/docs/Events";
 import DocsPipelining    from "./pages/docs/Pipelining";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
@@ -81,6 +87,9 @@ export default function App() {
         <Route path="graph"         element={<DocsKnowledgeGraph />} />
         <Route path="moderation"    element={<DocsModeration />} />
         <Route path="feature-flags" element={<DocsFeatureFlags />} />
+        <Route path="churn"         element={<DocsChurn />} />
+        <Route path="scheduler"     element={<DocsScheduler />} />
+        <Route path="events"        element={<DocsEvents />} />
         <Route path="pipelining"   element={<DocsPipelining />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
@@ -109,6 +118,9 @@ export default function App() {
         <Route path="graph"     element={<KnowledgeGraphPage />} />
         <Route path="moderation" element={<ModerationPage />} />
         <Route path="flags"     element={<FeatureFlagsPage />} />
+        <Route path="churn"     element={<ChurnPage />} />
+        <Route path="scheduler" element={<SchedulerPage />} />
+        <Route path="events"    element={<EventsPage />} />
         <Route path="modules"   element={<ModulesPage />} />
         <Route path="vectors"   element={<VectorSetsPage />} />
         <Route path="playground" element={<Playground />} />

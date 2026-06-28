@@ -1333,6 +1333,44 @@ export class NeuroCache {
       }),
   };
 
+  // ─── churn (tag-based cache invalidation) ───
+  churn = {
+    /** Tag a cache key with one or more tags. Returns how many tags were added. */
+    tag: (key: string, ...tags: string[]) =>
+      this.req<{ added: number }>(`/api/churn/${encodeURIComponent(key)}`, {
+        method: "POST",
+        body: JSON.stringify({ tags }),
+      }),
+    /** Remove tags from a key. */
+    untag: (key: string, ...tags: string[]) => {
+      const qs = new URLSearchParams();
+      for (const t of tags) qs.append("tag", t);
+      return this.req<{ removed: number }>(
+        `/api/churn/${encodeURIComponent(key)}?${qs}`,
+        { method: "DELETE" },
+      );
+    },
+    /**
+     * Invalidate (delete) every key carrying ANY of the given tags, in one
+     * call. Returns the keys that were dropped — fan-out cache busting without
+     * tracking key sets in your app.
+     */
+    invalidate: (...tags: string[]) =>
+      this.req<{ dropped: string[] }>("/api/churn/invalidate", {
+        method: "POST",
+        body: JSON.stringify({ tags }),
+      }),
+    /** Keys currently tagged with `tag`. */
+    keysFor: (tag: string) =>
+      this.req<{ keys: string[] }>(`/api/churn/keys?tag=${encodeURIComponent(tag)}`),
+    /** Tags on a specific key. */
+    tagsOf: (key: string) =>
+      this.req<{ tags: string[] }>(`/api/churn/${encodeURIComponent(key)}`),
+    /** Every tag in use. */
+    tags: () => this.req<{ tags: string[] }>("/api/churn/tags"),
+    stats: () => this.req<Record<string, unknown>>("/api/churn/stats"),
+  };
+
   // ─── raw command ───
   exec(command: string, ...args: string[]) {
     return this.req<{ ok: boolean; result?: unknown; error?: string }>(
