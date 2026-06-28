@@ -292,39 +292,36 @@ func writeTypedError(w *bufio.Writer, kind, msg string) {
 	_, _ = w.WriteString(crlf)
 }
 
+// writeHeader emits "<prefix><n>\r\n" (a RESP integer/bulk-len/array-len line)
+// into the writer's OWN buffer via AvailableBuffer(). A local [N]byte array
+// escapes to the heap here — bufio.Writer.Write may hand its slice to the
+// underlying io.Writer, so escape analysis heap-allocates any stack slice
+// passed to it (24 B per call). Appending into the writer's existing buffer
+// keeps every integer/header reply zero-alloc — and collection replies emit
+// one header PER element, so this matters across LRANGE/HGETALL/ZRANGE/MGET.
+func writeHeader(w *bufio.Writer, prefix byte, n int64) {
+	b := w.AvailableBuffer()
+	b = append(b, prefix)
+	b = strconv.AppendInt(b, n, 10)
+	b = append(b, '\r', '\n')
+	_, _ = w.Write(b)
+}
+
 func writeInt(w *bufio.Writer, n int64) {
-	_ = w.WriteByte(':')
-	// AppendInt writes into a stack-allocated buffer instead of
-	// allocating a new string via FormatInt+concat.
-	var buf [20]byte
-	_, _ = w.Write(strconv.AppendInt(buf[:0], n, 10))
-	_, _ = w.WriteString(crlf)
+	writeHeader(w, ':', n)
 }
 
 func writeNil(w *bufio.Writer)      { _, _ = w.WriteString("$-1\r\n") }
 func writeNilArray(w *bufio.Writer) { _, _ = w.WriteString("*-1\r\n") }
 
 func writeBulk(w *bufio.Writer, s string) {
-	// Emit the whole "$<len>\r\n" header in ONE bufio.Write instead of the
-	// three calls (WriteByte + Write + WriteString) it took before. Each
-	// bufio call is a bounds-check + copy; collection replies write one
-	// bulk per element (LRANGE/SMEMBERS/HGETALL/ZRANGE), so trimming
-	// 5 calls → 3 per element measurably cuts the serialization slice.
-	var hdr [24]byte
-	hdr[0] = '$'
-	n := len(strconv.AppendInt(hdr[1:1], int64(len(s)), 10))
-	hdr[1+n] = '\r'
-	hdr[2+n] = '\n'
-	_, _ = w.Write(hdr[:3+n])
+	writeHeader(w, '$', int64(len(s)))
 	_, _ = w.WriteString(s) // streamed directly — no s+"\r\n" allocation
 	_, _ = w.WriteString(crlf)
 }
 
 func writeArray(w *bufio.Writer, items []string) {
-	_ = w.WriteByte('*')
-	var buf [20]byte
-	_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(items)), 10))
-	_, _ = w.WriteString(crlf)
+	writeHeader(w, '*', int64(len(items)))
 	for _, it := range items {
 		writeBulk(w, it)
 	}
@@ -381,20 +378,12 @@ func writeValue(w *bufio.Writer, v any) {
 	case []string:
 		writeArray(w, x)
 	case []any:
-		// Stream the array header byte-by-byte instead of allocating
-		// "*"+itoa+"\r\n" (3 allocs per call). Same shape as writeBulk.
-		_ = w.WriteByte('*')
-		var buf [20]byte
-		_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(x)), 10))
-		_, _ = w.WriteString(crlf)
+		writeHeader(w, '*', int64(len(x)))
 		for _, it := range x {
 			writeValue(w, it)
 		}
 	case [][]any:
-		_ = w.WriteByte('*')
-		var buf [20]byte
-		_, _ = w.Write(strconv.AppendInt(buf[:0], int64(len(x)), 10))
-		_, _ = w.WriteString(crlf)
+		writeHeader(w, '*', int64(len(x)))
 		for _, it := range x {
 			writeValue(w, it)
 		}
