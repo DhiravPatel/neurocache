@@ -314,3 +314,55 @@ export interface QuotaDims {
   rate?: { key: string; window_ms: number; max: number; cost?: number };
   market?: { market: string; max_price: number };
 }
+
+// ─── grounding / verification (hallucination + citation check) ───
+
+/** Per-sentence support: how strongly one claim in the answer is backed by
+ *  the supplied context. `support` is the max cosine similarity to any
+ *  context chunk in [0,1]; `best_chunk` is its 0-indexed source (-1 if no
+ *  context). `supported` is `support >= min_support`. */
+export interface SentenceSupport {
+  sentence: string;
+  support: number;
+  best_chunk: number;
+  supported: boolean;
+}
+
+/** Result of grounding an LLM answer against its retrieved context. */
+export interface VerifyResult {
+  /** Worst per-claim support — the weakest sentence drives the doc score. */
+  doc_score: number;
+  /** Mean support across every claim. */
+  mean_score: number;
+  /** The threshold a claim must clear to count as supported. */
+  min_support: number;
+  /** True only when every sentence clears `min_support`. */
+  grounded: boolean;
+  sentences: SentenceSupport[];
+  /** The sentences that fell below threshold — likely hallucinations. */
+  unsupported: string[];
+}
+
+/** Risk-budget debit returned when a session is supplied to `require`. */
+export interface RiskDebit {
+  balance: number;
+  budget: number;
+  enforce: boolean;
+  debited: number;
+}
+
+export interface GroundRequireResult {
+  result: VerifyResult;
+  risk?: RiskDebit;
+  risk_session?: string;
+}
+
+export interface GroundStats {
+  dim: number;
+  scorer: string;
+  total_verify: number;
+  total_require: number;
+  total_pass: number;
+  total_fail: number;
+  extern_scores: number;
+}

@@ -336,7 +336,22 @@ func writeFloat(w *bufio.Writer, f float64) {
 		writeBulk(w, "-inf")
 		return
 	}
-	writeBulk(w, strconv.FormatFloat(f, 'f', -1, 64))
+	// Zero-alloc float reply. strconv.FormatFloat heap-allocates the digit
+	// string on every float-returning command (ZSCORE/ZINCRBY/INCRBYFLOAT/
+	// GEODIST/…); instead format the digits into a stack scratch and frame
+	// them as a RESP bulk straight through the writer's own buffer. The
+	// scratch does not escape (digits are only copied out via append), so the
+	// common case is 0 allocs; a giant float needing >scratch chars falls back
+	// to one AppendFloat growth.
+	var scratch [32]byte
+	digits := strconv.AppendFloat(scratch[:0], f, 'f', -1, 64)
+	b := w.AvailableBuffer()
+	b = append(b, '$')
+	b = strconv.AppendInt(b, int64(len(digits)), 10)
+	b = append(b, '\r', '\n')
+	b = append(b, digits...)
+	b = append(b, '\r', '\n')
+	_, _ = w.Write(b)
 }
 
 // writeValue encodes an arbitrary Go value as RESP. Supported:

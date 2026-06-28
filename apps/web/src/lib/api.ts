@@ -135,6 +135,29 @@ export type FlagState = {
   created_at: string;
   updated_at: string;
 };
+export type SentenceSupport = {
+  sentence: string;
+  support: number;
+  best_chunk: number;
+  supported: boolean;
+};
+export type VerifyResult = {
+  doc_score: number;
+  mean_score: number;
+  min_support: number;
+  grounded: boolean;
+  sentences: SentenceSupport[];
+  unsupported: string[];
+};
+export type GroundStats = {
+  dim: number;
+  scorer: string;
+  total_verify: number;
+  total_require: number;
+  total_pass: number;
+  total_fail: number;
+  extern_scores: number;
+};
 
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
@@ -494,6 +517,21 @@ export const api = {
       body: JSON.stringify({ tags }),
     }),
   churnStats: () => req<Record<string, number>>("/api/churn/stats"),
+
+  // Grounding / verification (hallucination + citation check)
+  groundVerify: (answer: string, context: string[], minSupport?: number) =>
+    req<VerifyResult>("/api/ground/verify", {
+      method: "POST",
+      body: JSON.stringify({ answer, context, min_support: minSupport }),
+    }),
+  groundStats: () => req<GroundStats>("/api/ground/vstats"),
+  groundScorer: () =>
+    req<{ scorer: string }>("/api/ground/scorer", { method: "POST", body: "{}" }),
+  groundSetScorer: (mode: string) =>
+    req<{ scorer: string }>("/api/ground/scorer", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
 
   // Scheduler
   scheduleList: () => req<{ tasks: ScheduledTask[] }>("/api/schedule"),
