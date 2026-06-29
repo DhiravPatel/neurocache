@@ -70,6 +70,7 @@ export const docsNav: DocSection[] = [
   {
     title: "Reference",
     items: [
+      { to: "/docs/pipelining",    label: "Pipelining & throughput", icon: Zap, file: "Pipelining.tsx" },
       { to: "/docs/configuration", label: "Configuration", icon: SlidersHorizontal, file: "Configuration.tsx" },
       { to: "/docs/sdks",          label: "SDKs & Clients", icon: Boxes,            file: "SDKs.tsx" },
       { to: "/docs/architecture",  label: "Architecture",   icon: Network,          file: "Architecture.tsx" },

@@ -33,6 +33,7 @@ import type {
   QueueStats,
   StreamEntry,
   StreamSubscription,
+  PipelineResult,
 } from "./types";
 
 /**
@@ -893,5 +894,58 @@ export class NeuroCache {
       "/api/exec",
       { method: "POST", body: JSON.stringify({ command, args }) },
     );
+  }
+
+  /**
+   * Start a pipeline — queue many commands and send them in ONE request,
+   * collapsing N round-trips into one for far higher throughput:
+   *
+   *   const [, name] = await cache.pipeline()
+   *     .set("user:1:name", "Ada")
+   *     .get("user:1:name")
+   *     .incr("visits")
+   *     .exec();
+   */
+  pipeline(): Pipeline {
+    return new Pipeline((commands, stopOnError) =>
+      this.req<{ results: PipelineResult[] }>("/api/pipeline", {
+        method: "POST",
+        body: JSON.stringify({ commands, stop_on_error: stopOnError }),
+      }).then((r) => r.results),
+    );
+  }
+}
+
+/**
+ * A queued batch of commands, sent together by {@link Pipeline.exec}. Build it
+ * with the generic {@link Pipeline.add} or the typed shortcuts; every method
+ * returns `this` so calls chain. Results come back in submission order.
+ */
+export class Pipeline {
+  private commands: string[][] = [];
+  constructor(
+    private readonly run: (
+      commands: string[][],
+      stopOnError: boolean,
+    ) => Promise<PipelineResult[]>,
+  ) {}
+
+  /** Queue any command, e.g. `.add("EXPIRE", "k", 60)`. */
+  add(command: string, ...args: (string | number)[]): this {
+    this.commands.push([command, ...args.map(String)]);
+    return this;
+  }
+  set(key: string, value: string) { return this.add("SET", key, value); }
+  get(key: string) { return this.add("GET", key); }
+  del(...keys: string[]) { return this.add("DEL", ...keys); }
+  incr(key: string) { return this.add("INCR", key); }
+  expire(key: string, seconds: number) { return this.add("EXPIRE", key, seconds); }
+
+  /** Number of commands queued so far. */
+  get size() { return this.commands.length; }
+
+  /** Send the batch. `stopOnError` aborts at the first failing command. */
+  exec(opts: { stopOnError?: boolean } = {}): Promise<PipelineResult[]> {
+    return this.run(this.commands, opts.stopOnError ?? false);
   }
 }

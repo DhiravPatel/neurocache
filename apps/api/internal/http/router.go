@@ -322,6 +322,7 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 
 	// Raw command (like redis-cli EVAL)
 	mux.HandleFunc("POST /api/exec", h.exec)
+	mux.HandleFunc("POST /api/pipeline", h.pipeline)
 
 	// Admin
 	mux.HandleFunc("POST /api/flushall", h.flushAll)

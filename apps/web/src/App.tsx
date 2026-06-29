@@ -35,6 +35,7 @@ import DocsRateLimiting  from "./pages/docs/RateLimiting";
 import DocsLeaderboards  from "./pages/docs/Leaderboards";
 import DocsQueues        from "./pages/docs/Queues";
 import DocsStreams       from "./pages/docs/Streams";
+import DocsPipelining    from "./pages/docs/Pipelining";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
 import DocsArchitecture  from "./pages/docs/Architecture";
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="leaderboards" element={<DocsLeaderboards />} />
         <Route path="queues"       element={<DocsQueues />} />
         <Route path="streams"      element={<DocsStreams />} />
+        <Route path="pipelining"   element={<DocsPipelining />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
         <Route path="architecture" element={<DocsArchitecture />} />
