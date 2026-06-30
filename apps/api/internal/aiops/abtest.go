@@ -2,7 +2,6 @@ package aiops
 
 import (
 	"hash/fnv"
-	"math"
 	"sort"
 	"sync"
 	"time"
@@ -111,7 +110,17 @@ func (m *Experiments) Assign(name, user string) (string, bool) {
 	_, _ = h.Write([]byte(name))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(user))
-	bucket := float64(h.Sum64()) / float64(math.MaxUint64)
+	// FNV-1a's high bits avalanche poorly for similar keys (user-1, user-2,
+	// …), which badly skews the bucket distribution. Run the hash through a
+	// splitmix64 finalizer and take the top 53 bits for a uniform double in
+	// [0,1) — so equal-weight variants actually split evenly.
+	x := h.Sum64()
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	x ^= x >> 31
+	bucket := float64(x>>11) / float64(uint64(1)<<53)
 	cum := 0.0
 	for i, w := range e.weights {
 		cum += w

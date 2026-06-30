@@ -34,6 +34,10 @@ import type {
   StreamEntry,
   StreamSubscription,
   PipelineResult,
+  ConversationTurn,
+  PromptVersion,
+  PromptListing,
+  ModerationResult,
 } from "./types";
 
 /**
@@ -887,6 +891,265 @@ export class NeuroCache {
     });
     return { close: () => controller.abort() };
   }
+
+  // ─── conversations / sessions (multi-turn context) ───
+  conversations = {
+    /** Append a turn; returns the new turn count. */
+    append: (key: string, role: string, content: string) =>
+      this.req<{ turns: number }>(`/api/conv/${encodeURIComponent(key)}`, {
+        method: "POST",
+        body: JSON.stringify({ role, content }),
+      }),
+    /** The recent window of turns (optionally capped to `maxTokens`). */
+    window: (key: string, maxTokens?: number) => {
+      const qs = maxTokens ? `?max_tokens=${maxTokens}` : "";
+      return this.req<{ turns: ConversationTurn[] }>(
+        `/api/conv/${encodeURIComponent(key)}${qs}`,
+      );
+    },
+    /** Replace old turns with a summary, keeping the most recent `keepTokens`. */
+    summarize: (key: string, summary: string, keepTokens?: number) =>
+      this.req<{ dropped_turns: number; tokens_remaining: number }>(
+        `/api/conv/${encodeURIComponent(key)}/summarize`,
+        { method: "POST", body: JSON.stringify({ summary, keep_tokens: keepTokens }) },
+      ),
+    /** Clear a conversation. */
+    reset: (key: string) =>
+      this.req<{ reset: boolean }>(`/api/conv/${encodeURIComponent(key)}`, {
+        method: "DELETE",
+      }),
+    /** Every active conversation key. */
+    list: () => this.req<{ conversations: string[]; count: number }>("/api/conv"),
+  };
+
+  // ─── versioned prompt templates ───
+  prompts = {
+    /** Store a template body; `version` 0/omitted auto-increments. Returns the version. */
+    set: (name: string, body: string, version?: number) =>
+      this.req<{ version: number }>(`/api/prompts/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({ body, version }),
+      }),
+    /** Fetch a version (latest if omitted). */
+    get: (name: string, version?: number) => {
+      const qs = version ? `?version=${version}` : "";
+      return this.req<PromptVersion>(`/api/prompts/${encodeURIComponent(name)}${qs}`);
+    },
+    /** Render a template with `{var}` substitutions. */
+    render: (name: string, vars: Record<string, string>, version?: number) =>
+      this.req<{ rendered: string }>(
+        `/api/prompts/${encodeURIComponent(name)}/render`,
+        { method: "POST", body: JSON.stringify({ vars, version }) },
+      ),
+    /** Every template with its latest version + count. */
+    list: () => this.req<PromptListing[]>("/api/prompts"),
+    /** All versions of a template. */
+    versions: (name: string) =>
+      this.req<PromptVersion[]>(`/api/prompts/${encodeURIComponent(name)}/versions`),
+    /** Delete a version (or the whole template if version omitted). */
+    delete: (name: string, version?: number) => {
+      const qs = version ? `?version=${version}` : "";
+      return this.req<{ removed: number }>(
+        `/api/prompts/${encodeURIComponent(name)}${qs}`,
+        { method: "DELETE" },
+      );
+    },
+  };
+
+  // ─── embedding cache (skip re-embedding identical text) ───
+  embeddings = {
+    set: (text: string, vector: number[], ttlSec?: number) =>
+      this.req<{ status: string }>("/api/emb-cache", {
+        method: "POST",
+        body: JSON.stringify({ text, vector, ttl_sec: ttlSec }),
+      }),
+    get: (text: string) =>
+      this.req<{ hit: boolean; vector?: number[] }>(
+        `/api/emb-cache?text=${encodeURIComponent(text)}`,
+      ),
+    stats: () => this.req<Record<string, unknown>>("/api/emb-cache/stats"),
+    purge: () => this.req<{ dropped: number }>("/api/emb-cache/purge", { method: "POST" }),
+  };
+
+  // ─── agent tool-call cache ───
+  agentCache = {
+    /** Cache a tool call's result keyed by (tool, args hash). */
+    store: (tool: string, argsHash: string, result: string) =>
+      this.req<{ status: string }>("/api/agent", {
+        method: "POST",
+        body: JSON.stringify({ tool, args_hash: argsHash, result }),
+      }),
+    /** Look up a cached tool result. */
+    call: (tool: string, argsHash: string) =>
+      this.req<{ hit: boolean; result?: string }>(
+        `/api/agent?tool=${encodeURIComponent(tool)}&args_hash=${encodeURIComponent(argsHash)}`,
+      ),
+    /** Set a tool's cache determinism: "always" | "day" | "never". */
+    profile: (tool: string, profile: "always" | "day" | "never") =>
+      this.req<{ status: string }>("/api/agent/profile", {
+        method: "POST",
+        body: JSON.stringify({ tool, profile }),
+      }),
+    forget: (tool: string, argsHash: string) =>
+      this.req<{ removed: boolean }>(
+        `/api/agent?tool=${encodeURIComponent(tool)}&args_hash=${encodeURIComponent(argsHash)}`,
+        { method: "DELETE" },
+      ),
+    stats: () => this.req<Record<string, unknown>>("/api/agent/stats"),
+    purge: () => this.req<{ dropped: number }>("/api/agent/purge", { method: "POST" }),
+  };
+
+  // ─── moderation / safety verdict cache ───
+  moderation = {
+    /** Cache a moderation verdict for `text`. */
+    set: (text: string, result: ModerationResult, ttlSec?: number) =>
+      this.req<{ status: string }>("/api/safe", {
+        method: "POST",
+        body: JSON.stringify({ text, ...result, ttl_sec: ttlSec }),
+      }),
+    /** Look up a cached verdict. */
+    check: (text: string) =>
+      this.req<{ hit: boolean; result?: ModerationResult }>(
+        `/api/safe?text=${encodeURIComponent(text)}`,
+      ),
+    /** Heuristic prompt-injection score (no cache needed). */
+    injectionScore: (text: string) =>
+      this.req<{ score: number; matched: string[] }>(
+        `/api/safe/inject?text=${encodeURIComponent(text)}`,
+      ),
+    forget: (text: string) =>
+      this.req<{ removed: boolean }>(`/api/safe?text=${encodeURIComponent(text)}`, {
+        method: "DELETE",
+      }),
+    purge: () => this.req<{ dropped: number }>("/api/safe/purge", { method: "POST" }),
+    stats: () => this.req<Record<string, unknown>>("/api/safe/stats"),
+  };
+
+  // ─── A/B experiments ───
+  experiments = {
+    /** Define an experiment with variants (and optional weights). */
+    define: (name: string, variants: string[], weights?: number[]) =>
+      this.req<{ status: string }>("/api/ab", {
+        method: "POST",
+        body: JSON.stringify({ name, variants, weights }),
+      }),
+    /** Deterministically assign a user to a variant. */
+    assign: (name: string, user: string) =>
+      this.req<{ variant?: string; hit?: boolean }>(
+        `/api/ab/${encodeURIComponent(name)}/assign?user=${encodeURIComponent(user)}`,
+      ),
+    /** Record an exposure (denominator for conversion). */
+    expose: (name: string, variant: string) =>
+      this.req<{ status: string }>(`/api/ab/${encodeURIComponent(name)}/expose`, {
+        method: "POST",
+        body: JSON.stringify({ variant }),
+      }),
+    /** Record an outcome value for a variant. */
+    record: (name: string, variant: string, value: number) =>
+      this.req<{ status: string }>(`/api/ab/${encodeURIComponent(name)}/record`, {
+        method: "POST",
+        body: JSON.stringify({ variant, value }),
+      }),
+    stats: (name: string) =>
+      this.req<Record<string, unknown>>(`/api/ab/${encodeURIComponent(name)}`),
+    list: () => this.req<{ experiments: unknown }>("/api/ab"),
+    reset: (name: string) =>
+      this.req<{ reset: boolean }>(`/api/ab/${encodeURIComponent(name)}/reset`, {
+        method: "POST",
+      }),
+    delete: (name: string) =>
+      this.req<{ removed: boolean }>(`/api/ab/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      }),
+  };
+
+  // ─── knowledge graph (subject–predicate–object triples) ───
+  graph = {
+    link: (subject: string, predicate: string, object: string) =>
+      this.req<{ created: boolean }>("/api/graph/link", {
+        method: "POST",
+        body: JSON.stringify({ subject, predicate, object }),
+      }),
+    unlink: (subject: string, predicate: string, object: string) =>
+      this.req<{ removed: boolean }>("/api/graph/unlink", {
+        method: "POST",
+        body: JSON.stringify({ subject, predicate, object }),
+      }),
+    neighbors: (subject: string, predicate?: string) => {
+      const qs = new URLSearchParams({ subject });
+      if (predicate) qs.set("predicate", predicate);
+      return this.req<{ neighbors: string[] }>(`/api/graph/neighbors?${qs}`);
+    },
+    in: (object: string, predicate?: string) => {
+      const qs = new URLSearchParams({ object });
+      if (predicate) qs.set("predicate", predicate);
+      return this.req<{ subjects: string[] }>(`/api/graph/in?${qs}`);
+    },
+    path: (from: string, to: string, opts: { maxDepth?: number; predicate?: string } = {}) => {
+      const qs = new URLSearchParams({ from, to });
+      if (opts.maxDepth) qs.set("max_depth", String(opts.maxDepth));
+      if (opts.predicate) qs.set("predicate", opts.predicate);
+      return this.req<{ found: boolean; path?: string[] }>(`/api/graph/path?${qs}`);
+    },
+    subjects: () => this.req<{ subjects: string[] }>("/api/graph/subjects"),
+    stats: () => this.req<Record<string, unknown>>("/api/graph/stats"),
+  };
+
+  // ─── feature flags ───
+  flags = {
+    set: (
+      name: string,
+      opts: { on: boolean; percentage?: number; allow?: string[]; deny?: string[] },
+    ) =>
+      this.req<{ status: string }>(`/api/flag/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          on: opts.on,
+          percentage: opts.percentage ?? 0,
+          allow: opts.allow,
+          deny: opts.deny,
+        }),
+      }),
+    /** Whether the flag is enabled for a specific user (sticky % rollout + allow/deny). */
+    is: (name: string, user: string) =>
+      this.req<{ enabled: boolean }>(
+        `/api/flag/${encodeURIComponent(name)}/is?user=${encodeURIComponent(user)}`,
+      ),
+    allow: (name: string, user: string) =>
+      this.req<{ added: boolean }>(`/api/flag/${encodeURIComponent(name)}/allow`, {
+        method: "POST",
+        body: JSON.stringify({ user }),
+      }),
+    deny: (name: string, user: string) =>
+      this.req<{ added: boolean }>(`/api/flag/${encodeURIComponent(name)}/deny`, {
+        method: "POST",
+        body: JSON.stringify({ user }),
+      }),
+    get: (name: string) =>
+      this.req<Record<string, unknown>>(`/api/flag/${encodeURIComponent(name)}`),
+    list: () => this.req<{ flags: string[] }>("/api/flag"),
+    delete: (name: string) =>
+      this.req<{ removed: boolean }>(`/api/flag/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      }),
+  };
+
+  // ─── per-user personas ───
+  personas = {
+    set: (user: string, persona: string) =>
+      this.req<{ status: string }>(`/api/persona/${encodeURIComponent(user)}`, {
+        method: "POST",
+        body: JSON.stringify({ persona }),
+      }),
+    get: (user: string) =>
+      this.req<{ persona: string }>(`/api/persona/${encodeURIComponent(user)}`),
+    list: (user: string) =>
+      this.req<{ personas: string[] }>(`/api/persona/${encodeURIComponent(user)}/list`),
+    forget: (user: string) =>
+      this.req<{ removed: boolean }>(`/api/persona/${encodeURIComponent(user)}`, {
+        method: "DELETE",
+      }),
+  };
 
   // ─── raw command ───
   exec(command: string, ...args: string[]) {

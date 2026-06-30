@@ -19,6 +19,9 @@ import RateLimitPage from "./pages/RateLimit";
 import LeaderboardsPage from "./pages/Leaderboards";
 import QueuesPage from "./pages/Queues";
 import StreamsPage from "./pages/Streams";
+import ConversationsPage from "./pages/Conversations";
+import PromptsPage from "./pages/Prompts";
+import ExperimentsPage from "./pages/Experiments";
 
 import DocsLayout from "./layouts/DocsLayout";
 import DocsIndex         from "./pages/docs/Index";
@@ -35,6 +38,9 @@ import DocsRateLimiting  from "./pages/docs/RateLimiting";
 import DocsLeaderboards  from "./pages/docs/Leaderboards";
 import DocsQueues        from "./pages/docs/Queues";
 import DocsStreams       from "./pages/docs/Streams";
+import DocsConversations from "./pages/docs/Conversations";
+import DocsPrompts       from "./pages/docs/Prompts";
+import DocsExperiments   from "./pages/docs/Experiments";
 import DocsPipelining    from "./pages/docs/Pipelining";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
@@ -63,6 +69,9 @@ export default function App() {
         <Route path="leaderboards" element={<DocsLeaderboards />} />
         <Route path="queues"       element={<DocsQueues />} />
         <Route path="streams"      element={<DocsStreams />} />
+        <Route path="conversations" element={<DocsConversations />} />
+        <Route path="prompts"       element={<DocsPrompts />} />
+        <Route path="experiments"   element={<DocsExperiments />} />
         <Route path="pipelining"   element={<DocsPipelining />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
@@ -85,6 +94,9 @@ export default function App() {
         <Route path="leaderboards" element={<LeaderboardsPage />} />
         <Route path="queues"    element={<QueuesPage />} />
         <Route path="streams"   element={<StreamsPage />} />
+        <Route path="conversations" element={<ConversationsPage />} />
+        <Route path="prompts"   element={<PromptsPage />} />
+        <Route path="experiments" element={<ExperimentsPage />} />
         <Route path="modules"   element={<ModulesPage />} />
         <Route path="vectors"   element={<VectorSetsPage />} />
         <Route path="playground" element={<Playground />} />
