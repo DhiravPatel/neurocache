@@ -158,6 +158,27 @@ export type GroundStats = {
   total_fail: number;
   extern_scores: number;
 };
+export type CoalesceLockResult = { owner: boolean; token: string };
+export type CoalesceWaitResult = { got: boolean; result: string };
+export type CoalesceStatus = {
+  key: string;
+  state: "locked" | "published" | "stale";
+  locked_at_unix: number;
+  published_at_unix: number;
+  timeout_ms: number;
+  has_result: boolean;
+};
+export type CoalesceStats = {
+  active: number;
+  total_locks: number;
+  total_acquires: number;
+  total_contended: number;
+  total_publishes: number;
+  total_waits: number;
+  total_wait_hits: number;
+  total_wait_misses: number;
+  save_rate: number;
+};
 
 export const api = {
   info: () => req<EngineInfo>("/api/info"),
@@ -531,6 +552,34 @@ export const api = {
     req<{ scorer: string }>("/api/ground/scorer", {
       method: "POST",
       body: JSON.stringify({ mode }),
+    }),
+
+  // Coalescing / single-flight (thundering-herd protection)
+  coalesceStats: () => req<CoalesceStats>("/api/coalesce/stats"),
+  coalesceKeys: () => req<{ keys: string[] }>("/api/coalesce/keys"),
+  coalesceLock: (key: string, timeoutMs?: number) =>
+    req<CoalesceLockResult>("/api/coalesce/lock", {
+      method: "POST",
+      body: JSON.stringify({ key, timeout_ms: timeoutMs }),
+    }),
+  coalescePublish: (key: string, token: string, result: string) =>
+    req<{ published: boolean }>("/api/coalesce/publish", {
+      method: "POST",
+      body: JSON.stringify({ key, token, result }),
+    }),
+  coalesceWait: (key: string, timeoutMs?: number) =>
+    req<CoalesceWaitResult>("/api/coalesce/wait", {
+      method: "POST",
+      body: JSON.stringify({ key, timeout_ms: timeoutMs }),
+    }),
+  coalesceStatus: (key: string) =>
+    req<{ exists: boolean; status?: CoalesceStatus }>(
+      `/api/coalesce/status?key=${encodeURIComponent(key)}`,
+    ),
+  coalesceForget: (key: string) =>
+    req<{ forgotten: boolean }>("/api/coalesce/forget", {
+      method: "POST",
+      body: JSON.stringify({ key }),
     }),
 
   // Scheduler

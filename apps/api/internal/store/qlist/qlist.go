@@ -27,6 +27,7 @@ package qlist
 //   - Lower (32, 64) → more allocs, worse cache behaviour
 //   - Higher (256, 1024) → memory waste for short lists, slow LINSERT
 //     in the middle (the shift cost scales linearly with cap)
+//
 // Redis's quicklist uses ziplist nodes with a configurable
 // list-compress-depth; 128 mirrors their default fill behaviour.
 const nodeCap = 128
@@ -359,9 +360,10 @@ func (q *QList) unlink(nd *node) {
 
 // RemoveByValue removes up to |count| occurrences of v and returns
 // how many were actually removed.
-//   count > 0 — scan from head, remove the first count matches
-//   count < 0 — scan from tail, remove the first -count matches
-//   count == 0 — remove every match
+//
+//	count > 0 — scan from head, remove the first count matches
+//	count < 0 — scan from tail, remove the first -count matches
+//	count == 0 — remove every match
 //
 // Used by LREM. Each removal is O(nodeCap) for the in-node shift;
 // the whole walk is O(N).
@@ -512,13 +514,26 @@ func (q *QList) ForEachReverse(fn func(v string) bool) {
 // Range returns the elements in [a, b] inclusive as a fresh slice.
 // Caller has already validated indices via normalizeRange.
 func (q *QList) Range(a, b int) []string {
+	return q.RangeInto(nil, a, b)
+}
+
+// RangeInto appends the elements in [a, b] inclusive into dst and returns
+// the (possibly grown) slice. Pass dst[:0] to reuse an existing backing
+// array — the hot reply path hands in a per-connection scratch buffer so
+// a warmed-up LRANGE allocates nothing. The appended strings alias the
+// list nodes' backing arrays (Go strings are immutable), so they stay
+// valid after the caller drops the shard lock.
+func (q *QList) RangeInto(dst []string, a, b int) []string {
 	if a < 0 || b < a || a >= q.n {
-		return []string{}
+		return dst
 	}
 	if b >= q.n {
 		b = q.n - 1
 	}
-	out := make([]string, 0, b-a+1)
+	if cap(dst) < b-a+1 {
+		dst = make([]string, 0, b-a+1)
+	}
+	out := dst
 	idx := 0
 	for nd := q.head; nd != nil && idx <= b; nd = nd.next {
 		if idx+nd.count <= a {

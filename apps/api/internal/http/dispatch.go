@@ -701,7 +701,8 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			start, _ = strconv.Atoi(args[1])
 			end, _ = strconv.Atoi(args[2])
 		}
-		return h.eng.KV.BitCount(args[0], start, end, hasRange)
+		bitRange := len(args) >= 4 && strings.EqualFold(args[3], "BIT")
+		return h.eng.KV.BitCount(args[0], start, end, hasRange, bitRange)
 	case "BITPOS":
 		if len(args) < 2 {
 			return nil, errors.New("BITPOS key bit [start [end]]")
@@ -716,7 +717,8 @@ func (h *handlers) dispatch(cmd string, args []string) (any, error) {
 			end, _ = strconv.Atoi(args[3])
 			hasEnd = true
 		}
-		return h.eng.KV.BitPos(args[0], bit, start, end, hasEnd)
+		bitRange := len(args) >= 5 && strings.EqualFold(args[4], "BIT")
+		return h.eng.KV.BitPos(args[0], bit, start, end, hasEnd, bitRange)
 	case "BITOP":
 		if len(args) < 3 {
 			return nil, errors.New("BITOP op dst key [key ...]")

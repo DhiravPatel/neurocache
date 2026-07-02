@@ -93,14 +93,23 @@ func (s *Store) HMGet(key string, fields ...string) ([]string, []bool, error) {
 // HGetAll returns all fields as alternating field/value pairs — callers
 // can pair them up or flatten depending on wire protocol needs.
 func (s *Store) HGetAll(key string) ([]string, error) {
+	return s.HGetAllInto(nil, key)
+}
+
+// HGetAllInto is HGetAll that appends field,value pairs into dst (pass
+// dst[:0] to reuse a caller-owned backing array). The strings alias the
+// hash's map keys/values (immutable, GC-rooted), so they stay valid after
+// the shard lock is dropped — the RESP layer reuses a per-conn scratch and
+// encodes after unlock for an amortized zero-alloc HGETALL.
+func (s *Store) HGetAllInto(dst []string, key string) ([]string, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
-		return []string{}, err
+		return dst, err
 	}
-	out := make([]string, 0, len(e.Hash)*2)
+	out := dst
 	for f, v := range e.Hash {
 		out = append(out, f, v)
 	}
@@ -157,14 +166,21 @@ func (s *Store) HLen(key string) (int, error) {
 
 // HKeys returns all field names.
 func (s *Store) HKeys(key string) ([]string, error) {
+	return s.HKeysInto(nil, key)
+}
+
+// HKeysInto is HKeys that appends into dst (pass dst[:0] to reuse a
+// caller-owned backing array). Field-name strings alias the hash's map
+// keys, so they stay valid after unlock (see HGetAllInto).
+func (s *Store) HKeysInto(dst []string, key string) ([]string, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
-		return []string{}, err
+		return dst, err
 	}
-	out := make([]string, 0, len(e.Hash))
+	out := dst
 	for f := range e.Hash {
 		out = append(out, f)
 	}
@@ -173,14 +189,21 @@ func (s *Store) HKeys(key string) ([]string, error) {
 
 // HVals returns all field values.
 func (s *Store) HVals(key string) ([]string, error) {
+	return s.HValsInto(nil, key)
+}
+
+// HValsInto is HVals that appends into dst (pass dst[:0] to reuse a
+// caller-owned backing array). Value strings alias the hash's map values,
+// so they stay valid after unlock (see HGetAllInto).
+func (s *Store) HValsInto(dst []string, key string) ([]string, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok, err := sh.get(key, TypeHash)
 	if err != nil || !ok {
-		return []string{}, err
+		return dst, err
 	}
-	out := make([]string, 0, len(e.Hash))
+	out := dst
 	for _, v := range e.Hash {
 		out = append(out, v)
 	}

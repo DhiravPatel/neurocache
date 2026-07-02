@@ -52,4 +52,8 @@ export type {
   RiskDebit,
   GroundRequireResult,
   GroundStats,
+  CoalesceLockResult,
+  CoalesceWaitResult,
+  CoalesceStatus,
+  CoalesceStats,
 } from "./types";

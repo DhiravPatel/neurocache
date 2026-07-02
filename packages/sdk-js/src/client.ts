@@ -42,6 +42,10 @@ import type {
   VerifyResult,
   GroundRequireResult,
   GroundStats,
+  CoalesceLockResult,
+  CoalesceWaitResult,
+  CoalesceStatus,
+  CoalesceStats,
 } from "./types";
 
 /**
@@ -1435,6 +1439,57 @@ export class NeuroCache {
         body: JSON.stringify({ answer, idx, score }),
       }),
     stats: () => this.req<GroundStats>("/api/ground/vstats"),
+  };
+
+  // ─── coalescing / single-flight (thundering-herd protection) ───
+  //
+  // Collapse a burst of identical concurrent cache-miss calls into ONE
+  // upstream request. The typical flow around an expensive LLM call:
+  //
+  //   const { owner, token } = await nc.coalesce.lock(key);
+  //   if (owner) {
+  //     const answer = await callLLM();          // only the winner runs this
+  //     await nc.coalesce.publish(key, token, answer);
+  //     return answer;
+  //   }
+  //   const { got, result } = await nc.coalesce.wait(key); // everyone else
+  //   return got ? result : await callLLM();       // fall back if it timed out
+  coalesce = {
+    /** Try to become the single-flight owner of `key`. `owner:true` → do
+     *  the work and {@link publish}; `owner:false` → {@link wait}. */
+    lock: (key: string, timeoutMs?: number) =>
+      this.req<CoalesceLockResult>("/api/coalesce/lock", {
+        method: "POST",
+        body: JSON.stringify({ key, timeout_ms: timeoutMs }),
+      }),
+    /** Publish the computed result; wakes every waiter. Returns
+     *  `{published:false}` if `token` isn't the current owner's. */
+    publish: (key: string, token: string, result: string) =>
+      this.req<{ published: boolean }>("/api/coalesce/publish", {
+        method: "POST",
+        body: JSON.stringify({ key, token, result }),
+      }),
+    /** Block until `key` is published or the wait times out. */
+    wait: (key: string, timeoutMs?: number) =>
+      this.req<CoalesceWaitResult>("/api/coalesce/wait", {
+        method: "POST",
+        body: JSON.stringify({ key, timeout_ms: timeoutMs }),
+      }),
+    /** Inspect one in-flight key. */
+    status: (key: string) =>
+      this.req<{ exists: boolean; status?: CoalesceStatus }>(
+        `/api/coalesce/status?key=${encodeURIComponent(key)}`,
+      ),
+    /** List active herds (keys), newest-first. */
+    keys: () => this.req<{ keys: string[] }>("/api/coalesce/keys"),
+    /** Drop a key, waking any waiters with an empty result. */
+    forget: (key: string) =>
+      this.req<{ forgotten: boolean }>("/api/coalesce/forget", {
+        method: "POST",
+        body: JSON.stringify({ key }),
+      }),
+    /** Global counters, including `save_rate` (fraction deduplicated). */
+    stats: () => this.req<CoalesceStats>("/api/coalesce/stats"),
   };
 
   // ─── raw command ───

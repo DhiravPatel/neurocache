@@ -327,6 +327,22 @@ func writeArray(w *bufio.Writer, items []string) {
 	}
 }
 
+// maxScratchCap bounds how large a per-conn reply scratch buffer we keep
+// pinned between commands. A one-off giant LRANGE grows the buffer; we
+// reuse it for the common small case but drop anything oversized so a
+// single huge reply can't tie ~MBs to an otherwise-idle connection.
+const maxScratchCap = 8192
+
+// retainScratch decides whether to keep a filled reply scratch slice for
+// reuse on the next command. It returns the slice unchanged when it's a
+// sensible size to keep, or nil when it grew too large to pin.
+func retainScratch(buf []string) []string {
+	if cap(buf) > maxScratchCap {
+		return nil
+	}
+	return buf
+}
+
 func writeFloat(w *bufio.Writer, f float64) {
 	if math.IsInf(f, 1) {
 		writeBulk(w, "inf")

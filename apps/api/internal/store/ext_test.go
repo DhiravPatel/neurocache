@@ -26,7 +26,7 @@ func TestBitmapBasics(t *testing.T) {
 	}
 	// Set another bit; byte should now hold bits 0 and 7
 	s.SetBit("b", 0, 1)
-	n, _ := s.BitCount("b", 0, -1, true)
+	n, _ := s.BitCount("b", 0, -1, true, false)
 	if n != 2 {
 		t.Errorf("BitCount = %d", n)
 	}

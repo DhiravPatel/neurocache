@@ -290,6 +290,16 @@ func NewRouter(eng *engine.Engine, cfg config.Config, log *slog.Logger) http.Han
 	mux.HandleFunc("POST /api/ground/scorer", h.groundScorer)
 	mux.HandleFunc("POST /api/ground/ingest", h.groundIngest)
 
+	// Single-flight / thundering-herd protection (COALESCE.*). Collapses
+	// a burst of identical concurrent misses into one upstream call.
+	mux.HandleFunc("GET /api/coalesce/stats", h.coalesceStats)
+	mux.HandleFunc("GET /api/coalesce/keys", h.coalesceKeys)
+	mux.HandleFunc("GET /api/coalesce/status", h.coalesceStatus)
+	mux.HandleFunc("POST /api/coalesce/lock", h.coalesceLock)
+	mux.HandleFunc("POST /api/coalesce/publish", h.coalescePublish)
+	mux.HandleFunc("POST /api/coalesce/wait", h.coalesceWait)
+	mux.HandleFunc("POST /api/coalesce/forget", h.coalesceForget)
+
 	// Tier 1+: reversible memory compaction (COMPACT.*)
 	mux.HandleFunc("GET /api/compact/stats", h.compactStats)
 	mux.HandleFunc("POST /api/compact/{user}/plan", h.compactPlan)

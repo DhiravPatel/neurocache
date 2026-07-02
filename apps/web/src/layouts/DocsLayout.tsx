@@ -34,6 +34,7 @@ import {
   Menu,
   X,
   PencilLine,
+  GitMerge,
   type LucideIcon,
 } from "lucide-react";
 import clsx from "clsx";
@@ -79,6 +80,7 @@ export const docsNav: DocSection[] = [
       { to: "/docs/streams",       label: "Streams",       icon: Waves,      file: "Streams.tsx" },
       { to: "/docs/graph",         label: "Knowledge Graph", icon: Network,  file: "KnowledgeGraph.tsx" },
       { to: "/docs/grounding",     label: "Grounding & Verification", icon: BadgeCheck, file: "Grounding.tsx" },
+      { to: "/docs/coalesce",      label: "Request Coalescing", icon: GitMerge, file: "Coalesce.tsx" },
       { to: "/docs/moderation",    label: "Moderation",    icon: ShieldCheck, file: "Moderation.tsx" },
       { to: "/docs/feature-flags", label: "Feature Flags", icon: Flag,       file: "FeatureFlags.tsx" },
       { to: "/docs/churn",         label: "Tag Invalidation", icon: Tags,    file: "Churn.tsx" },

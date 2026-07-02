@@ -70,14 +70,23 @@ func (s *Store) SIsMember(key, member string) (bool, error) {
 
 // SMembers returns every member.
 func (s *Store) SMembers(key string) ([]string, error) {
+	return s.SMembersInto(nil, key)
+}
+
+// SMembersInto is SMembers that appends into dst (pass dst[:0] to reuse a
+// caller-owned backing array). The member strings alias the set's map
+// keys (immutable, GC-rooted), so they remain valid after the shard lock
+// is dropped — letting the RESP layer reuse a per-conn scratch and encode
+// the reply after unlock for an amortized zero-alloc SMEMBERS.
+func (s *Store) SMembersInto(dst []string, key string) ([]string, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok, err := sh.get(key, TypeSet)
 	if err != nil || !ok {
-		return []string{}, err
+		return dst, err
 	}
-	out := make([]string, 0, len(e.Set))
+	out := dst
 	for m := range e.Set {
 		out = append(out, m)
 	}

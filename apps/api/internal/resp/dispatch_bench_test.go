@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
@@ -83,17 +84,54 @@ func BenchmarkDispatchLRANGE(b *testing.B) {
 	}
 }
 
+// BenchmarkDispatchSMEMBERS / HGETALL exercise the other multi-bulk reply
+// paths that reuse the per-conn replyScratch buffer — amortized zero-alloc
+// after warmup, same as LRANGE.
+func BenchmarkDispatchSMEMBERS(b *testing.B) {
+	eng := benchEngine()
+	for i := 0; i < 100; i++ {
+		eng.KV.SAdd("s", strconv.Itoa(i))
+	}
+	c := benchConn(eng)
+	parts := []string{"SMEMBERS", "s"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.executeUpper(parts, "SMEMBERS")
+	}
+}
+
+func BenchmarkDispatchHGETALL(b *testing.B) {
+	eng := benchEngine()
+	for i := 0; i < 50; i++ {
+		eng.KV.HSet("h", strconv.Itoa(i), "v")
+	}
+	c := benchConn(eng)
+	parts := []string{"HGETALL", "h"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.executeUpper(parts, "HGETALL")
+	}
+}
+
 func BenchmarkDispatchSADD(b *testing.B) {
 	c := benchConn(benchEngine())
 	parts := []string{"SADD", "s", "m"}
-	b.ReportAllocs(); b.ResetTimer()
-	for i := 0; i < b.N; i++ { c.executeUpper(parts, "SADD") }
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.executeUpper(parts, "SADD")
+	}
 }
 func BenchmarkDispatchHSET(b *testing.B) {
 	c := benchConn(benchEngine())
 	parts := []string{"HSET", "h", "f", "v"}
-	b.ReportAllocs(); b.ResetTimer()
-	for i := 0; i < b.N; i++ { c.executeUpper(parts, "HSET") }
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.executeUpper(parts, "HSET")
+	}
 }
 
 // BenchmarkDispatchZSCORE exercises the float reply path (writeFloat). The
@@ -104,6 +142,9 @@ func BenchmarkDispatchZSCORE(b *testing.B) {
 	_, _ = eng.KV.ZAdd("z", store.ZPair{Score: 3.14159, Member: "m"})
 	c := benchConn(eng)
 	parts := []string{"ZSCORE", "z", "m"}
-	b.ReportAllocs(); b.ResetTimer()
-	for i := 0; i < b.N; i++ { c.executeUpper(parts, "ZSCORE") }
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.executeUpper(parts, "ZSCORE")
+	}
 }

@@ -1398,12 +1398,13 @@ func (c *conn) dispatch(cmd string, args []string) {
 		}
 		a, _ := strconv.Atoi(args[1])
 		b, _ := strconv.Atoi(args[2])
-		out, err := c.eng.KV.LRange(args[0], a, b)
+		out, err := c.eng.KV.LRangeInto(c.replyScratch[:0], args[0], a, b)
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeArray(c.bw, out)
+		c.replyScratch = retainScratch(out)
 	case "LSET":
 		if !c.wantArgs(cmd, args, 3) {
 			return
@@ -1528,12 +1529,13 @@ func (c *conn) dispatch(cmd string, args []string) {
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
-		out, err := c.eng.KV.HGetAll(args[0])
+		out, err := c.eng.KV.HGetAllInto(c.replyScratch[:0], args[0])
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeArray(c.bw, out)
+		c.replyScratch = retainScratch(out)
 	case "HDEL":
 		if !c.wantArgs(cmd, args, 2) {
 			return
@@ -1572,22 +1574,24 @@ func (c *conn) dispatch(cmd string, args []string) {
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
-		out, err := c.eng.KV.HKeys(args[0])
+		out, err := c.eng.KV.HKeysInto(c.replyScratch[:0], args[0])
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeArray(c.bw, out)
+		c.replyScratch = retainScratch(out)
 	case "HVALS":
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
-		out, err := c.eng.KV.HVals(args[0])
+		out, err := c.eng.KV.HValsInto(c.replyScratch[:0], args[0])
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeArray(c.bw, out)
+		c.replyScratch = retainScratch(out)
 	case "HINCRBY":
 		if !c.wantArgs(cmd, args, 3) {
 			return
@@ -1670,12 +1674,13 @@ func (c *conn) dispatch(cmd string, args []string) {
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
-		out, err := c.eng.KV.SMembers(args[0])
+		out, err := c.eng.KV.SMembersInto(c.replyScratch[:0], args[0])
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeArray(c.bw, out)
+		c.replyScratch = retainScratch(out)
 	case "SCARD":
 		if !c.wantArgs(cmd, args, 1) {
 			return
@@ -2025,40 +2030,84 @@ func (c *conn) dispatch(cmd string, args []string) {
 		}
 		writeInt(c.bw, int64(v))
 	case "BITCOUNT":
+		// BITCOUNT key [start end [BYTE | BIT]]
 		if !c.wantArgs(cmd, args, 1) {
 			return
 		}
-		hasRange := len(args) >= 3
+		hasRange, bitRange := false, false
 		start, end := 0, -1
-		if hasRange {
-			start, _ = strconv.Atoi(args[1])
-			end, _ = strconv.Atoi(args[2])
+		switch len(args) {
+		case 1:
+			// whole-string count
+		case 3, 4:
+			var e1, e2 error
+			start, e1 = strconv.Atoi(args[1])
+			end, e2 = strconv.Atoi(args[2])
+			if e1 != nil || e2 != nil {
+				writeError(c.bw, "value is not an integer or out of range")
+				return
+			}
+			hasRange = true
+			if len(args) == 4 {
+				switch asciiUpper(args[3]) {
+				case "BYTE":
+				case "BIT":
+					bitRange = true
+				default:
+					writeError(c.bw, "syntax error")
+					return
+				}
+			}
+		default:
+			writeError(c.bw, "syntax error")
+			return
 		}
-		n, err := c.eng.KV.BitCount(args[0], start, end, hasRange)
+		n, err := c.eng.KV.BitCount(args[0], start, end, hasRange, bitRange)
 		if err != nil {
 			c.writeStoreErr(err)
 			return
 		}
 		writeInt(c.bw, int64(n))
 	case "BITPOS":
+		// BITPOS key bit [start [end [BYTE | BIT]]]
 		if !c.wantArgs(cmd, args, 2) {
 			return
 		}
+		if len(args) > 5 {
+			writeError(c.bw, "syntax error")
+			return
+		}
 		bit, err := strconv.Atoi(args[1])
-		if err != nil {
-			writeError(c.bw, "bit must be 0 or 1")
+		if err != nil || (bit != 0 && bit != 1) {
+			writeError(c.bw, "The bit argument must be 1 or 0.")
 			return
 		}
 		start, end := 0, -1
-		hasEnd := false
+		hasEnd, bitRange := false, false
 		if len(args) >= 3 {
-			start, _ = strconv.Atoi(args[2])
+			if start, err = strconv.Atoi(args[2]); err != nil {
+				writeError(c.bw, "value is not an integer or out of range")
+				return
+			}
 		}
 		if len(args) >= 4 {
-			end, _ = strconv.Atoi(args[3])
+			if end, err = strconv.Atoi(args[3]); err != nil {
+				writeError(c.bw, "value is not an integer or out of range")
+				return
+			}
 			hasEnd = true
 		}
-		n, err := c.eng.KV.BitPos(args[0], bit, start, end, hasEnd)
+		if len(args) == 5 {
+			switch asciiUpper(args[4]) {
+			case "BYTE":
+			case "BIT":
+				bitRange = true
+			default:
+				writeError(c.bw, "syntax error")
+				return
+			}
+		}
+		n, err := c.eng.KV.BitPos(args[0], bit, start, end, hasEnd, bitRange)
 		if err != nil {
 			c.writeStoreErr(err)
 			return

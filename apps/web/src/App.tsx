@@ -24,6 +24,7 @@ import PromptsPage from "./pages/Prompts";
 import ExperimentsPage from "./pages/Experiments";
 import KnowledgeGraphPage from "./pages/KnowledgeGraph";
 import GroundingPage from "./pages/Grounding";
+import CoalescePage from "./pages/Coalesce";
 import ModerationPage from "./pages/Moderation";
 import FeatureFlagsPage from "./pages/FeatureFlags";
 import ChurnPage from "./pages/Churn";
@@ -50,6 +51,7 @@ import DocsPrompts       from "./pages/docs/Prompts";
 import DocsExperiments   from "./pages/docs/Experiments";
 import DocsKnowledgeGraph from "./pages/docs/KnowledgeGraph";
 import DocsGrounding     from "./pages/docs/Grounding";
+import DocsCoalesce      from "./pages/docs/Coalesce";
 import DocsModeration    from "./pages/docs/Moderation";
 import DocsFeatureFlags  from "./pages/docs/FeatureFlags";
 import DocsChurn         from "./pages/docs/Churn";
@@ -88,6 +90,7 @@ export default function App() {
         <Route path="experiments"   element={<DocsExperiments />} />
         <Route path="graph"         element={<DocsKnowledgeGraph />} />
         <Route path="grounding"     element={<DocsGrounding />} />
+        <Route path="coalesce"      element={<DocsCoalesce />} />
         <Route path="moderation"    element={<DocsModeration />} />
         <Route path="feature-flags" element={<DocsFeatureFlags />} />
         <Route path="churn"         element={<DocsChurn />} />
@@ -120,6 +123,7 @@ export default function App() {
         <Route path="experiments" element={<ExperimentsPage />} />
         <Route path="graph"     element={<KnowledgeGraphPage />} />
         <Route path="grounding" element={<GroundingPage />} />
+        <Route path="coalesce"  element={<CoalescePage />} />
         <Route path="moderation" element={<ModerationPage />} />
         <Route path="flags"     element={<FeatureFlagsPage />} />
         <Route path="churn"     element={<ChurnPage />} />

@@ -188,6 +188,19 @@ type conn struct {
 	// by the very next command — matches Redis's single-shot semantics.
 	cachingNext bool
 
+	// replyScratch is a reusable []string reply buffer shared by the
+	// multi-bulk read commands (LRANGE, SMEMBERS, HGETALL, HKEYS, HVALS).
+	// Each materializes its snapshot into this buffer under the shard
+	// RLock, then encodes it after unlock; reusing the backing array
+	// across commands makes those reply paths amortized zero-alloc. Only
+	// ever touched by this conn's own dispatch goroutine, and never
+	// retained past the single command that fills it — one command fully
+	// encodes to bw before the next runs, so the sharing is safe even
+	// inside EXEC/pipelines. The aliased strings reference store-internal
+	// (immutable, GC-rooted) backing arrays, so they stay valid after the
+	// shard lock is dropped.
+	replyScratch []string
+
 	// writeMu serializes writes across the client-reply goroutine and
 	// background pub/sub fan-out, so frames never interleave.
 	writeMu sync.Mutex
@@ -241,25 +254,25 @@ func (s *Server) handle(nc net.Conn) {
 		_ = tc.SetWriteBuffer(256 * 1024)
 	}
 	c := &conn{
-		nc:   nc,
+		nc: nc,
 		// 128 KiB buffers (was 64 KiB). Bigger buffers let pipelined
 		// command bursts amortize one read syscall across many commands
 		// — redis-benchmark with -P pipelining sends 100s of bytes per
 		// command, so 128 KiB carries ~1k pipelined SETs in one syscall.
 		// Diminishing returns past this; go too high and idle conns
 		// pin RAM unnecessarily.
-		br: bufio.NewReaderSize(nc, 128*1024),
-		bw: bufio.NewWriterSize(nc, 128*1024),
-		eng:  s.eng,
-		log:  s.log,
-		tx:   transaction.New(),
+		br:        bufio.NewReaderSize(nc, 128*1024),
+		bw:        bufio.NewWriterSize(nc, 128*1024),
+		eng:       s.eng,
+		log:       s.log,
+		tx:        transaction.New(),
 		subs:      map[string]*pubsub.Subscription{},
 		psub:      map[string]*pubsub.Subscription{},
 		shardSubs: map[string]*pubsub.Subscription{},
-		user:  s.eng.ACL.InitialUser(),
-		info:  s.eng.Clients.Register(nc.RemoteAddr().String()),
-		proto: 2,
-		done:  make(chan struct{}),
+		user:      s.eng.ACL.InitialUser(),
+		info:      s.eng.Clients.Register(nc.RemoteAddr().String()),
+		proto:     2,
+		done:      make(chan struct{}),
 	}
 	if c.user != nil {
 		c.info.Username = c.user.Name

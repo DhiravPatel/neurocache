@@ -366,3 +366,45 @@ export interface GroundStats {
   total_fail: number;
   extern_scores: number;
 }
+
+// ─── coalescing / single-flight (thundering-herd protection) ───────
+
+/** Result of `coalesce.lock`. `owner: true` means you won the race and
+ *  should do the work, then `publish`; `owner: false` means someone else
+ *  is already computing it — `wait` for their result. `token` authorizes
+ *  your later `publish`. */
+export interface CoalesceLockResult {
+  owner: boolean;
+  token: string;
+}
+
+/** Result of `coalesce.wait`. `got: true` carries the leader's `result`;
+ *  `got: false` means the wait timed out (retry) or the key was dropped. */
+export interface CoalesceWaitResult {
+  got: boolean;
+  result: string;
+}
+
+/** Per-key snapshot from `coalesce.status`. */
+export interface CoalesceStatus {
+  key: string;
+  state: "locked" | "published" | "stale";
+  locked_at_unix: number;
+  published_at_unix: number;
+  timeout_ms: number;
+  has_result: boolean;
+}
+
+/** Global coalescer counters. `save_rate` is contended/locks — the
+ *  fraction of would-be upstream calls the coalescer eliminated. */
+export interface CoalesceStats {
+  active: number;
+  total_locks: number;
+  total_acquires: number;
+  total_contended: number;
+  total_publishes: number;
+  total_waits: number;
+  total_wait_hits: number;
+  total_wait_misses: number;
+  save_rate: number;
+}

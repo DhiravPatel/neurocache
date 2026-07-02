@@ -81,7 +81,11 @@ func (s *Store) GetBit(key string, offset int64) (int, error) {
 
 // BitCount counts set bits in [start,end] (byte indices). Negative
 // indices count from the end. end < start returns 0.
-func (s *Store) BitCount(key string, start, end int, hasRange bool) (int, error) {
+// BitCount counts set bits in key, optionally within [start,end]. When
+// bitRange is false the range is measured in bytes (the default); when
+// true, start/end are bit offsets (BITCOUNT ... BIT, Redis 7.0). Both
+// endpoints accept negative indices counting back from the end.
+func (s *Store) BitCount(key string, start, end int, hasRange, bitRange bool) (int, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
@@ -97,6 +101,13 @@ func (s *Store) BitCount(key string, start, end int, hasRange bool) (int, error)
 	if !hasRange {
 		start, end = 0, n-1
 	}
+	if bitRange {
+		a, b, empty := normalizeRange(start, end, n*8)
+		if empty {
+			return 0, nil
+		}
+		return countBitsInRange(data, a, b), nil
+	}
 	a, b, empty := normalizeRange(start, end, n)
 	if empty {
 		return 0, nil
@@ -108,9 +119,13 @@ func (s *Store) BitCount(key string, start, end int, hasRange bool) (int, error)
 	return count, nil
 }
 
-// BitPos returns the byte-index of the first bit set to `bit` in the
-// key, optionally limited to [start,end]. Returns -1 if absent.
-func (s *Store) BitPos(key string, bit int, start, end int, hasEnd bool) (int, error) {
+// BitPos returns the bit-index of the first bit set to `bit` in the key,
+// optionally limited to [start,end]. When bitRange is false start/end are
+// byte offsets (the default); when true they are bit offsets (BITPOS ...
+// BIT, Redis 7.0). Returns -1 if absent. Matches Redis's rule that a
+// search for a clear bit (bit==0) with no explicit end returns the first
+// bit past the string when every scanned bit is set.
+func (s *Store) BitPos(key string, bit int, start, end int, hasEnd, bitRange bool) (int, error) {
 	if bit != 0 && bit != 1 {
 		return 0, errors.New("bit must be 0 or 1")
 	}
@@ -126,21 +141,60 @@ func (s *Store) BitPos(key string, bit int, start, end int, hasEnd bool) (int, e
 	if n == 0 {
 		return -1, nil
 	}
-	if !hasEnd {
-		end = n - 1
+	var a, b int
+	var empty bool
+	if bitRange {
+		if !hasEnd {
+			end = n*8 - 1
+		}
+		a, b, empty = normalizeRange(start, end, n*8)
+	} else {
+		if !hasEnd {
+			end = n - 1
+		}
+		a, b, empty = normalizeRange(start, end, n)
+		// Widen the byte range to its covered bit range.
+		a, b = a*8, b*8+7
 	}
-	a, b, empty := normalizeRange(start, end, n)
 	if empty {
 		return -1, nil
 	}
 	for i := a; i <= b; i++ {
-		for j := 7; j >= 0; j-- {
-			if int((data[i]>>j)&1) == bit {
-				return i*8 + (7 - j), nil
-			}
+		if bitAt(data, i) == bit {
+			return i, nil
 		}
 	}
+	// Redis quirk: hunting for a clear bit across a string that is all
+	// 1s, with no caller-supplied end, reports the first bit off the
+	// right edge rather than -1 (the string is logically zero-padded).
+	if bit == 0 && !hasEnd {
+		return n * 8, nil
+	}
 	return -1, nil
+}
+
+// bitAt returns bit i of data using Redis bit numbering: bit 0 is the
+// most-significant bit of byte 0.
+func bitAt(data []byte, i int) int {
+	return int((data[i>>3] >> (7 - uint(i&7))) & 1)
+}
+
+// countBitsInRange counts set bits in the inclusive bit range [a,b] of
+// data, using Redis bit numbering. Partial edge bytes are masked; whole
+// interior bytes use a hardware popcount.
+func countBitsInRange(data []byte, a, b int) int {
+	firstByte, lastByte := a>>3, b>>3
+	if firstByte == lastByte {
+		// leading bits before a and trailing bits after b are masked off.
+		mask := byte(0xff>>uint(a&7)) & byte(0xff<<uint(7-(b&7)))
+		return bits.OnesCount8(data[firstByte] & mask)
+	}
+	count := bits.OnesCount8(data[firstByte] & byte(0xff>>uint(a&7)))
+	for i := firstByte + 1; i < lastByte; i++ {
+		count += bits.OnesCount8(data[i])
+	}
+	count += bits.OnesCount8(data[lastByte] & byte(0xff<<uint(7-(b&7))))
+	return count
 }
 
 // BitOp performs AND / OR / XOR / NOT across source keys, storing the

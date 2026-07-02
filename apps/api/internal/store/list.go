@@ -156,19 +156,28 @@ func (s *Store) LIndex(key string, index int) (string, bool, error) {
 
 // LRange returns elements in [start,stop] with negative indices supported.
 func (s *Store) LRange(key string, start, stop int) ([]string, error) {
+	return s.LRangeInto(nil, key, start, stop)
+}
+
+// LRangeInto is LRange that appends its result into dst (pass dst[:0] to
+// reuse a caller-owned backing array). The strings alias the list's
+// internal storage and stay valid after the shard lock is released, so
+// the RESP layer can hand in a per-connection scratch buffer and encode
+// the reply after unlock — making a warm LRANGE zero-allocation.
+func (s *Store) LRangeInto(dst []string, key string, start, stop int) ([]string, error) {
 	sh := s.shardForKey(key)
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
 	e, ok, err := sh.get(key, TypeList)
 	if err != nil || !ok {
-		return nil, err
+		return dst, err
 	}
 	n := e.List.Len()
 	a, b, empty := normalizeRange(start, stop, n)
 	if empty {
-		return []string{}, nil
+		return dst, nil
 	}
-	return e.List.Range(a, b), nil
+	return e.List.RangeInto(dst, a, b), nil
 }
 
 // LSet overwrites the element at index. Errors when out of range.
