@@ -22,6 +22,9 @@ import StreamsPage from "./pages/Streams";
 import ConversationsPage from "./pages/Conversations";
 import PromptsPage from "./pages/Prompts";
 import ExperimentsPage from "./pages/Experiments";
+import KnowledgeGraphPage from "./pages/KnowledgeGraph";
+import ModerationPage from "./pages/Moderation";
+import FeatureFlagsPage from "./pages/FeatureFlags";
 
 import DocsLayout from "./layouts/DocsLayout";
 import DocsIndex         from "./pages/docs/Index";
@@ -41,6 +44,9 @@ import DocsStreams       from "./pages/docs/Streams";
 import DocsConversations from "./pages/docs/Conversations";
 import DocsPrompts       from "./pages/docs/Prompts";
 import DocsExperiments   from "./pages/docs/Experiments";
+import DocsKnowledgeGraph from "./pages/docs/KnowledgeGraph";
+import DocsModeration    from "./pages/docs/Moderation";
+import DocsFeatureFlags  from "./pages/docs/FeatureFlags";
 import DocsPipelining    from "./pages/docs/Pipelining";
 import DocsConfiguration from "./pages/docs/Configuration";
 import DocsSDKs          from "./pages/docs/SDKs";
@@ -72,6 +78,9 @@ export default function App() {
         <Route path="conversations" element={<DocsConversations />} />
         <Route path="prompts"       element={<DocsPrompts />} />
         <Route path="experiments"   element={<DocsExperiments />} />
+        <Route path="graph"         element={<DocsKnowledgeGraph />} />
+        <Route path="moderation"    element={<DocsModeration />} />
+        <Route path="feature-flags" element={<DocsFeatureFlags />} />
         <Route path="pipelining"   element={<DocsPipelining />} />
         <Route path="configuration" element={<DocsConfiguration />} />
         <Route path="sdks"         element={<DocsSDKs />} />
@@ -97,6 +106,9 @@ export default function App() {
         <Route path="conversations" element={<ConversationsPage />} />
         <Route path="prompts"   element={<PromptsPage />} />
         <Route path="experiments" element={<ExperimentsPage />} />
+        <Route path="graph"     element={<KnowledgeGraphPage />} />
+        <Route path="moderation" element={<ModerationPage />} />
+        <Route path="flags"     element={<FeatureFlagsPage />} />
         <Route path="modules"   element={<ModulesPage />} />
         <Route path="vectors"   element={<VectorSetsPage />} />
         <Route path="playground" element={<Playground />} />

@@ -21,6 +21,8 @@ import {
   MessagesSquare,
   FileText,
   FlaskConical,
+  ShieldCheck,
+  Flag,
   SlidersHorizontal,
   Boxes,
   Network,
@@ -71,6 +73,9 @@ export const docsNav: DocSection[] = [
       { to: "/docs/leaderboards",  label: "Leaderboards",  icon: Trophy,     file: "Leaderboards.tsx" },
       { to: "/docs/queues",        label: "Queues",        icon: ListChecks, file: "Queues.tsx" },
       { to: "/docs/streams",       label: "Streams",       icon: Waves,      file: "Streams.tsx" },
+      { to: "/docs/graph",         label: "Knowledge Graph", icon: Network,  file: "KnowledgeGraph.tsx" },
+      { to: "/docs/moderation",    label: "Moderation",    icon: ShieldCheck, file: "Moderation.tsx" },
+      { to: "/docs/feature-flags", label: "Feature Flags", icon: Flag,       file: "FeatureFlags.tsx" },
     ],
   },
   {

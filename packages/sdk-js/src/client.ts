@@ -38,6 +38,7 @@ import type {
   PromptVersion,
   PromptListing,
   ModerationResult,
+  QuotaDims,
 } from "./types";
 
 /**
@@ -1085,11 +1086,18 @@ export class NeuroCache {
       if (predicate) qs.set("predicate", predicate);
       return this.req<{ subjects: string[] }>(`/api/graph/in?${qs}`);
     },
+    /**
+     * Shortest path between two nodes. `path` is the chain of edges
+     * (each `{predicate, object}` = the relationship traversed and the node
+     * arrived at); the `from` node is implicit.
+     */
     path: (from: string, to: string, opts: { maxDepth?: number; predicate?: string } = {}) => {
       const qs = new URLSearchParams({ from, to });
       if (opts.maxDepth) qs.set("max_depth", String(opts.maxDepth));
       if (opts.predicate) qs.set("predicate", opts.predicate);
-      return this.req<{ found: boolean; path?: string[] }>(`/api/graph/path?${qs}`);
+      return this.req<{ found: boolean; path?: { predicate: string; object: string }[] }>(
+        `/api/graph/path?${qs}`,
+      );
     },
     subjects: () => this.req<{ subjects: string[] }>("/api/graph/subjects"),
     stats: () => this.req<Record<string, unknown>>("/api/graph/stats"),
@@ -1148,6 +1156,180 @@ export class NeuroCache {
     forget: (user: string) =>
       this.req<{ removed: boolean }>(`/api/persona/${encodeURIComponent(user)}`, {
         method: "DELETE",
+      }),
+  };
+
+  // ─── scheduler (run a command at/after a time) ───
+  scheduler = {
+    /** Schedule `cmd` to run at an absolute time (ms since epoch). */
+    at: (unixMs: number, cmd: string, args: string[] = []) =>
+      this.req<{ id: number }>("/api/schedule/at", {
+        method: "POST",
+        body: JSON.stringify({ unix_ms: unixMs, cmd, args }),
+      }),
+    /** Schedule `cmd` to run after `delayMs`. */
+    in: (delayMs: number, cmd: string, args: string[] = []) =>
+      this.req<{ id: number }>("/api/schedule/in", {
+        method: "POST",
+        body: JSON.stringify({ delay_ms: delayMs, cmd, args }),
+      }),
+    cancel: (id: number) =>
+      this.req<{ cancelled: boolean }>(`/api/schedule/${id}`, { method: "DELETE" }),
+    list: () => this.req<{ tasks: unknown[] }>("/api/schedule"),
+    stats: () => this.req<Record<string, unknown>>("/api/schedule/stats"),
+  };
+
+  // ─── event log + projections (event sourcing) ───
+  events = {
+    /** Append a JSON event to a stream; returns its sequence number. */
+    append: (stream: string, payload: unknown) =>
+      this.req<{ seq: number }>(`/api/event/${encodeURIComponent(stream)}`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    /** Register a continuously-maintained projection (reducer: count/sum/last/…). */
+    project: (
+      stream: string,
+      name: string,
+      reducer: string,
+      opts: { field?: string; groupBy?: string } = {},
+    ) =>
+      this.req<{ status: string }>(`/api/event/${encodeURIComponent(stream)}/project`, {
+        method: "POST",
+        body: JSON.stringify({ name, reducer, field: opts.field, group_by: opts.groupBy }),
+      }),
+    /** Read a projection's current value. */
+    projection: (stream: string, name: string) =>
+      this.req<{ projection: unknown }>(
+        `/api/event/${encodeURIComponent(stream)}/projection/${encodeURIComponent(name)}`,
+      ),
+    /** Raw events in a sequence range. */
+    range: (stream: string, start = 0, end = 0) =>
+      this.req<{ events: unknown[] }>(
+        `/api/event/${encodeURIComponent(stream)}/range?start=${start}&end=${end}`,
+      ),
+    len: (stream: string) =>
+      this.req<{ len: number }>(`/api/event/${encodeURIComponent(stream)}/len`),
+  };
+
+  // ─── lineage / provenance (which sources produced an output) ───
+  lineage = {
+    /** Record that `outputId` was derived from `sourceId`. */
+    record: (
+      outputId: string,
+      sourceId: string,
+      opts: { snippet?: string; confidence?: number } = {},
+    ) =>
+      this.req<{ status: string }>("/api/lineage", {
+        method: "POST",
+        body: JSON.stringify({
+          output_id: outputId,
+          source_id: sourceId,
+          snippet: opts.snippet,
+          confidence: opts.confidence,
+        }),
+      }),
+    /** All citations (sources) for an output. */
+    citations: (outputId: string) =>
+      this.req<{ citations: unknown[] }>(`/api/lineage/${encodeURIComponent(outputId)}`),
+    sources: (outputId: string) =>
+      this.req<{ sources: string[] }>(`/api/lineage/${encodeURIComponent(outputId)}/sources`),
+    /** Reverse lookup: which outputs consumed a source. */
+    consumers: (sourceId: string) =>
+      this.req<{ consumers: string[] }>(
+        `/api/lineage/sources/${encodeURIComponent(sourceId)}/consumers`,
+      ),
+    forget: (outputId: string) =>
+      this.req<{ removed: number }>(`/api/lineage/${encodeURIComponent(outputId)}`, {
+        method: "DELETE",
+      }),
+    stats: () => this.req<Record<string, unknown>>("/api/lineage/stats"),
+  };
+
+  // ─── inference proxy (provider-backed generate, cached) ───
+  inference = {
+    /**
+     * Generate via the configured provider, cached by (prompt, model, temp).
+     * Returns the response, whether it was a cache hit, and the estimated cost.
+     */
+    generate: (
+      prompt: string,
+      opts: {
+        model?: string;
+        temperature?: number;
+        maxTokens?: number;
+        tenant?: string;
+        ttlSec?: number;
+      } = {},
+    ) =>
+      this.req<{ response: string; hit: boolean; cost: number }>("/api/infer", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          model: opts.model,
+          temperature: opts.temperature,
+          max_tokens: opts.maxTokens,
+          tenant: opts.tenant,
+          ttl_sec: opts.ttlSec,
+        }),
+      }),
+    forget: (prompt: string, opts: { model?: string; temperature?: number } = {}) =>
+      this.req<{ removed: boolean }>("/api/infer", {
+        method: "DELETE",
+        body: JSON.stringify({ prompt, model: opts.model, temperature: opts.temperature }),
+      }),
+    /** Set the default provider (e.g. "openai", "anthropic", "echo"). */
+    setDefault: (provider: string) =>
+      this.req<{ status: string }>("/api/infer/default", {
+        method: "POST",
+        body: JSON.stringify({ provider }),
+      }),
+    purge: () => this.req<{ dropped: number }>("/api/infer/purge", { method: "POST" }),
+    stats: () => this.req<Record<string, unknown>>("/api/infer/stats"),
+  };
+
+  // ─── MCP (Model Context Protocol server) ───
+  mcp = {
+    tools: () => this.req<{ tools: unknown[] }>("/api/mcp/tools"),
+    resources: () => this.req<{ resources: unknown[] }>("/api/mcp/resources"),
+    /** Invoke an MCP tool; returns the JSON-RPC result frame. */
+    call: (name: string, args: Record<string, unknown> = {}) =>
+      this.req<unknown>("/api/mcp/call", {
+        method: "POST",
+        body: JSON.stringify({ name, arguments: args }),
+      }),
+    /** Read an MCP resource by URI. */
+    read: (uri: string) => this.req<unknown>(`/api/mcp/read?uri=${encodeURIComponent(uri)}`),
+    /** Send a raw JSON-RPC 2.0 frame. */
+    rpc: (frame: unknown) =>
+      this.req<unknown>("/api/mcp/rpc", { method: "POST", body: JSON.stringify(frame) }),
+  };
+
+  // ─── quota (composite admission control: cost/carbon/risk/rate/market) ───
+  quota = {
+    /** Define a policy that ANDs together a set of gates. */
+    define: (name: string, gates: string[], mode?: string) =>
+      this.req<Record<string, unknown>>(`/api/quota/${encodeURIComponent(name)}/policy`, {
+        method: "POST",
+        body: JSON.stringify({ gates, mode }),
+      }),
+    get: (name: string) =>
+      this.req<Record<string, unknown>>(`/api/quota/${encodeURIComponent(name)}`),
+    list: () => this.req<{ policies: unknown }>("/api/quota"),
+    stats: () => this.req<Record<string, unknown>>("/api/quota/stats"),
+    delete: (name: string) =>
+      this.req<{ deleted: boolean }>(`/api/quota/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    /** Evaluate AND commit the admission decision across the policy's gates. */
+    admit: (name: string, dims: QuotaDims) =>
+      this.req<Record<string, unknown>>(`/api/quota/${encodeURIComponent(name)}/admit`, {
+        method: "POST",
+        body: JSON.stringify(dims),
+      }),
+    /** Evaluate WITHOUT consuming any gate (dry run). */
+    simulate: (name: string, dims: QuotaDims) =>
+      this.req<Record<string, unknown>>(`/api/quota/${encodeURIComponent(name)}/simulate`, {
+        method: "POST",
+        body: JSON.stringify(dims),
       }),
   };
 
