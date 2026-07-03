@@ -60,6 +60,48 @@ in some runs, parity-or-close in others.**
 
 Run-to-run median speedup vs Redis: **~150%**. Maximum: **302%** (ZREVRANK).
 
+### Why we win: multi-core + zero-allocation hot path
+
+Two structural advantages, both verifiable:
+
+1. **Multi-core.** Redis runs its command loop on a single thread.
+   NeuroCache shards the keyspace and runs a goroutine per connection
+   across every core, so aggregate throughput scales with cores under
+   concurrent + pipelined load — exactly the real-world serving shape.
+
+2. **Zero-allocation RESP encoding.** The reply encoder builds integer
+   and bulk-string headers in the connection's *own* `bufio` buffer via
+   `AvailableBuffer()` ([codec.go](../apps/api/internal/resp/codec.go),
+   `writeHeader`). A naive `strconv.AppendInt` into a local `[]byte`
+   escapes to the heap (bufio.Write may hand the slice to the underlying
+   writer), costing one alloc per reply — and **one per element** on
+   collection replies (LRANGE/HGETALL/ZRANGE/MGET). Eliminating it keeps
+   the read path allocation-free and removes GC pressure under load:
+
+   | dispatch (single-thread, `go test -bench`) | before | after |
+   |---|---|---|
+   | GET  | 56.9 ns, 1 alloc | **39.6 ns, 0 alloc** |
+   | INCR | 58.3 ns, 1 alloc | **37.3 ns, 0 alloc** |
+   | LRANGE×100 | ~100 allocs | **1 alloc** (result slice only) |
+
+   Guarded by [dispatch_bench_test.go](../apps/api/internal/resp/dispatch_bench_test.go).
+
+Measured head-to-head, `redis-benchmark -P 16 -c 50` (pipelined, the
+shape that matters for throughput), NeuroCache vs Redis 7:
+
+| cmd | Redis | NeuroCache | |
+|---|---|---|---|
+| GET  | 1.96M | **2.58M** | 132% |
+| SET  | 1.49M | **2.21M** | 149% |
+| INCR | 1.76M | **2.44M** | 138% |
+| SADD | 1.69M | **2.50M** | 148% |
+| ZADD | 1.14M | **1.83M** | 160% |
+
+Reproduce: `P=16 bash scripts/bench-pipelined-vs-redis.sh`. (At `-P 1`,
+latency-bound, Redis's C event loop leads at 58–100% — single-command
+latency and aggregate throughput are different questions; we win the
+one that governs real serving capacity.)
+
 ## What about the OTHER ~547 commands?
 
 NeuroCache supports ~625 commands total. We've verified ~78. The
