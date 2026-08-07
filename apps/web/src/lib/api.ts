@@ -117,6 +117,13 @@ export type ExperimentStats = {
 };
 
 export type GraphNeighbor = { predicate: string; object: string };
+export type ScheduledTask = {
+  id: number;
+  fire_at: string;
+  cmd: string;
+  args: string[];
+  created_at: string;
+};
 export type FlagState = {
   name: string;
   on: boolean;
@@ -470,6 +477,60 @@ export const api = {
     ),
   flagDelete: (name: string) =>
     req<{ removed: boolean }>(`/api/flag/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // Churn (tag-based invalidation)
+  churnTags: () => req<{ tags: string[] }>("/api/churn/tags"),
+  churnTag: (key: string, tags: string[]) =>
+    req<{ added: number }>(`/api/churn/${encodeURIComponent(key)}`, {
+      method: "POST",
+      body: JSON.stringify({ tags }),
+    }),
+  churnTagsOf: (key: string) => req<{ tags: string[] }>(`/api/churn/${encodeURIComponent(key)}`),
+  churnKeysFor: (tag: string) =>
+    req<{ keys: string[] }>(`/api/churn/keys?tag=${encodeURIComponent(tag)}`),
+  churnInvalidate: (tags: string[]) =>
+    req<{ dropped: string[] }>("/api/churn/invalidate", {
+      method: "POST",
+      body: JSON.stringify({ tags }),
+    }),
+  churnStats: () => req<Record<string, number>>("/api/churn/stats"),
+
+  // Scheduler
+  scheduleList: () => req<{ tasks: ScheduledTask[] }>("/api/schedule"),
+  scheduleStats: () => req<Record<string, number>>("/api/schedule/stats"),
+  scheduleIn: (delayMs: number, cmd: string, args: string[] = []) =>
+    req<{ id: number }>("/api/schedule/in", {
+      method: "POST",
+      body: JSON.stringify({ delay_ms: delayMs, cmd, args }),
+    }),
+  scheduleAt: (unixMs: number, cmd: string, args: string[] = []) =>
+    req<{ id: number }>("/api/schedule/at", {
+      method: "POST",
+      body: JSON.stringify({ unix_ms: unixMs, cmd, args }),
+    }),
+  scheduleCancel: (id: number) =>
+    req<{ cancelled: boolean }>(`/api/schedule/${id}`, { method: "DELETE" }),
+
+  // Event sourcing
+  eventLen: (stream: string) => req<{ len: number }>(`/api/event/${encodeURIComponent(stream)}/len`),
+  eventRange: (stream: string, start = 0, end = 0) =>
+    req<{ events: unknown[] }>(
+      `/api/event/${encodeURIComponent(stream)}/range?start=${start}&end=${end}`,
+    ),
+  eventAppend: (stream: string, payload: unknown) =>
+    req<{ seq: number }>(`/api/event/${encodeURIComponent(stream)}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  eventProject: (stream: string, name: string, reducer: string, field?: string, groupBy?: string) =>
+    req<{ status: string }>(`/api/event/${encodeURIComponent(stream)}/project`, {
+      method: "POST",
+      body: JSON.stringify({ name, reducer, field, group_by: groupBy }),
+    }),
+  eventProjection: (stream: string, name: string) =>
+    req<{ projection: unknown }>(
+      `/api/event/${encodeURIComponent(stream)}/projection/${encodeURIComponent(name)}`,
+    ),
 
   // Metrics / analytics
   metricsSummary: () => req<MetricsSummary>("/api/metrics/summary"),
