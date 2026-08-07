@@ -9,6 +9,7 @@ import (
 	"github.com/dhiravpatel/neurocache/apps/api/internal/config"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/engine"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/pubsub"
+	"github.com/dhiravpatel/neurocache/apps/api/internal/store"
 	"github.com/dhiravpatel/neurocache/apps/api/internal/transaction"
 )
 
@@ -93,4 +94,16 @@ func BenchmarkDispatchHSET(b *testing.B) {
 	parts := []string{"HSET", "h", "f", "v"}
 	b.ReportAllocs(); b.ResetTimer()
 	for i := 0; i < b.N; i++ { c.executeUpper(parts, "HSET") }
+}
+
+// BenchmarkDispatchZSCORE exercises the float reply path (writeFloat). The
+// zero-alloc encoder formats the score straight into the writer's buffer
+// instead of heap-allocating a string via strconv.FormatFloat.
+func BenchmarkDispatchZSCORE(b *testing.B) {
+	eng := benchEngine()
+	_, _ = eng.KV.ZAdd("z", store.ZPair{Score: 3.14159, Member: "m"})
+	c := benchConn(eng)
+	parts := []string{"ZSCORE", "z", "m"}
+	b.ReportAllocs(); b.ResetTimer()
+	for i := 0; i < b.N; i++ { c.executeUpper(parts, "ZSCORE") }
 }

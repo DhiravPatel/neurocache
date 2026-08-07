@@ -47,4 +47,9 @@ export type {
   PromptListing,
   ModerationResult,
   QuotaDims,
+  SentenceSupport,
+  VerifyResult,
+  RiskDebit,
+  GroundRequireResult,
+  GroundStats,
 } from "./types";

@@ -181,7 +181,12 @@ func (g *GroundVerifier) score(answer string, context []string, minSupport float
 	if len(sentences) == 0 {
 		// Nothing to ground — vacuously grounded. Apps usually short
 		// circuit before this, but be explicit rather than divide by zero.
-		return VerifyResult{DocScore: 1, MeanScore: 1, MinSupport: minSupport, Grounded: true}
+		// Empty (not nil) slices so the JSON is [] — SDK callers can always
+		// iterate sentences/unsupported without a null check.
+		return VerifyResult{
+			DocScore: 1, MeanScore: 1, MinSupport: minSupport, Grounded: true,
+			Sentences: []SentenceSupport{}, Unsupported: []string{},
+		}
 	}
 
 	chunkVecs := make([][]float32, len(context))
@@ -193,7 +198,13 @@ func (g *GroundVerifier) score(answer string, context []string, minSupport float
 	// override the cosine pass for any sentence it covers.
 	extern, hasExtern := g.externScores(answer)
 
-	res := VerifyResult{MinSupport: minSupport, Sentences: make([]SentenceSupport, 0, len(sentences))}
+	// Unsupported is initialized non-nil so a fully-grounded answer still
+	// serializes "unsupported":[] rather than null.
+	res := VerifyResult{
+		MinSupport:  minSupport,
+		Sentences:   make([]SentenceSupport, 0, len(sentences)),
+		Unsupported: make([]string, 0),
+	}
 	doc := 1.0
 	sum := 0.0
 	for idx, s := range sentences {

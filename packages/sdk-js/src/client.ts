@@ -39,6 +39,9 @@ import type {
   PromptListing,
   ModerationResult,
   QuotaDims,
+  VerifyResult,
+  GroundRequireResult,
+  GroundStats,
 } from "./types";
 
 /**
@@ -1369,6 +1372,69 @@ export class NeuroCache {
     /** Every tag in use. */
     tags: () => this.req<{ tags: string[] }>("/api/churn/tags"),
     stats: () => this.req<Record<string, unknown>>("/api/churn/stats"),
+  };
+
+  /**
+   * Grounding & verification — catch hallucinations by scoring an LLM answer
+   * against the context it was supposed to use. Each sentence ("claim") is
+   * compared to the retrieved chunks; a claim that no chunk supports above
+   * `minSupport` is flagged as unsupported. This is RAG faithfulness / citation
+   * checking, server-side, with no extra model call.
+   */
+  grounding = {
+    /**
+     * Score `answer` against `context` chunks. Returns per-sentence support,
+     * the document score (worst claim), and the list of unsupported sentences.
+     * `minSupport` defaults to the server's configured threshold (0.5).
+     */
+    verify: (answer: string, context: string[], minSupport?: number) =>
+      this.req<VerifyResult>("/api/ground/verify", {
+        method: "POST",
+        body: JSON.stringify({ answer, context, min_support: minSupport }),
+      }),
+    /**
+     * Like {@link verify}, but intended as a gate: pass a `session` to also
+     * debit a risk budget by the answer's groundedness, so repeatedly shaky
+     * answers trip `risk.enforce` and you can route the next request through a
+     * stricter path.
+     */
+    require: (
+      answer: string,
+      context: string[],
+      opts?: { minSupport?: number; session?: string },
+    ) =>
+      this.req<GroundRequireResult>("/api/ground/require", {
+        method: "POST",
+        body: JSON.stringify({
+          answer,
+          context,
+          min_support: opts?.minSupport,
+          session: opts?.session,
+        }),
+      }),
+    /** The active claim scorer: "cosine" (built-in) or "extern" (your scores). */
+    scorer: () =>
+      this.req<{ scorer: string }>("/api/ground/scorer", {
+        method: "POST",
+        body: "{}",
+      }),
+    /** Switch the scorer to "cosine" or "extern". */
+    setScorer: (mode: "cosine" | "extern") =>
+      this.req<{ scorer: string }>("/api/ground/scorer", {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      }),
+    /**
+     * Feed an external entailment score for one claim (sentence `idx`) of
+     * `answer` — used when `setScorer("extern")` so a real NLI model can drive
+     * groundedness instead of cosine similarity.
+     */
+    ingest: (answer: string, idx: number, score: number) =>
+      this.req<{ status: string }>("/api/ground/ingest", {
+        method: "POST",
+        body: JSON.stringify({ answer, idx, score }),
+      }),
+    stats: () => this.req<GroundStats>("/api/ground/vstats"),
   };
 
   // ─── raw command ───
